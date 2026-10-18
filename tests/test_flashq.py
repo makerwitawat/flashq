@@ -302,6 +302,101 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("เปิดอยู่แล้ว", r.stdout)
 
+    def ui_token(self, base):
+        return re.search(r'const TOKEN = "([^"]+)"', self.http(base + "/")[1]).group(1)
+
+    def wait_job(self, jid, want="ok", sec=90):
+        f = self.home / "jobs" / f"{jid}.json"
+        t0 = time.time()
+        while time.time() - t0 < sec:
+            if f.exists():
+                st = json.loads(f.read_text(encoding="utf-8")).get("status")
+                if st == want:
+                    return
+            time.sleep(0.3)
+        self.fail(f"งาน {jid} ไม่เป็น {want} ภายใน {sec} วิ")
+
+    def test_ui_submit_retry_plans(self):
+        """ui: รายการแผน · ส่งงาน (ตรวจค่า · token ผิด = 403) · สั่งซ้ำ — งานวิ่งผ่านคิวจริงด้วย opencode ปลอม"""
+        with socket.socket() as s:  # server opencode ที่ไม่มีใคร listen — กันไปแตะ 4096 ของจริง
+            s.bind(("127.0.0.1", 0))
+            self.env["FLASHQ_LIVE_URL"] = f"http://127.0.0.1:{s.getsockname()[1]}"
+        plans = self.proj / "docs" / "plans"
+        plans.mkdir(parents=True)
+        (plans / "PLAN_A_FLASH.md").write_text("# a\n", encoding="utf-8")
+        (self.proj / ".git").mkdir()
+        (self.proj / ".git" / "PLAN_HIDDEN_FLASH.md").write_text("x", encoding="utf-8")
+        base = self.start_ui()
+        token = self.ui_token(base)
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+
+        d = json.loads(self.http(base + "/api/plans?project=" + urllib.request.quote(str(self.proj)))[1])
+        self.assertEqual(d["plans"], ["docs/plans/PLAN_A_FLASH.md"])
+
+        good = {"project": str(self.proj), "plan": "docs/plans/PLAN_A_FLASH.md", "tasks": "T-01..T-02",
+                "attach": "none", "no_open": True}
+        self.assertEqual(self.http(base + "/api/submit", json.dumps(good).encode(), {"Content-Type": "application/json"})[0], 403)
+        self.assertEqual(self.http(base + "/api/submit", json.dumps(good).encode(), {**hdr, "X-Flashq-Token": "x"})[0], 403)
+        for bad in ({"plan": "../outside.md"}, {"plan": "docs/plans/NOPE.md"}, {"tasks": "T-01 & del"},
+                    {"project": "relative\\dir"}, {"attach": "evil"}, {"switch_on_quota": 99}):
+            code, body = self.http(base + "/api/submit", json.dumps({**good, **bad}).encode(), hdr)
+            self.assertEqual(code, 400, (bad, body))
+        self.assertFalse((self.home / "jobs").exists() and list((self.home / "jobs").glob("*.json")))
+
+        code, body = self.http(base + "/api/submit", json.dumps(good).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid = json.loads(body)["job"]
+        self.assertTrue(jid)
+        self.wait_job(jid)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--command") + 1:], ["flash", "--", "docs/plans/PLAN_A_FLASH.md", "T-01..T-02"])
+
+        retry = json.dumps({"id": jid, "attach": "none", "no_open": True}).encode()
+        self.assertEqual(self.http(base + "/api/retry", retry, {"Content-Type": "application/json"})[0], 403)
+        self.assertEqual(self.http(base + "/api/retry", json.dumps({"id": "ไม่มี"}).encode(), hdr)[0], 404)
+        code, body = self.http(base + "/api/retry", retry, hdr)
+        self.assertEqual(code, 200, body)
+        jid2 = json.loads(body)["job"]
+        self.assertNotEqual(jid2, jid)
+        self.wait_job(jid2)
+        job2 = json.loads((self.home / "jobs" / f"{jid2}.json").read_text(encoding="utf-8"))
+        self.assertEqual((job2["plan"], job2["tasks"]), ("docs/plans/PLAN_A_FLASH.md", "T-01..T-02"))
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["stats"]["by_project"][0]["n"], 2)
+        self.assertEqual(st["stats"]["by_project"][0]["ok"], 2)
+        self.assertIn(str(self.proj), st["project_paths"])
+
+    def test_ui_prune_and_cli(self):
+        """ui/CLI: ล้างงานเก่ากว่า N วัน (token ผิด = 403 · dry ไม่ลบ · ไม่แตะงานใหม่)"""
+        (self.home / "jobs").mkdir(parents=True)
+        (self.home / "logs").mkdir(parents=True)
+        old_log = self.home / "logs" / "old_1.jsonl"
+        old_log.write_text("{}\n", encoding="utf-8")
+        for jid, created, logs in (("old", "2000-01-01 00:00:00", [str(old_log)]),
+                                   ("new", time.strftime("%Y-%m-%d %H:%M:%S"), [])):
+            (self.home / "jobs" / f"{jid}.json").write_text(json.dumps(
+                {"id": jid, "status": "ok", "created": created, "finished": created, "project": str(self.proj),
+                 "plan": "PLAN.md", "tasks": "T-01", "logs": logs}), encoding="utf-8")
+        r = self.run_q("prune", "--days", "30", "--dry")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("งาน 1 รายการ", r.stdout)
+        self.assertTrue(old_log.exists())
+
+        base = self.start_ui()
+        token = self.ui_token(base)
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+        body = json.dumps({"days": 30}).encode()
+        self.assertEqual(self.http(base + "/api/prune", body, {"Content-Type": "application/json"})[0], 403)
+        self.assertEqual(self.http(base + "/api/prune", json.dumps({"days": 0}).encode(), hdr)[0], 400)
+        d = json.loads(self.http(base + "/api/prune", json.dumps({"days": 30, "dry": True}).encode(), hdr)[1])
+        self.assertEqual((d["jobs"], d["files"], d["dry"]), (1, 2, True))
+        self.assertTrue((self.home / "jobs" / "old.json").exists())
+        code, out = self.http(base + "/api/prune", body, hdr)
+        self.assertEqual(code, 200, out)
+        self.assertFalse((self.home / "jobs" / "old.json").exists())
+        self.assertFalse(old_log.exists())
+        self.assertTrue((self.home / "jobs" / "new.json").exists())
+
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")
         self.assertEqual(r.returncode, 0, r.stdout)

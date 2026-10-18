@@ -14,6 +14,7 @@
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
+  python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
@@ -626,9 +627,166 @@ def ui_state() -> dict:
     providers = cfg.get("provider", {})
     acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
                 for s, m in accs]
+    rows = history + queued + ([running] if running else [])
     return {"now": now(), "lock": held, "running": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
-            "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
-            "projects": sorted({r["project_name"] for r in history + queued + ([running] if running else []) if r["project_name"]})}
+            "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
+            "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
+            "project_paths": sorted({r["project"] for r in rows if r["project"]}),
+            "stats": job_stats(history)}
+
+
+def job_stats(history: list[dict]) -> dict:
+    """สถิติจากงานที่จบแล้ว: ต่อโปรเจกต์ / ต่อบัญชี — จำนวน · ผ่าน · ไม่ผ่าน · เวลาเฉลี่ย (วินาที)"""
+    def group(key) -> list[dict]:
+        acc: dict[str, dict] = {}
+        for r in history:
+            if r["state"] in ("cancelled", "busy", "queue_timeout"):
+                continue
+            name = key(r) or "-"
+            g = acc.setdefault(name, {"name": name, "n": 0, "ok": 0, "secs": []})
+            g["n"] += 1
+            g["ok"] += r["state"] == "ok"
+            if r.get("duration_sec") is not None:
+                g["secs"].append(r["duration_sec"])
+        out = []
+        for g in acc.values():
+            secs = g.pop("secs")
+            g.update(fail=g["n"] - g["ok"], avg_sec=int(sum(secs) / len(secs)) if secs else None)
+            out.append(g)
+        return sorted(out, key=lambda g: -g["n"])
+    return {"by_project": group(lambda r: r["project_name"]), "by_model": group(lambda r: r["model"])}
+
+
+# ---------- ส่งงาน/สั่งซ้ำ/ล้างประวัติ (ใช้จาก ui) ----------
+TASKS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,._-]{0,80}$")
+PLAN_SKIP_DIRS = {"node_modules", "venv", "__pycache__", "worktrees", "Temp", "cworking", "cMapeditor", "server_run"}
+
+
+def list_plans(project: str, limit: int = 400) -> list[str]:
+    """ไฟล์แผน flash ในโปรเจกต์ (PLAN_*FLASH*.md) · path แบบ posix สัมพัทธ์ · ข้ามโฟลเดอร์หนัก/ซ่อน/worktree"""
+    root = Path(project)
+    if not project or not root.is_dir():
+        return []
+    out = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in PLAN_SKIP_DIRS and not x.startswith((".", "cmake-build"))]
+        for f in files:
+            up = f.upper()
+            if up.startswith("PLAN_") and "FLASH" in up and up.endswith(".MD"):
+                out.append((Path(d) / f).relative_to(root).as_posix())
+                if len(out) >= limit:
+                    return sorted(out)
+    return sorted(out)
+
+
+def build_run_argv(body: dict) -> tuple[list[str], str]:
+    """ตรวจค่าจากฟอร์มแล้วสร้าง argv ของ `flashq.py run` (list · ไม่ผ่าน shell) · คืน (argv, "") หรือ ([], ข้อผิดพลาด)"""
+    def num(key, lo, hi):
+        try:
+            v = int(body.get(key) or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} ต้องเป็นตัวเลข")
+        if not lo <= v <= hi:
+            raise ValueError(f"{key} ต้องอยู่ระหว่าง {lo}-{hi}")
+        return v
+    try:
+        project = str(body.get("project") or "").strip().strip('"')
+        if not project or not Path(project).is_absolute() or not Path(project).is_dir():
+            return [], "โปรเจกต์ต้องเป็น path โฟลเดอร์แบบเต็มที่มีอยู่จริง"
+        argv = [sys.executable, str(REPO / "flashq.py"), "run"]
+        message = str(body.get("message") or "").strip()
+        if message:
+            if len(message) > 2000:
+                return [], "ข้อความยาวเกิน 2000 ตัวอักษร"
+            argv.append(f"--message={message}")  # รูป --x=ค่า กัน argparse ตีความข้อความที่ขึ้นต้นด้วย - เป็นตัวเลือก
+        else:
+            plan = str(body.get("plan") or "").strip().replace("\\", "/")
+            tasks = str(body.get("tasks") or "").strip()
+            if not plan or plan.startswith("-"):
+                return [], "ต้องระบุไฟล์แผน"
+            full = (Path(project) / plan).resolve()
+            try:
+                full.relative_to(Path(project).resolve())
+            except ValueError:
+                return [], "ไฟล์แผนต้องอยู่ในโฟลเดอร์โปรเจกต์"
+            if not full.is_file():
+                return [], f"ไม่พบไฟล์แผน: {plan}"
+            if not TASKS_RE.match(tasks):
+                return [], "งานต้องเป็นรูปแบบเช่น T-01 หรือ T-01..T-03"
+            argv += [plan, tasks]
+        argv += ["--project", project, "--switch-on-quota", str(num("switch_on_quota", 0, 10))]
+        timeout_min = num("timeout_min", 0, 1440)
+        if timeout_min:
+            argv += ["--timeout-min", str(timeout_min)]
+        attach = str(body.get("attach") or "live")
+        if attach not in ("live", "none"):
+            return [], "attach ต้องเป็น live หรือ none"
+        argv += ["--attach", attach]
+        if body.get("no_open"):
+            argv.append("--no-open")
+        if body.get("auto"):
+            argv.append("--auto")
+        return argv, ""
+    except ValueError as e:
+        return [], str(e)
+
+
+def spawn_run(argv: list[str], project: str, wait_sec: float = 8) -> dict:
+    """รัน `flashq.py run` แบบแยกขาด (detached) ให้ใช้คิวเดิม · รอจนเห็นไฟล์งานใหม่ หรือ process จบก่อน (= ผิดพลาด)"""
+    LOGS.mkdir(parents=True, exist_ok=True)
+    JOBS.mkdir(parents=True, exist_ok=True)
+    out = LOGS / f"submit_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.out"
+    before = {f.name for f in JOBS.glob("*.json")}
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+    with open(out, "wb") as fo:
+        p = subprocess.Popen(argv, cwd=project, stdout=fo, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             creationflags=flags, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    t0 = time.time()
+    while time.time() - t0 < wait_sec:
+        new = sorted(n.removesuffix(".json") for n in {f.name for f in JOBS.glob("*.json")} - before)
+        if new:
+            return {"ok": True, "job": new[-1], "pid": p.pid, "out": str(out), "message": f"ส่งงานเข้าคิวแล้ว ({new[-1]})"}
+        if p.poll() is not None:
+            text = out.read_text(encoding="utf-8", errors="replace").strip()
+            return {"ok": False, "rc": p.returncode, "out": str(out), "message": text[-1500:] or f"จบทันที rc={p.returncode}"}
+        time.sleep(0.2)
+    return {"ok": True, "job": "", "pid": p.pid, "out": str(out), "message": "ส่งแล้ว (ยังไม่เห็นไฟล์งาน — ดูในคิวอีกครู่)"}
+
+
+def prune_jobs(days: float, dry: bool = False) -> dict:
+    """ลบงานที่จบแล้วที่เก่ากว่า N วัน (ไฟล์งาน + log + .err) และ submit_*.out เก่า — ไม่แตะงานที่รอคิว/กำลังทำ"""
+    cutoff = datetime.now().timestamp() - days * 86400
+    n_jobs, files = 0, []
+    for j in jobs():
+        if live_state(j) in ("queued", "running"):
+            continue
+        try:
+            t = datetime.strptime(j.get("created", ""), "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            continue
+        if t >= cutoff:
+            continue
+        n_jobs += 1
+        files.append(JOBS / f"{j['id']}.json")
+        for lg in j.get("logs") or []:
+            files += [Path(lg), Path(lg).with_suffix(".err")]
+    if LOGS.exists():
+        files += [f for f in LOGS.glob("submit_*.out") if f.stat().st_mtime < cutoff]
+    files = [f for f in files if f.exists()]
+    size = sum(f.stat().st_size for f in files)
+    if not dry:
+        for f in files:
+            f.unlink(missing_ok=True)
+    return {"jobs": n_jobs, "files": len(files), "bytes": size, "dry": dry}
+
+
+def cmd_prune(a) -> int:
+    r = prune_jobs(a.days, a.dry)
+    print(f"{'(ทดลอง) จะลบ' if r['dry'] else 'ลบ'}งาน {r['jobs']} รายการ · ไฟล์ {r['files']} ไฟล์ · "
+          f"{r['bytes'] / 1048576:.1f} MB (เก่ากว่า {a.days:g} วัน)")
+    return 0
 
 
 def _fmt_event(line: str) -> str | None:
@@ -736,6 +894,8 @@ def make_ui_server(port: int = 4097):
                 except ValueError:
                     return self._send(400, {"error": "attempt/offset ต้องเป็นตัวเลข"})
                 return self._send(200, log_tail(j, attempt, offset))
+            if u.path == "/api/plans":
+                return self._send(200, {"plans": list_plans(q.get("project", [""])[0])})
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
@@ -773,6 +933,46 @@ def make_ui_server(port: int = 4097):
                 save_job(j)
                 release(j)
                 return self._send(200, {"ok": True, "message": f"บันทึก {j['id']} เป็น 'ตาย' แล้ว"})
+            if path == "/api/submit":
+                argv, err = build_run_argv(body)
+                if err:
+                    return self._send(400, {"ok": False, "message": err})
+                r = spawn_run(argv, str(body["project"]).strip().strip('"'))
+                return self._send(200 if r["ok"] else 400, r)
+            if path == "/api/retry":  # สั่งงานเดิมซ้ำ (เข้าคิวใหม่) · ตัวเลือกใน body ทับได้
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                if live_state(j) in ("queued", "running"):
+                    return self._send(409, {"ok": False, "message": "งานนี้ยังรอคิว/กำลังทำอยู่"})
+                spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
+                        "tasks": j.get("tasks", ""), "message": j.get("message", "")}
+                argv, err = build_run_argv(spec)
+                if err:
+                    return self._send(400, {"ok": False, "message": err})
+                r = spawn_run(argv, spec["project"])
+                return self._send(200 if r["ok"] else 400, r)
+            if path == "/api/prune":
+                try:
+                    days = float(body.get("days", 30))
+                except (TypeError, ValueError):
+                    days = -1
+                if days < 1:
+                    return self._send(400, {"ok": False, "message": "จำนวนวันต้อง ≥ 1"})
+                r = prune_jobs(days, bool(body.get("dry")))
+                return self._send(200, {"ok": True, **r, "message": f"{'จะลบ' if r['dry'] else 'ลบ'}งาน {r['jobs']} รายการ · "
+                                                                    f"ไฟล์ {r['files']} ไฟล์ ({r['bytes'] / 1048576:.1f} MB)"})
+            if path == "/api/open":  # เปิด session ใน opencode desktop (oc_desktop_open.mjs)
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j or not j.get("session"):
+                    return self._send(404, {"ok": False, "message": "งานนี้ไม่มี session"})
+                import contextlib
+                import io
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    open_in_desktop(j["session"], j.get("attach", LIVE_URL))
+                out = buf.getvalue().strip() or "ไม่พบ node — เปิดไม่ได้"
+                return self._send(200, {"ok": "=OK" in out, "message": out})
             if path == "/api/switch":
                 import contextlib
                 import io
@@ -863,6 +1063,10 @@ def main() -> int:
     ins = sp.add_parser("install", help="ติดตั้ง /flash + flash-worker แบบ global")
     ins.add_argument("--force", action="store_true")
     ins.set_defaults(fn=cmd_install)
+    pr = sp.add_parser("prune", help="ลบงานที่จบแล้ว + log ที่เก่ากว่า N วัน")
+    pr.add_argument("--days", type=float, default=30)
+    pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
+    pr.set_defaults(fn=cmd_prune)
     ui = sp.add_parser("ui", help="หน้าเว็บ dashboard ในเครื่อง (127.0.0.1)")
     ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")

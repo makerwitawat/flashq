@@ -6,127 +6,273 @@
 <title>flashq คิวกลาง</title>
 <style>
 :root {
+  --zoom: 1;
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2430; --muted: #687385; --line: #e2e6ec;
-  --accent: #2f6fdb; --accent-text: #ffffff; --hover: #eef3fb; --code: #f1f3f6;
+  --accent: #2f6fdb; --accent-text: #ffffff; --hover: #eef3fb; --code: #f1f3f6; --mark: #ffe58a;
   --ok: #1f8a4c; --fail: #c53030; --quota: #b7791f; --timeout: #7b4fd0; --nostart: #2b8a9a; --other: #8a94a3;
+  --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .18);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
-    --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920;
+    --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920; --mark: #6b5a12;
     --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+    --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .5);
   }
 }
 :root[data-theme="dark"] {
   --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
-  --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920;
+  --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920; --mark: #6b5a12;
   --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+  --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .5);
 }
+/* ฟอนต์ตามความกว้างจอ (1280 ≈ 14px · 1920 ≈ 17.6px · 2560 ≈ 21px · 4K ≈ 27px) × zoom ของผู้ใช้ */
+html { font-size: calc(clamp(14px, 0.5vw + 8px, 28px) * var(--zoom)); }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", "Leelawadee UI", Tahoma, sans-serif; }
-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
-header h1 { font-size: 17px; margin: 0; }
-header .sp { flex: 1; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 1rem/1.5 "Segoe UI", "Leelawadee UI", Tahoma, sans-serif; }
+body.has-max { overflow: hidden; }
+header { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 20; }
+header h1 { font-size: 1.2rem; margin: 0; white-space: nowrap; }
+.sp { flex: 1; }
 .muted { color: var(--muted); }
-main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 320px; }
-@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
-section h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
-.col { display: grid; gap: 16px; align-content: start; min-width: 0; }
-button, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.group { display: inline-flex; border: 1px solid var(--line); border-radius: 0.4rem; overflow: hidden; }
+.group button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+.group button:last-child { border-right: 0; }
+
+main { padding: 1rem; display: grid; gap: 1rem; max-width: 260rem; margin: 0 auto;
+  grid-template-columns: minmax(0, 1fr); grid-template-areas: "a" "b" "c"; }
+body[data-layout="2"] main { grid-template-columns: minmax(0, 1fr) 24rem; grid-template-areas: "a c" "b c"; grid-template-rows: auto 1fr; }
+body[data-layout="3"] main { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) 24rem; grid-template-areas: "a b c"; }
+#colA { grid-area: a; } #colB { grid-area: b; } #colC { grid-area: c; }
+.col { display: grid; gap: 1rem; align-content: start; min-width: 0; }
+body[data-layout="3"] #colB { position: sticky; top: 4.2rem; align-self: start; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; min-width: 0; }
+.ph { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ph h2 { font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 0.4rem; }
+.pb { padding: 0.7rem 0.85rem; min-width: 0; }
+.panel.collapsed .pb { display: none; }
+.panel.collapsed .ph { border-bottom: 0; }
+.panel.collapsed [data-collapse] { transform: rotate(-90deg); }
+.pb.scroll { overflow: auto; resize: vertical; height: 26rem; min-height: 6rem; }
+.panel.max { position: fixed; inset: 0.6rem; z-index: 50; box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.panel.max .pb { flex: 1; overflow: auto; height: auto; resize: none; display: flex; flex-direction: column; }
+.panel.max .pb > .table-wrap { flex: 1; }
+#backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 40; display: none; }
+body.has-max #backdrop { display: block; }
+
+button, select, input, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 0.4rem; }
+button { padding: 0.2rem 0.65rem; cursor: pointer; white-space: nowrap; }
 button:hover { background: var(--hover); }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 button.danger { color: var(--fail); }
+button.ico { padding: 0.1rem 0.45rem; line-height: 1.3; }
 button:disabled { opacity: .5; cursor: default; }
-.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; }
-.kv div:nth-child(odd) { color: var(--muted); }
-.kv div { overflow-wrap: anywhere; }
-.empty { color: var(--muted); padding: 6px 0; }
+select, input, textarea { padding: 0.2rem 0.45rem; }
+input[type="checkbox"], input[type="radio"] { width: 1em; height: 1em; vertical-align: -0.1em; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.15rem 0.8rem; }
+.kv > div:nth-child(odd) { color: var(--muted); }
+.kv > div { overflow-wrap: anywhere; }
+.empty { color: var(--muted); padding: 0.4rem 0; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; white-space: nowrap; position: sticky; top: 0; background: var(--panel); }
+td.mono { overflow-wrap: anywhere; min-width: 12rem; }
+td.nw { white-space: nowrap; }
+td.act { white-space: nowrap; text-align: right; }
+td.act button { margin-left: 0.2rem; }
 tr.click { cursor: pointer; }
-tr.click:hover td { background: var(--hover); }
-tr.sel td { background: var(--hover); }
-.badge { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; white-space: nowrap; }
+tr.click:hover td, tr.sel td { background: var(--hover); }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
+.badge { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-size: 0.82rem; font-weight: 600; color: #fff; white-space: nowrap; }
 .s-ok { background: var(--ok); } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; }
 .s-timeout { background: var(--timeout); } .s-nostart { background: var(--nostart); color: #10262a; } .s-other { background: var(--other); }
 .s-running { background: var(--accent); color: var(--accent-text); } .s-queued { background: var(--other); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s infinite; }
+.dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
-.acc { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
-.acc:last-child { border-bottom: 0; }
-.acc .m { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
-.acc.cur b { color: var(--accent); }
-pre#log { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; }
-td.mono { overflow-wrap: anywhere; min-width: 180px; }
-td.nw { white-space: nowrap; }
-.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-#toast { position: fixed; right: 16px; bottom: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
-#toast.show { opacity: .95; }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .warn { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 8%, var(--panel)); }
 .warn h2 { color: var(--fail); }
-.dead-item { padding: 8px 0; border-top: 1px solid var(--line); }
-.dead-item:first-of-type { border-top: 0; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dead-item { padding: 0.5rem 0; border-top: 1px solid var(--line); }
+.dead-item:first-child { border-top: 0; padding-top: 0; }
+
+.acc { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--line); }
+.acc:last-child { border-bottom: 0; }
+.acc .m { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.85rem; color: var(--muted); }
+.acc.cur b { color: var(--accent); }
+.bar { height: 0.35rem; background: var(--line); border-radius: 1rem; overflow: hidden; min-width: 3rem; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.stats td, .stats th { padding: 0.25rem 0.35rem; font-size: 0.88rem; }
+.stats td.mono { min-width: 0; }
+
+.logbar { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.logbar input[type="search"] { flex: 1; min-width: 8rem; }
+pre#log { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.6rem; height: 60vh; min-height: 8rem; overflow: auto; resize: vertical; font: 0.85rem/1.5 Consolas, "Cascadia Mono", monospace; white-space: pre; }
+pre#log.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.panel.max pre#log { flex: 1; height: auto; resize: none; }
+mark { background: var(--mark); color: inherit; border-radius: 0.15rem; }
+
+dialog { border: 1px solid var(--line); border-radius: 0.6rem; background: var(--panel); color: var(--text); padding: 0; width: min(46rem, calc(100vw - 2rem)); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgba(0, 0, 0, .4); }
+dialog form { padding: 1rem 1.2rem; display: grid; gap: 0.7rem; }
+dialog h2 { margin: 0; font-size: 1.15rem; }
+.field { display: grid; gap: 0.2rem; }
+.field > span { color: var(--muted); font-size: 0.88rem; }
+.field input, .field select, .field textarea { width: 100%; }
+.grid2 { display: grid; gap: 0.7rem; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+[hidden] { display: none !important; }
+#cmdPreview { background: var(--code); border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.4rem 0.6rem; overflow-wrap: anywhere; white-space: pre-wrap; margin: 0; }
+#submitMsg { white-space: pre-wrap; margin: 0; }
+#submitMsg.err { color: var(--fail); }
+
+#toast { position: fixed; right: 1rem; bottom: 1rem; background: var(--text); color: var(--bg); padding: 0.5rem 0.9rem; border-radius: 0.4rem; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 2rem); z-index: 100; white-space: pre-wrap; }
+#toast.show { opacity: .95; }
+kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-radius: 0.25rem; padding: 0 0.3rem; }
 </style>
 </head>
-<body>
+<body data-layout="1">
 <header>
   <h1>flashq · คิวกลาง</h1>
   <span class="muted" id="updated">กำลังโหลด…</span>
   <span class="sp"></span>
+  <button class="primary" id="newJobBtn" title="ส่งงานใหม่เข้าคิว (N)">＋ ส่งงานใหม่</button>
+  <button id="notifyBtn" title="แจ้งเตือนเมื่องานจบ">🔕 แจ้งเตือน: ปิด</button>
+  <span class="group" title="ขนาดตัวอักษร/กรอบ (ปุ่ม + - 0 หรือ Ctrl+วงล้อเมาส์)">
+    <button id="zoomOut">A−</button><button id="zoomReset">100%</button><button id="zoomIn">A+</button>
+  </span>
   <button id="themeBtn" title="สลับธีม">ธีม: อัตโนมัติ</button>
 </header>
+<div id="backdrop"></div>
 <main>
-  <div class="col">
-    <section class="warn" id="deadBox" hidden>
-      <h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2>
-      <div id="dead"></div>
+  <div class="col" id="colA">
+    <section class="panel warn" id="deadBox" hidden data-panel="dead">
+      <div class="ph"><h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2></div>
+      <div class="pb" id="dead"></div>
     </section>
-    <section>
-      <h2>กำลังทำ</h2>
-      <div id="running"></div>
+    <section class="panel" data-panel="running">
+      <div class="ph"><h2>กำลังทำ</h2><span class="sp"></span>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb" id="running"></div>
     </section>
-    <section>
-      <h2>คิวรอ <span class="muted" id="qcount"></span></h2>
-      <div id="queued"></div>
+    <section class="panel" data-panel="queued">
+      <div class="ph"><h2>คิวรอ <span class="muted" id="qcount"></span></h2><span class="sp"></span>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
+      <div class="pb" id="queued"></div>
     </section>
-    <section>
-      <h2>ประวัติ
-        <span class="sp" style="flex:1"></span>
-        <select id="projFilter"><option value="">ทุกโปรเจกต์</option></select>
-      </h2>
-      <div class="table-wrap" id="history"></div>
-    </section>
-    <section id="logBox" hidden>
-      <h2>log <span class="mono muted" id="logTitle"></span>
-        <span style="flex:1"></span>
-        <select id="attemptSel" title="รอบที่"></select>
-        <label class="muted"><input type="checkbox" id="follow" checked> ตามท้าย</label>
-        <button id="logClose">ปิด</button>
-      </h2>
-      <pre id="log"></pre>
+    <section class="panel" data-panel="history">
+      <div class="ph"><h2>ประวัติ <span class="muted" id="hcount"></span></h2><span class="sp"></span>
+        <input type="search" id="histSearch" placeholder="ค้นหา แผน/งาน/id" style="width:11rem">
+        <select id="stateFilter" title="กรองสถานะ">
+          <option value="">ทุกสถานะ</option><option value="ok">OK</option><option value="fail">FAIL</option>
+          <option value="quota">QUOTA</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
+          <option value="cancelled">ยกเลิก</option><option value="dead">ตาย</option>
+        </select>
+        <select id="projFilter" title="กรองโปรเจกต์"><option value="">ทุกโปรเจกต์</option></select>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
+      <div class="pb scroll"><div class="table-wrap" id="history"></div></div>
     </section>
   </div>
-  <div class="col">
-    <section>
-      <h2>บัญชี flash-worker</h2>
-      <div class="muted" style="margin-bottom:6px">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
-      <div id="accounts"></div>
-      <div class="row" style="margin-top:8px"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button></div>
+  <div class="col" id="colB">
+    <section class="panel" data-panel="log" id="logBox">
+      <div class="ph"><h2>log <span class="mono muted" id="logTitle"></span></h2><span class="sp"></span>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
+      <div class="pb">
+        <div class="logbar">
+          <input type="search" id="logSearch" placeholder="ค้นหาใน log (กรองบรรทัด)">
+          <span class="muted" id="logCount"></span>
+          <select id="attemptSel" title="รอบที่"></select>
+          <label class="muted"><input type="checkbox" id="follow" checked> เลื่อนตาม</label>
+          <label class="muted"><input type="checkbox" id="wrap" checked> ตัดบรรทัด</label>
+          <button id="logCopy" title="คัดลอก log ที่แสดง">คัดลอก</button>
+          <button id="logOpen" title="เปิด session ใน opencode desktop" hidden>เปิดใน desktop</button>
+          <button id="logClose" title="ปิด log">ปิด</button>
+        </div>
+        <pre id="log" class="wrap">คลิกงานใดก็ได้เพื่อดู log (งานที่กำลังทำจะไหลสด)</pre>
+      </div>
+    </section>
+  </div>
+  <div class="col" id="colC">
+    <section class="panel" data-panel="accounts">
+      <div class="ph"><h2>บัญชี flash-worker</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb">
+        <div class="muted" style="margin-bottom:0.4rem">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
+        <div id="accounts"></div>
+        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button></div>
+      </div>
+    </section>
+    <section class="panel" data-panel="stats">
+      <div class="ph"><h2>สถิติ</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
+      <div class="pb" id="stats"></div>
+    </section>
+    <section class="panel" data-panel="tools">
+      <div class="ph"><h2>ล้างประวัติ + log เก่า</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb">
+        <div class="row">เก่ากว่า <input type="number" id="pruneDays" value="30" min="1" style="width:5rem"> วัน
+          <button id="pruneDry">ตรวจก่อน</button><button id="pruneGo" class="danger">ลบ</button></div>
+        <div class="muted" id="pruneMsg" style="margin-top:0.4rem">ไม่แตะงานที่รอคิว/กำลังทำ · CLI: <span class="mono">flashq.py prune --days 30</span></div>
+      </div>
+    </section>
+    <section class="panel collapsed" data-panel="help">
+      <div class="ph"><h2>ปุ่มลัด</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb muted">
+        <kbd>+</kbd> <kbd>-</kbd> <kbd>0</kbd> หรือ <kbd>Ctrl</kbd>+วงล้อ = ขนาด · <kbd>N</kbd> = ส่งงานใหม่ · <kbd>/</kbd> = ค้นหาใน log ·
+        <kbd>Esc</kbd> = ออกจากเต็มจอ · ลากมุมขวาล่างของประวัติ/log เพื่อปรับความสูง
+      </div>
     </section>
   </div>
 </main>
+
+<dialog id="submitDlg">
+  <form method="dialog" id="submitForm">
+    <h2>ส่งงานใหม่เข้าคิว</h2>
+    <label class="field"><span>โปรเจกต์ (path เต็ม — เลือกจากที่เคยรัน หรือพิมพ์เอง)</span>
+      <input id="fProject" list="projList" placeholder="D:\MyCode\..." autocomplete="off"></label>
+    <datalist id="projList"></datalist>
+    <div class="row">
+      <label><input type="radio" name="mode" value="plan" checked> ตามแผน (/flash)</label>
+      <label><input type="radio" name="mode" value="message"> ข้อความทดสอบ</label>
+    </div>
+    <div id="planFields" class="grid2">
+      <label class="field" style="grid-column: 1 / -1"><span>ไฟล์แผน <span id="planHint"></span></span>
+        <input id="fPlan" list="planList" placeholder="docs/plans/PLAN_X_FLASH.md" autocomplete="off"></label>
+      <datalist id="planList"></datalist>
+      <label class="field"><span>งาน</span><input id="fTasks" placeholder="T-01..T-03" autocomplete="off"></label>
+    </div>
+    <label class="field" id="msgField" hidden><span>ข้อความ</span><textarea id="fMessage" rows="2">ตอบแค่คำว่า PONG</textarea></label>
+    <div class="grid2">
+      <label class="field"><span>สลับบัญชีเมื่อ QUOTA (ครั้ง)</span><input type="number" id="fSwitch" min="0" max="10" value="0"></label>
+      <label class="field"><span>timeout (นาที · 0 = ค่าโปรเจกต์)</span><input type="number" id="fTimeout" min="0" max="1440" value="0"></label>
+      <label class="field"><span>ดูสด</span><select id="fAttach"><option value="live">live (server 4096)</option><option value="none">none (รันแยก)</option></select></label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="fNoOpen"> ไม่สั่ง desktop เปิด session</label>
+      <label><input type="checkbox" id="fAuto"> อนุมัติ permission อัตโนมัติ (--auto)</label>
+    </div>
+    <pre id="cmdPreview" class="mono"></pre>
+    <p id="submitMsg"></p>
+    <div class="row" style="justify-content:flex-end">
+      <button value="cancel" formnovalidate>ปิด</button>
+      <button id="submitGo" class="primary" value="default">ส่งเข้าคิว</button>
+    </div>
+  </form>
+</dialog>
 <div id="toast"></div>
+
 <script>
 const TOKEN = "{{TOKEN}}";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("flashq." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("flashq." + k, JSON.stringify(v)); } catch (e) {} },
+};
 const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
   nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
   dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
+const FINAL = ["ok", "fail", "quota", "timeout", "nostart"];
 const badge = (st) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}">${esc(t)}</span>`; };
 const dur = (s) => {
   if (s == null || s < 0) return "-";
@@ -134,29 +280,90 @@ const dur = (s) => {
   return h ? `${h} ชม. ${m} นาที` : m ? `${m} นาที ${x} วิ` : `${x} วิ`;
 };
 const what = (j) => j.message ? `ข้อความ: ${j.message}` : `${j.plan || "-"} ${j.tasks || ""}`;
-let state = null, logJob = null, logOffset = 0, logAttempt = 0, logTimer = null;
+let state = null, prevStates = null;
+let logJob = null, logOffset = 0, logAttempt = 0, logTimer = null, logLines = [], logDone = false, logSession = "";
 
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3200); }
 
 async function post(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
-  let d = {}; try { d = await r.json(); } catch (e) {}
-  return { ok: r.ok, ...d };
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
+    let d = {}; try { d = await r.json(); } catch (e) {}
+    return { httpOk: r.ok, ...d };
+  } catch (e) { return { httpOk: false, message: "เชื่อมต่อ server ไม่ได้" }; }
 }
 
-async function copyText(text) {
+async function copyText(text, label) {
   try { await navigator.clipboard.writeText(text); }
   catch (e) { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
-  toast(`คัดลอกแล้ว: ${text}`);
+  toast(label || `คัดลอกแล้ว: ${text}`);
 }
 
-function checkBtn(j, short) {
-  return j.plan ? `<button data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอกคำสั่ง /flash-check ${esc(j.plan)}">${short ? "คัดลอก" : "คัดลอก /flash-check"}</button>` : "";
+/* ---------- zoom + layout ---------- */
+const ZOOMS = [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2, 2.4];
+let zoom = +store.get("zoom", 1) || 1;
+function applyZoom() {
+  zoom = Math.min(2.4, Math.max(0.6, zoom));
+  document.documentElement.style.setProperty("--zoom", zoom);
+  $("zoomReset").textContent = Math.round(zoom * 100) + "%";
+  store.set("zoom", zoom);
+  layout();
+}
+function stepZoom(d) {
+  if (d > 0) zoom = ZOOMS.find((z) => z > zoom + 1e-6) ?? ZOOMS[ZOOMS.length - 1];
+  else zoom = [...ZOOMS].reverse().find((z) => z < zoom - 1e-6) ?? ZOOMS[0];
+  applyZoom();
+}
+function layout() {  /* จำนวนคอลัมน์คิดเป็น rem → ขยาย zoom แล้วคอลัมน์ลดลงเอง */
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const w = window.innerWidth / rem;
+  document.body.dataset.layout = w >= 112 ? "3" : w >= 62 ? "2" : "1";
+}
+$("zoomIn").onclick = () => stepZoom(1);
+$("zoomOut").onclick = () => stepZoom(-1);
+$("zoomReset").onclick = () => { zoom = 1; applyZoom(); };
+window.addEventListener("resize", layout);
+window.addEventListener("wheel", (e) => { if (e.ctrlKey) { e.preventDefault(); stepZoom(e.deltaY < 0 ? 1 : -1); } }, { passive: false });
+
+/* ---------- แผง: พับ / เต็มจอ ---------- */
+const collapsed = store.get("collapsed", {});
+document.querySelectorAll(".panel[data-panel]").forEach((p) => {
+  const k = p.dataset.panel;
+  if (k in collapsed) p.classList.toggle("collapsed", !!collapsed[k]);
+});
+function setMax(panel) {
+  document.querySelectorAll(".panel.max").forEach((p) => { if (p !== panel) p.classList.remove("max"); });
+  const on = panel ? panel.classList.toggle("max") : false;
+  if (on) panel.classList.remove("collapsed");
+  document.body.classList.toggle("has-max", on);
+  if ($("follow").checked) $("log").scrollTop = $("log").scrollHeight;
+}
+$("backdrop").onclick = () => setMax(null);
+
+/* ---------- render ---------- */
+function actBtns(j, { retry = true, short = true } = {}) {
+  let h = "";
+  if (j.plan) h += `<button data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอก /flash-check ${esc(j.plan)}">${short ? "คัดลอก" : "คัดลอก /flash-check"}</button>`;
+  if (retry) h += `<button data-retry="${esc(j.id)}" title="ส่งงานเดิมเข้าคิวอีกครั้ง">สั่งซ้ำ</button>`;
+  return h;
 }
 
 function render() {
   const s = state;
   $("updated").textContent = `อัปเดต ${s.now}`;
+  document.title = s.running ? `▶ ${dur(s.running.elapsed_sec)} · ${s.running.project_name} · flashq` : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
+
+  $("deadBox").hidden = !s.dead.length;
+  $("dead").innerHTML = s.dead.map((j) => `<div class="dead-item">
+    <div><b>${esc(j.project_name)}</b> <span class="mono">${esc(what(j))}</span>
+      <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
+    ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนสั่งซ้ำ</div>` : ""}
+    <div class="row" style="margin-top:0.3rem">
+      <button data-log="${esc(j.id)}">ดู log</button>${actBtns(j, { retry: false, short: false })}
+      ${j.rerun ? `<button data-copy="${esc(j.rerun)}">คัดลอกคำสั่ง CLI</button>` : ""}
+      <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
+    </div></div>`).join("");
+
   const r = s.running;
   $("running").innerHTML = r ? `
     <div class="kv">
@@ -167,44 +374,76 @@ function render() {
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
     </div>
-    <div class="row" style="margin-top:8px"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${checkBtn(r)}
-      <span style="flex:1"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div>`
-    : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ</div>`;
-
-  $("deadBox").hidden = !s.dead.length;
-  $("dead").innerHTML = s.dead.map((j) => `<div class="dead-item">
-    <div><b>${esc(j.project_name)}</b> <span class="mono">${esc(what(j))}</span>
-      <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
-    ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนส่งใหม่</div>` : ""}
-    <div class="row" style="margin-top:4px">
-      <button data-log="${esc(j.id)}">ดู log</button>
-      ${j.rerun ? `<button data-copy="${esc(j.rerun)}">คัดลอกคำสั่งส่งใหม่</button>` : ""}
-      ${checkBtn(j)}
-      <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
-    </div></div>`).join("");
+    <div class="row" style="margin-top:0.5rem"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${actBtns(r, { retry: false, short: false })}
+      ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : ""}
+      <span class="sp"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div>`
+    : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ${s.queued.length ? "" : " · กด <b>＋ ส่งงานใหม่</b> เพื่อรันคิว"}</div>`;
 
   $("qcount").textContent = s.queued.length ? `(${s.queued.length} งาน)` : "";
   $("queued").innerHTML = s.queued.length ? `<div class="table-wrap"><table>
     <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
     ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td><td class="nw">${dur(j.wait_sec)}</td>
-      <td><button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
+      <td class="act"><button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`;
 
-  const sel = $("projFilter"), cur = sel.value;
+  const sel = $("projFilter"), cur = sel.value || store.get("proj", "");
   sel.innerHTML = `<option value="">ทุกโปรเจกต์</option>` + s.projects.map((p) => `<option${p === cur ? " selected" : ""}>${esc(p)}</option>`).join("");
-  const hist = s.history.filter((j) => !sel.value || j.project_name === sel.value);
+  const q = $("histSearch").value.trim().toLowerCase(), stf = $("stateFilter").value;
+  const hist = s.history.filter((j) => (!sel.value || j.project_name === sel.value) && (!stf || j.state === stf)
+    && (!q || `${j.id} ${j.plan} ${j.tasks} ${j.message} ${j.model}`.toLowerCase().includes(q)));
+  $("hcount").textContent = `(${hist.length}${hist.length !== s.history_total ? " / " + s.history_total : ""})`;
   $("history").innerHTML = hist.length ? `<table>
-    <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>เริ่ม</th><th>ระยะเวลา</th><th>/flash-check</th></tr>
+    <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td>
-      <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td>${checkBtn(j, true)}</td></tr>`).join("")}
-    </table>` : `<div class="empty">ยังไม่มีประวัติ</div>`;
+      <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
+      <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j)}</td></tr>`).join("")}
+    </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`;
 
   $("curModel").textContent = s.current_model || "(ยังไม่ตั้ง)";
   $("accounts").innerHTML = s.accounts.map((a) => `<div class="acc${a.model === s.current_model ? " cur" : ""}">
     <b>${a.model === s.current_model ? "● " : ""}${esc(a.short)}</b><span class="m">${esc(a.model)}${a.available ? "" : " (ไม่มีใน provider!)"}</span>
     <button data-switch="${esc(a.short)}" ${a.model === s.current_model || !a.available ? "disabled" : ""}>ใช้</button></div>`).join("") || `<div class="empty">ไม่มีรายการบัญชี</div>`;
+
+  const statTable = (title, rows) => rows.length ? `<div class="table-wrap"><table class="stats"><tr><th>${title}</th><th>งาน</th><th>ผ่าน</th><th></th><th>เฉลี่ย</th></tr>
+    ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
+      <td>${pct}%</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
+  const st = s.stats || { by_project: [], by_model: [] };
+  $("stats").innerHTML = st.by_project.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
+    : `<div class="empty">ยังไม่มีงานที่จบ</div>`;
+
+  const pl = $("projList");
+  const opts = s.project_paths.map((p) => `<option value="${esc(p)}">`).join("");
+  if (pl.innerHTML !== opts) pl.innerHTML = opts;
+}
+
+/* ---------- แจ้งเตือนเมื่องานจบ ---------- */
+let notifyOn = store.get("notify", false);
+function notifyLabel() { $("notifyBtn").textContent = notifyOn ? "🔔 แจ้งเตือน: เปิด" : "🔕 แจ้งเตือน: ปิด"; }
+$("notifyBtn").onclick = async () => {
+  if (!notifyOn && "Notification" in window && Notification.permission !== "granted") {
+    try { const p = await Notification.requestPermission(); if (p !== "granted") toast("เบราว์เซอร์ไม่อนุญาตแจ้งเตือน — จะแสดงในหน้าเว็บแทน"); } catch (e) {}
+  }
+  notifyOn = !notifyOn; store.set("notify", notifyOn); notifyLabel();
+};
+function checkFinished() {
+  const now = {};
+  if (state.running) now[state.running.id] = "running";
+  state.queued.forEach((j) => { now[j.id] = "queued"; });
+  state.history.forEach((j) => { now[j.id] = j.state; });
+  if (prevStates) {
+    for (const j of state.history) {
+      const was = prevStates[j.id];
+      if ((was === "running" || was === "queued") && FINAL.includes(j.state)) {
+        toast(`งานจบ: ${STATUS[j.state][0]} · ${j.project_name} · ${what(j)} (${dur(j.duration_sec)})`);
+        if (notifyOn && "Notification" in window && Notification.permission === "granted") {
+          try { new Notification(`flashq: ${STATUS[j.state][0]}`, { body: `${j.project_name} · ${what(j)}`, tag: j.id }); } catch (e) {}
+        }
+      }
+    }
+  }
+  prevStates = now;
 }
 
 async function refresh() {
@@ -212,13 +451,34 @@ async function refresh() {
     const r = await fetch("/api/state", { cache: "no-store" });
     state = await r.json();
     render();
+    checkFinished();
   } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
 }
 
+/* ---------- log ---------- */
+function renderLog(appended) {
+  const pre = $("log"), q = $("logSearch").value.trim().toLowerCase();
+  if (!q) {
+    if (appended && appended.length && pre.dataset.mode === "all") pre.append(appended.join("\n") + "\n");
+    else { pre.textContent = logLines.join("\n") + (logLines.length ? "\n" : ""); pre.dataset.mode = "all"; }
+    $("logCount").textContent = logJob ? `${logLines.length} บรรทัด` : "";
+  } else {
+    const hit = logLines.filter((l) => l.toLowerCase().includes(q));
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    pre.innerHTML = hit.map((l) => esc(l).replace(re, (m) => `<mark>${m}</mark>`)).join("\n");
+    pre.dataset.mode = "filter";
+    $("logCount").textContent = `ตรง ${hit.length} / ${logLines.length}`;
+  }
+  if ($("follow").checked) pre.scrollTop = pre.scrollHeight;
+}
+
 function openLog(id) {
-  logJob = id; logOffset = 0; logAttempt = 0;
-  $("log").textContent = ""; $("logTitle").textContent = id; $("attemptSel").innerHTML = "";
-  $("logBox").hidden = false; $("logBox").scrollIntoView({ behavior: "smooth", block: "start" });
+  logJob = id; logOffset = 0; logAttempt = 0; logLines = []; logDone = false;
+  $("logTitle").textContent = id; $("attemptSel").innerHTML = ""; $("log").textContent = ""; $("log").dataset.mode = "all";
+  const p = $("logBox"); p.classList.remove("collapsed");
+  const j = [state?.running, ...(state?.queued || []), ...(state?.history || []), ...(state?.dead || [])].find((x) => x && x.id === id);
+  logSession = j?.session || ""; $("logOpen").hidden = !logSession;
+  if (document.body.dataset.layout !== "3") p.scrollIntoView({ behavior: "smooth", block: "start" });
   if (state) render();
   clearTimeout(logTimer); pollLog();
 }
@@ -230,77 +490,175 @@ async function pollLog() {
     const r = await fetch(`/api/log?id=${encodeURIComponent(id)}&attempt=${logAttempt}&offset=${logOffset}`, { cache: "no-store" });
     const d = await r.json();
     if (id !== logJob) return;
-    if (!r.ok) { $("log").textContent = d.error || "อ่าน log ไม่ได้"; return; }
-    const pre = $("log");
-    if (d.reset) pre.textContent = "";
+    if (!r.ok) { $("log").textContent = d.error || "อ่าน log ไม่ได้"; logTimer = setTimeout(pollLog, 4000); return; }
+    if (d.reset) logLines = [];
     const asel = $("attemptSel");
-    if (asel.options.length !== d.attempts) {
-      asel.innerHTML = Array.from({ length: d.attempts }, (_, i) => `<option value="${i + 1}">รอบ ${i + 1}</option>`).join("");
-    }
+    if (asel.options.length !== d.attempts) asel.innerHTML = Array.from({ length: d.attempts }, (_, i) => `<option value="${i + 1}">รอบ ${i + 1}</option>`).join("");
     asel.value = String(d.attempt || "");
     if (!logAttempt) logAttempt = d.attempt;
     logOffset = d.offset;
-    if (d.lines.length) pre.append(d.lines.join("\n") + "\n");
+    const add = [...d.lines];
     const live = d.state === "running" || d.state === "queued";
-    if (!live && d.offset >= d.size && !pre.dataset.done) {
-      pre.dataset.done = "1";
-      if (!d.attempts) pre.append(d.state === "queued" ? "(ยังรอคิว — ยังไม่มี log)\n" : "(ไม่มีไฟล์ log)\n");
-      if (d.last) pre.append("\n---- ข้อความท้าย ----\n" + d.last + "\n");
+    if (!live && d.offset >= d.size && !logDone) {
+      logDone = true;
+      if (!d.attempts) add.push(d.state === "queued" ? "(ยังรอคิว — ยังไม่มี log)" : "(ไม่มีไฟล์ log)");
+      if (d.last) add.push("", "---- ข้อความท้าย ----", d.last);
     }
-    if ($("follow").checked) pre.scrollTop = pre.scrollHeight;
-    if (live || d.offset < d.size) { delete pre.dataset.done; }
+    if (live) logDone = false;
+    if (add.length || d.reset) {
+      logLines.push(...add);
+      if (logLines.length > 20000) { logLines = logLines.slice(-20000); renderLog(); }
+      else renderLog(d.reset ? null : add);
+    } else if (!logLines.length) renderLog();
   } catch (e) {}
   logTimer = setTimeout(pollLog, 2000);
 }
+$("logSearch").oninput = () => renderLog();
+$("wrap").onchange = () => { $("log").classList.toggle("wrap", $("wrap").checked); store.set("wrap", $("wrap").checked); };
+$("wrap").checked = store.get("wrap", true); $("log").classList.toggle("wrap", $("wrap").checked);
+$("logCopy").onclick = () => copyText($("log").textContent, "คัดลอก log แล้ว");
+$("logOpen").onclick = async () => { const d = await post("/api/open", { id: logJob }); toast(d.message || "ผิดพลาด"); };
+$("logClose").onclick = () => { logJob = null; clearTimeout(logTimer); logLines = []; $("logTitle").textContent = ""; $("logCount").textContent = "";
+  $("log").textContent = "คลิกงานใดก็ได้เพื่อดู log"; $("logOpen").hidden = true; if ($("logBox").classList.contains("max")) setMax(null); if (state) render(); };
+$("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffset = 0; logLines = []; logDone = false; renderLog(); clearTimeout(logTimer); pollLog(); };
 
+/* ---------- ส่งงานใหม่ ---------- */
+const dlg = $("submitDlg");
+const prefs = Object.assign({ project: "", switch_on_quota: 0, timeout_min: 0, attach: "live", no_open: false, auto: false }, store.get("submit", {}));
+function mode() { return document.querySelector('input[name="mode"]:checked').value; }
+function formBody() {
+  return { project: $("fProject").value.trim(), plan: mode() === "plan" ? $("fPlan").value.trim() : "", tasks: mode() === "plan" ? $("fTasks").value.trim() : "",
+    message: mode() === "message" ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
+    attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked };
+}
+function runOpts(b) { return { switch_on_quota: b.switch_on_quota, timeout_min: b.timeout_min, attach: b.attach, no_open: b.no_open, auto: b.auto }; }
+function preview() {
+  const b = formBody(), quote = (x) => /\s/.test(x) ? `"${x}"` : x;
+  const parts = ["flashq.py run", ...(b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
+    "--project", quote(b.project || "<โปรเจกต์>"), "--switch-on-quota", b.switch_on_quota, ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : []),
+    "--attach", b.attach, ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : [])];
+  $("cmdPreview").textContent = parts.join(" ");
+  $("planFields").hidden = mode() !== "plan"; $("msgField").hidden = mode() !== "message";
+}
+let planTimer = null, planFor = null;
+async function loadPlans() {
+  const p = $("fProject").value.trim();
+  if (!p || p === planFor) return;
+  planFor = p; $("planHint").textContent = "(กำลังค้น…)";
+  try {
+    const d = await (await fetch(`/api/plans?project=${encodeURIComponent(p)}`)).json();
+    if (planFor !== p) return;
+    $("planList").innerHTML = d.plans.map((x) => `<option value="${esc(x)}">`).join("");
+    $("planHint").textContent = d.plans.length ? `(พบ ${d.plans.length} ไฟล์ PLAN_*FLASH*.md — พิมพ์เพื่อเลือก)` : "(ไม่พบ PLAN_*FLASH*.md — พิมพ์ path เองได้)";
+  } catch (e) { $("planHint").textContent = ""; }
+}
+function openSubmit(fill) {
+  const f = fill || {};
+  $("fProject").value = f.project || prefs.project || state?.running?.project || state?.project_paths?.[0] || "";
+  $("fPlan").value = f.plan || ""; $("fTasks").value = f.tasks || "";
+  $("fSwitch").value = prefs.switch_on_quota; $("fTimeout").value = prefs.timeout_min; $("fAttach").value = prefs.attach;
+  $("fNoOpen").checked = !!prefs.no_open; $("fAuto").checked = !!prefs.auto;
+  $("submitMsg").textContent = ""; $("submitMsg").className = "";
+  preview(); planFor = null; loadPlans();
+  dlg.showModal();
+  ($("fProject").value ? $("fPlan") : $("fProject")).focus();
+}
+$("newJobBtn").onclick = () => openSubmit();
+$("submitForm").addEventListener("input", (e) => {
+  preview();
+  if (e.target.id === "fProject") { clearTimeout(planTimer); planTimer = setTimeout(loadPlans, 400); }
+});
+$("submitForm").addEventListener("change", preview);
+$("submitGo").onclick = async (e) => {
+  e.preventDefault();
+  const b = formBody();
+  if (!b.project) { $("fProject").focus(); return; }
+  if (!b.message && (!b.plan || !b.tasks)) { (b.plan ? $("fTasks") : $("fPlan")).focus(); return; }
+  $("submitGo").disabled = true; $("submitMsg").className = ""; $("submitMsg").textContent = "กำลังส่ง…";
+  const d = await post("/api/submit", b);
+  $("submitGo").disabled = false;
+  if (d.ok) {
+    Object.assign(prefs, { project: b.project, ...runOpts(b) }); store.set("submit", prefs);
+    dlg.close(); toast(d.message); refresh(); if (d.job) setTimeout(() => openLog(d.job), 600);
+  } else { $("submitMsg").className = "err"; $("submitMsg").textContent = d.message || d.error || "ส่งไม่สำเร็จ"; }
+};
+
+/* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cancel],[data-stop],[data-dismiss],[data-switch],[data-log]");
+  const t = ev.target.closest("[data-copy],[data-cancel],[data-stop],[data-dismiss],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
+  const panel = t.closest(".panel");
+  if (t.hasAttribute("data-collapse")) {
+    const on = panel.classList.toggle("collapsed");
+    if (on && panel.classList.contains("max")) setMax(null);
+    collapsed[panel.dataset.panel] = on; store.set("collapsed", collapsed); return;
+  }
+  if (t.hasAttribute("data-max")) { setMax(panel); return; }
   if (t.dataset.copy) { ev.stopPropagation(); return copyText(t.dataset.copy); }
   if (t.dataset.cancel) {
-    ev.stopPropagation();
     if (!confirm(`ยกเลิกงาน ${t.dataset.cancel} ?`)) return;
     const d = await post("/api/cancel", { id: t.dataset.cancel }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.stop) {
-    ev.stopPropagation();
     const id = t.dataset.stop, j = state?.running;
-    if (!confirm(`หยุดงานที่กำลังทำ?
-
-${j ? j.project_name + " · " + what(j) : id}
-
-opencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง`)) return;
+    if (!confirm(`หยุดงานที่กำลังทำ?\n\n${j ? j.project_name + " · " + what(j) : id}\n\nopencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง`)) return;
     const tail = id.slice(-5);
     const typed = prompt(`ยืนยันชั้นที่ 2: พิมพ์ 5 ตัวท้ายของ job (${tail}) เพื่อหยุดงาน`);
     if (typed === null) return;
     if (typed.trim() !== tail) { toast("พิมพ์ไม่ตรง — ไม่ได้หยุดงาน"); return; }
     const d = await post("/api/stop", { id, confirm: id }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
-  if (t.dataset.dismiss) {
-    ev.stopPropagation();
-    const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  if (t.dataset.dismiss) { const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
+  if (t.dataset.retry) {
+    const j = [...(state?.history || []), ...(state?.dead || [])].find((x) => x.id === t.dataset.retry);
+    if (!confirm(`ส่งงานนี้เข้าคิวอีกครั้ง?\n\n${j ? j.project_name + " · " + what(j) : t.dataset.retry}\n\n(ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน)`)) return;
+    const d = await post("/api/retry", { id: t.dataset.retry, ...runOpts(prefs) }); toast(d.message || d.error || "ผิดพลาด");
+    refresh(); if (d.ok && d.job) setTimeout(() => openLog(d.job), 600); return;
   }
-  if (t.dataset.switch) {
-    const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
-  }
+  if (t.dataset.open) { const d = await post("/api/open", { id: t.dataset.open }); toast(d.message || "ผิดพลาด"); return; }
+  if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.log) openLog(t.dataset.log);
 });
 $("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
-$("projFilter").onchange = () => { try { localStorage.setItem("flashq.proj", $("projFilter").value); } catch (e) {} render(); };
-$("logClose").onclick = () => { logJob = null; clearTimeout(logTimer); $("logBox").hidden = true; if (state) render(); };
-$("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffset = 0; $("log").textContent = ""; delete $("log").dataset.done; clearTimeout(logTimer); pollLog(); };
-
-const THEMES = ["auto", "light", "dark"], THEME_TH = { auto: "อัตโนมัติ", light: "สว่าง", dark: "มืด" };
-function applyTheme(t) {
-  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
-  $("themeBtn").textContent = `ธีม: ${THEME_TH[t]}`;
+$("projFilter").onchange = () => { store.set("proj", $("projFilter").value); render(); };
+$("stateFilter").onchange = () => render();
+$("histSearch").oninput = () => render();
+async function prune(dry) {
+  const days = +$("pruneDays").value;
+  if (!(days >= 1)) { toast("จำนวนวันต้อง ≥ 1"); return; }
+  if (!dry) {
+    const chk = await post("/api/prune", { days, dry: true });
+    if (!chk.ok) { $("pruneMsg").textContent = chk.message || chk.error || "ผิดพลาด"; return; }
+    if (!chk.jobs && !chk.files) { $("pruneMsg").textContent = "ไม่มีอะไรให้ลบ"; return; }
+    if (!confirm(`ลบถาวร: ${chk.message.replace("จะลบ", "")}\nเก่ากว่า ${days} วัน — ยืนยัน?`)) return;
+  }
+  const d = await post("/api/prune", { days, dry });
+  $("pruneMsg").textContent = d.message || d.error || "ผิดพลาด"; refresh();
 }
-let theme = "auto";
-try { theme = localStorage.getItem("flashq.theme") || "auto"; } catch (e) {}
-applyTheme(theme);
-$("themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; applyTheme(theme); try { localStorage.setItem("flashq.theme", theme); } catch (e) {} };
-try { const p = localStorage.getItem("flashq.proj"); if (p) $("projFilter").innerHTML = `<option value="">ทุกโปรเจกต์</option><option selected>${esc(p)}</option>`; } catch (e) {}
+$("pruneDry").onclick = () => prune(true);
+$("pruneGo").onclick = () => prune(false);
 
+/* ---------- ธีม + ปุ่มลัด ---------- */
+const THEMES = ["auto", "light", "dark"], THEME_TH = { auto: "อัตโนมัติ", light: "สว่าง", dark: "มืด" };
+let theme = store.get("theme2", "auto");
+if (!THEMES.includes(theme)) theme = "auto";
+function applyTheme() {
+  if (theme === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = theme;
+  $("themeBtn").textContent = `ธีม: ${THEME_TH[theme]}`;
+}
+$("themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; store.set("theme2", theme); applyTheme(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("has-max") && !dlg.open) { setMax(null); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || dlg.open;
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "+" || e.key === "=") stepZoom(1);
+  else if (e.key === "-") stepZoom(-1);
+  else if (e.key === "0") { zoom = 1; applyZoom(); }
+  else if (e.key === "n" || e.key === "N") { e.preventDefault(); openSubmit(); }
+  else if (e.key === "/") { e.preventDefault(); $("logSearch").focus(); }
+});
+
+applyTheme(); notifyLabel(); applyZoom();
 refresh();
 setInterval(refresh, 3000);
 </script>
