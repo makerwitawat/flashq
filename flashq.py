@@ -7,6 +7,9 @@
 ที่เก็บ:
 - โค้ด = โฟลเดอร์นี้ (repo flashq) · ข้อมูลตอนรัน = `%USERPROFILE%\\.flashq\\` (jobs/ logs/ running*.lock config.json) — ไม่อยู่ใน git ของโปรเจกต์ใด
 - ช่องรัน: ช่อง 1 = `running.lock` (ชื่อเดิม · เข้ากันกับ process โค้ดเก่า) · ช่อง n≥2 = `running-<n>.lock` · จำนวนช่อง = `max_parallel` ใน config.json (ค่าเริ่มต้น 1 = ทีละงานแบบเดิม)
+- จัดคิว `schedule`: fifo (เดิม · หัวคิวได้ช่องก่อน) | auto (ไล่คิวแล้วเริ่มงานแรกที่ไม่ชนกับงานที่กำลังทำ · ชน = โปรเจกต์เดียวกัน
+  และไฟล์ซ้อน/แตะไฟล์ร่วม/ดึงรายการไฟล์ไม่ได้/แผนประกาศ `flashq-parallel: no` · งานที่ชนรอเกิน `starve_min` นาที = ล็อกหัวคิว)
+  แผนประกาศชุดไฟล์เองได้ด้วยบรรทัด `flashq-files: <path/glob, ...>` (ใช้แทนการเดาจาก backtick)
 - ค่าเฉพาะโปรเจกต์ = `.flash.json` ที่รากโปรเจกต์ (ไม่มี = ค่าเริ่มต้น DEFAULTS)
 
 ใช้:
@@ -17,6 +20,7 @@
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
+  python flashq.py config schedule auto|fifo · config starve_min 120     โหมดจัดคิว · กันอดตาย (นาที)
   python flashq.py runnow <id> [--force]                                ให้งานที่รอคิวได้ช่องพิเศษทันที (คู่ขนาน)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
@@ -37,7 +41,8 @@ REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
 CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
-CONFIG_DEFAULTS = {"max_parallel": 1}
+CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO)
+SCHEDULES = ("auto", "fifo")
 MAX_SLOTS = 8          # เพดานของ max_parallel
 QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
@@ -205,6 +210,51 @@ def set_max_parallel(n: int) -> str:
     return ""
 
 
+def schedule_mode() -> str:
+    m = str(read_config().get("schedule", "fifo")).lower()
+    return m if m in SCHEDULES else "fifo"
+
+
+def starve_min() -> float:
+    try:
+        return max(0.1, float(read_config().get("starve_min", 120)))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+def set_config(key: str, value) -> tuple[str, str]:
+    """ตั้งค่า schedule / starve_min / max_parallel · คืน (ข้อผิดพลาด, ข้อความสำเร็จ)"""
+    if key == "max_parallel":
+        try:
+            err = set_max_parallel(int(value))
+        except (TypeError, ValueError):
+            err = "max_parallel ต้องเป็นตัวเลข"
+        return err, "" if err else f"ตั้งจำนวนงานพร้อมกัน = {max_parallel()} แล้ว"
+    cfg = read_json(CONFIG)
+    if key == "schedule":
+        v = str(value or "").lower()
+        if v not in SCHEDULES:
+            return f"schedule ต้องเป็น {' | '.join(SCHEDULES)}", ""
+        cfg["schedule"] = v
+        msg = f"ตั้งโหมดจัดคิว = {v} แล้ว"
+        if v == "auto" and int(cfg.get("max_parallel", 1) or 1) < 2:  # auto มีผลเมื่อมี ≥2 ช่อง
+            cfg["max_parallel"] = 2
+            msg += " (ตั้ง max_parallel = 2 ด้วย — auto ต้องมีอย่างน้อย 2 ช่องถึงจะรันพร้อมกันได้)"
+        write_json(CONFIG, cfg)
+        return "", msg
+    if key == "starve_min":
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return "starve_min ต้องเป็นตัวเลข (นาที)", ""
+        if not 0.1 <= v <= 7 * 24 * 60:
+            return "starve_min ต้องอยู่ระหว่าง 0.1-10080 นาที", ""
+        cfg["starve_min"] = v
+        write_json(CONFIG, cfg)
+        return "", f"ตั้งกันอดตาย = {v:g} นาที แล้ว"
+    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min", ""
+
+
 def slot_path(n: int) -> Path:
     return LOCK if n == 1 else HOME / f"running-{n}.lock"
 
@@ -274,7 +324,14 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
         ahead = [j for j in jobs() if j.get("status") == "queued" and (j["created"], j["id"]) < key
                  and live_state(j) == "queued" and not (legacy_blocked and j.get("qv", 0) < QUEUE_VERSION)]
         boost = flag.exists()
-        if boost or (not ahead and len(held) < limit):
+        reason = ""
+        if schedule_mode() == "auto":
+            sch = schedule(held)
+            can = job["id"] in sch["start"]
+            reason = sch["reasons"].get(job["id"], "")
+        else:
+            can = not ahead and len(held) < limit
+        if boost or can:
             n = take_slot(job, extra=boost and (bool(ahead) or len(held) >= limit))
             if n:
                 flag.unlink(missing_ok=True)
@@ -287,9 +344,10 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
             print(f"FLASH_RUN=BUSY มีงานอื่นทำอยู่ job={ids} (ช่อง {len(held)}/{limit})", flush=True)
             return "busy"
         pos = len(ahead) + 1
-        if (pos, len(held), limit) != last:
-            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids} · ช่อง {len(held)}/{limit}) — รอคิว…", flush=True)
-            last = (pos, len(held), limit)
+        if (pos, len(held), limit, reason) != last:
+            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids} · ช่อง {len(held)}/{limit})"
+                  + (f" · {reason}" if reason else "") + " — รอคิว…", flush=True)
+            last = (pos, len(held), limit, reason)
         if time.time() - t0 > wait_min * 60:
             print(f"FLASH_RUN=QUEUE_TIMEOUT รอคิวเกิน {wait_min:g} นาที", flush=True)
             return "timeout"
@@ -420,8 +478,20 @@ def _pnorm(p: str) -> str:
     return p[2:] if p.startswith("./") else p
 
 
+def _gnorm(p: str) -> str:
+    """glob → โฟลเดอร์ส่วนที่ไม่มีอักขระพิเศษ (เทียบแบบอนุรักษ์) · "" = ทั้งโปรเจกต์"""
+    p = _pnorm(p)
+    cut = [i for i in (p.find(c) for c in "*?[") if i >= 0]
+    if not cut:
+        return p
+    pre = p[:min(cut)]
+    return pre[:pre.rfind("/") + 1]
+
+
 def paths_overlap(a: str, b: str) -> bool:
-    a, b = _pnorm(a), _pnorm(b)
+    a, b = _gnorm(a), _gnorm(b)
+    if a == "" or b == "":  # glob ระดับรากครอบทุกไฟล์
+        return True
     if a == b or (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b)):
         return True
     if a.endswith("/") or b.endswith("/"):
@@ -431,15 +501,160 @@ def paths_overlap(a: str, b: str) -> bool:
     return False
 
 
+# ประกาศในแผน (แนะนำ §0): `flashq-files: Client/Src/A.cpp, Client/Src/UI/*.h` · `flashq-parallel: no`
+DECL_RE = re.compile(r"^\s*(?:[-*]\s*)?`?\s*flashq-(files|parallel)\s*:\s*(.*?)\s*$", re.I)
+NO_WORDS = ("no", "false", "0", "off", "ไม่")
+# โฟลเดอร์ระดับบนที่ทุกโมดูลใช้ร่วม (ค่าเริ่มต้น · เพิ่มต่อโปรเจกต์ได้ด้วย "parallel_shared" ใน .flash.json)
+DEFAULT_SHARED = ("common/", "util/", "shared/", "cmake/")
+
+
+def plan_meta(project: str, plan: str) -> dict:
+    """{files: list | None (ไม่ได้ประกาศ), parallel: bool} จากบรรทัด flashq-files / flashq-parallel นอก code block"""
+    out = {"files": None, "parallel": True}
+    if not plan:
+        return out
+    try:
+        text = (Path(project) / plan).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    files, fence = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        m = None if fence else DECL_RE.match(line)
+        if not m:
+            continue
+        val = m[2].strip().strip("`").strip()
+        if m[1].lower() == "parallel":
+            if val.lower().split(" ")[0] in NO_WORDS:
+                out["parallel"] = False
+            continue
+        if re.search(r"<[^>]*>", val):  # placeholder ของแม่แบบที่ยังไม่เติม
+            continue
+        for t in re.split(r"[,\s]+", val):
+            t = t.strip("`'\"()")
+            if t and not t.startswith("-"):
+                files.append(t.replace("\\", "/"))
+    if files:
+        out["files"] = sorted(set(files))
+    return out
+
+
+def job_info(j: dict) -> dict:
+    """ชุดไฟล์ที่งานจะแตะ: ใช้ flashq-files ที่แผนประกาศก่อน · ไม่มี = เดาจาก backtick ของงานที่สั่ง (None = ตรวจไม่ได้)"""
+    meta = plan_meta(j.get("project", ""), j.get("plan", ""))
+    declared = meta["files"] is not None
+    files = meta["files"] if declared else plan_files(j.get("project", ""), j.get("plan", ""), j.get("tasks", ""))
+    return {"files": files, "parallel": meta["parallel"], "declared": declared}
+
+
+def shared_paths(project: str) -> list[str]:
+    extra = (project_cfg(Path(project)).get("parallel_shared") or []) if project else []
+    return list(DEFAULT_SHARED) + [str(x) for x in extra if isinstance(x, str)]
+
+
+def shared_hit(p: str, shared: list[str], project: str) -> bool:
+    """แตะของที่ทุกโมดูลใช้ร่วม: glob ระดับราก · ไฟล์ระดับรากที่มีอยู่จริง (เช่น CMakeLists.txt) · โฟลเดอร์ร่วม"""
+    g = _gnorm(p)
+    if g == "":
+        return True
+    if "/" not in g:
+        return bool(project) and (Path(project) / p).is_file()
+    return any(g.startswith(_pnorm(s).rstrip("/") + "/") for s in shared)
+
+
+def conflict_reason(a: dict, b: dict, info) -> str:
+    """เหตุที่งาน a รันพร้อม b ไม่ได้ ("" = ไม่ชน) · อนุรักษ์: ไม่แน่ใจ = ชน"""
+    if _pnorm(a.get("project", "")) != _pnorm(b.get("project", "")):
+        return ""
+    ia, ib = info(a), info(b)
+    if not ia["parallel"]:
+        return "แผนสั่งให้รอ (flashq-parallel: no)"
+    if not ib["parallel"]:
+        return "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
+    if ia["files"] is None:
+        return "ดึงรายการไฟล์ของงานนี้ไม่ได้ (ใส่ flashq-files: ในแผน)"
+    if ib["files"] is None:
+        return "ดึงรายการไฟล์ของงานนั้นไม่ได้"
+    over = sorted({x for x in ia["files"] for y in ib["files"] if paths_overlap(x, y)})
+    if over:
+        return "ไฟล์ " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")
+    proj = a.get("project", "")
+    sh = shared_paths(proj)
+    hit = sorted({x for x in ia["files"] + ib["files"] if shared_hit(x, sh, proj)})
+    if hit:
+        return "แตะไฟล์ที่ทุกโมดูลใช้ร่วม " + ", ".join(hit[:3]) + (f" (+{len(hit) - 3})" if len(hit) > 3 else "")
+    return ""
+
+
+def schedule(held: list[dict] | None = None) -> dict:
+    """จำลองการจัดคิวตอนนี้: {mode, limit, used, start: [id ที่ได้เริ่ม], reasons: {id: เหตุที่ยังรอ}}
+    auto = ไล่คิวตามลำดับ เริ่มงานแรกที่ไม่ชนกับงานที่กำลังทำ (+ที่เพิ่งเลือก) · ข้ามงานที่ชน
+           แต่งานที่ชนและรอเกิน starve_min นาที = ล็อกหัวคิว (งานหลังจากนั้นห้ามแซง)
+    fifo = งานหัวคิวได้ช่องว่างตามลำดับ"""
+    held = held_slots() if held is None else held
+    limit, mode, starve = max_parallel(), schedule_mode(), starve_min()
+    held_ids = {h.get("id") for h in held}
+    all_jobs = jobs()
+    active = [j for j in all_jobs if live_state(j) == "running"]
+    queue = [j for j in all_jobs if j.get("status") == "queued" and live_state(j) == "queued"]
+    memo: dict[str, dict] = {}
+
+    def info(j: dict) -> dict:
+        if j["id"] not in memo:
+            memo[j["id"]] = job_info(j)
+        return memo[j["id"]]
+
+    free, start, reasons, barrier = limit - len(held), [], {}, None
+    lock_busy = LOCK.exists()
+    for q in queue:
+        qid = q["id"]
+        if qid in held_ids:  # ได้ช่องแล้ว กำลังเปลี่ยนสถานะเป็น running
+            active.append(q)
+            continue
+        if q.get("qv", 0) < QUEUE_VERSION:  # โค้ดรุ่นก่อน: เข้าเองเมื่อ running.lock ว่าง ไม่ฟัง scheduler
+            if not lock_busy and free > 0:
+                active.append(q)
+                free, lock_busy = free - 1, True
+                reasons[qid] = "กำลังจะเริ่ม (งานโค้ดรุ่นก่อน)"
+            else:
+                reasons[qid] = "รอช่อง 1 ว่าง (งานส่งด้วยโค้ดรุ่นก่อน)"
+            continue
+        if barrier:
+            reasons[qid] = f"รอ {barrier} ที่รอนานเกิน {starve:g} นาทีได้เริ่มก่อน (กันอดตาย)"
+            continue
+        why = ""
+        for r in active if mode == "auto" else ():  # ช่องเต็มก็ยังตรวจ เพื่อบอกเหตุชน + นับกันอดตาย
+            c = conflict_reason(q, r, info)
+            if c:
+                why = c if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {r['id']}: {c}"
+                break
+        if not why:
+            if free <= 0:
+                reasons[qid] = f"รอช่องว่าง (ช่อง {len(held)}/{limit})"
+            else:
+                start.append(qid)
+                active.append(q)
+                free -= 1
+            continue
+        w = _secs(q.get("created", ""))
+        if w is not None and w > starve * 60:
+            barrier = qid
+            why += f" · รอเกิน {starve:g} นาที → ล็อกหัวคิว"
+        reasons[qid] = why
+    return {"mode": mode, "limit": limit, "used": len(held), "start": start, "reasons": reasons}
+
+
 def overlap_report(target: dict) -> dict:
     """เทียบงานที่จะรันเลยกับทุกงานที่กำลังทำ: โปรเจกต์เดียวกันไหม · ไฟล์ซ้อน (None = ตรวจไม่ได้)"""
-    mine = plan_files(target.get("project", ""), target.get("plan", ""), target.get("tasks", ""))
+    mine = job_info(target)["files"]
     items = []
     for j in jobs():
         if j["id"] == target["id"] or live_state(j) != "running":
             continue
         same = _pnorm(j.get("project", "")) == _pnorm(target.get("project", ""))
-        theirs = plan_files(j.get("project", ""), j.get("plan", ""), j.get("tasks", ""))
+        theirs = job_info(j)["files"]
         over = None if (mine is None or theirs is None) else (
             sorted({a for a in mine for b in theirs if paths_overlap(a, b)}) if same else [])
         items.append({"id": j["id"], "project_name": Path(j.get("project", "")).name, "plan": j.get("plan", ""),
@@ -675,14 +890,17 @@ def cmd_list(a) -> int:
 def cmd_status(a) -> int:
     held = held_slots()
     q = [j for j in jobs() if live_state(j) == "queued"]
-    print(f"กำลังทำ: {len(held)} งาน (ช่อง {len(held)}/{max_parallel()})" + ("" if held else " — ว่าง"))
+    sch = schedule(held)
+    print(f"กำลังทำ: {len(held)} งาน (ช่อง {len(held)}/{max_parallel()} · จัดคิวแบบ {sch['mode']})" + ("" if held else " — ว่าง"))
     for h in held:
         j = next((x for x in jobs() if x["id"] == h.get("id")), {})
         print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
               + (f" · {Path(j.get('project', '')).name} {j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
-        print(f"  {i}. {j['id']} {Path(j['project']).name} {j.get('plan') or '--message'} {j.get('tasks', '')}")
+        why = sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else "")
+        print(f"  {i}. {j['id']} {Path(j['project']).name} {j.get('plan') or '--message'} {j.get('tasks', '')}"
+              + (f"\n       ↳ {why}" if why else ""))
     print(f"บัญชี flash-worker: {configured_model() or '(ยังไม่ตั้ง)'}")
     return 0
 
@@ -751,20 +969,17 @@ def cmd_config(a) -> int:
         for k, v in read_config().items():
             print(f"{k} = {v}")
         return 0
-    if a.key != "max_parallel":
-        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel")
+    if a.key not in ("max_parallel", "schedule", "starve_min"):
+        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min")
         return 1
     if a.value is None:
-        print(f"max_parallel = {max_parallel()}")
+        print(f"{a.key} = {read_config().get(a.key)}")
         return 0
-    try:
-        err = set_max_parallel(int(a.value))
-    except ValueError:
-        err = "max_parallel ต้องเป็นตัวเลข"
+    err, msg = set_config(a.key, a.value)
     if err:
         print(err)
         return 1
-    print(f"max_parallel = {max_parallel()} (งานที่รอคิวใช้ค่าใหม่ภายใน ~3 วิ)")
+    print(f"{msg} (งานที่รอคิวใช้ค่าใหม่ภายใน ~3 วิ)")
     return 0
 
 
@@ -878,6 +1093,7 @@ def _secs(a: str, b: str = "") -> int | None:
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
     held = held_slots()
+    sch = schedule(held)
     slot_of = {h.get("id"): h for h in held}
     running, queued, history, dead = [], [], [], []
     for j in jobs():
@@ -897,7 +1113,8 @@ def ui_state() -> dict:
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
-                       run_now=(RUN_NOW / j["id"]).exists())
+                       run_now=(RUN_NOW / j["id"]).exists(),
+                       wait_reason=sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else ""))
             queued.append(row)
         else:
             row["duration_sec"] = (_secs(j.get("started") or j.get("created", ""), j["finished"])
@@ -912,6 +1129,7 @@ def ui_state() -> dict:
                 for s, m in accs]
     rows = history + queued + running
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
+            "schedule": sch["mode"], "starve_min": starve_min(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
             "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
@@ -1224,14 +1442,17 @@ def make_ui_server(port: int = 4097):
                 ok, msg = request_run_now(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/config":
-                try:
-                    err = set_max_parallel(int(body.get("max_parallel")))
-                except (TypeError, ValueError):
-                    err = "max_parallel ต้องเป็นตัวเลข"
-                if err:
-                    return self._send(400, {"ok": False, "message": err})
-                return self._send(200, {"ok": True, "max_parallel": max_parallel(),
-                                        "message": f"ตั้งจำนวนงานพร้อมกัน = {max_parallel()} แล้ว"})
+                keys = [k for k in ("schedule", "max_parallel", "starve_min") if k in body]
+                if not keys:
+                    return self._send(400, {"ok": False, "message": "ต้องมี max_parallel / schedule / starve_min"})
+                msgs = []
+                for k in keys:
+                    err, msg = set_config(k, body[k])
+                    if err:
+                        return self._send(400, {"ok": False, "message": err})
+                    msgs.append(msg)
+                return self._send(200, {"ok": True, "max_parallel": max_parallel(), "schedule": schedule_mode(),
+                                        "message": " · ".join(msgs)})
             if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
                 if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
@@ -1374,7 +1595,7 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
-    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel)")
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min)")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)

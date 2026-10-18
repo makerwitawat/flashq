@@ -133,6 +133,8 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 .rn-cmp.bad { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 10%, var(--panel)); }
 .rn-list { margin: 0.2rem 0 0 1.2rem; padding: 0; }
 .rn-warn { margin: 0.3rem 0 0 1.2rem; padding: 0; color: var(--muted); }
+.wait-why { font-family: inherit; font-size: 0.85em; color: var(--muted); white-space: normal; }
+.wait-why.clash { color: var(--quota); }
 
 #toast { position: fixed; right: 1rem; bottom: 1rem; background: var(--text); color: var(--bg); padding: 0.5rem 0.9rem; border-radius: 0.4rem; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 2rem); z-index: 100; white-space: pre-wrap; }
 #toast.show { opacity: .95; }
@@ -162,6 +164,8 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
       <div class="ph"><h2>กำลังทำ <span class="muted" id="slotInfo"></span></h2><span class="sp"></span>
         <label class="muted" title="จำนวนงานที่รันพร้อมกันได้ (max_parallel) · 1 = ทีละงานแบบเดิม">พร้อมกัน
           <select id="maxPar"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+        <label class="muted" title="auto = เริ่มงานที่ไม่ชนกับงานที่กำลังทำเอง (ข้ามงานที่ชน · กันอดตาย) · fifo = หัวคิวก่อนเสมอ">จัดคิว
+          <select id="schedMode"><option value="auto">อัตโนมัติ</option><option value="fifo">ตามลำดับ</option></select></label>
         <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb" id="running"></div>
     </section>
@@ -389,6 +393,7 @@ function render() {
   const sl = s.slots || { used: runs.length, max: 1 };
   $("slotInfo").textContent = `(ใช้ช่อง ${sl.used}/${sl.max}${sl.used > sl.max ? " · มีช่องพิเศษ" : ""})`;
   if (document.activeElement !== $("maxPar")) $("maxPar").value = String(sl.max);
+  if (document.activeElement !== $("schedMode")) $("schedMode").value = s.schedule || "fifo";
   $("running").innerHTML = runs.length ? runs.map((r) => `<div class="run-item">
     <div class="kv">
       <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b>
@@ -408,7 +413,7 @@ function render() {
   $("queued").innerHTML = s.queued.length ? `<div class="table-wrap"><table>
     <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
     ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td><td class="nw">${dur(j.wait_sec)}</td>
+      <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td><td class="nw">${dur(j.wait_sec)}</td>
       <td class="act">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="ให้งานนี้ได้ช่องเพิ่มทันที รันพร้อมงานที่กำลังทำ (ตรวจไฟล์ซ้อนก่อน)">รันเลย (คู่ขนาน)</button>`}
         <button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`;
@@ -691,6 +696,11 @@ $("rnGo").onclick = async (e) => {
   const d = await post("/api/runnow", { id: rnJob, ack_overlap: $("rnAck").checked });
   if (d.ok) { rnDlg.close(); toast(d.message); const id = rnJob; refresh(); setTimeout(() => openLog(id), 800); }
   else { $("rnMsg").className = "err"; $("rnMsg").textContent = d.message || d.error || "ผิดพลาด"; $("rnGo").disabled = false; }
+};
+$("schedMode").onchange = async () => {
+  const v = $("schedMode").value;
+  if (v === "auto" && !confirm("จัดคิวอัตโนมัติ?\n\nงานที่ไม่ชนกัน (คนละโปรเจกต์ หรือไฟล์ไม่ซ้อน) จะเริ่มพร้อมกันเอง และอาจแซงงานที่ชนซึ่งรออยู่ก่อน\n(งานที่ถูกแซงรอเกิน " + (state?.starve_min || 120) + " นาที = ล็อกเป็นหัวคิว)\nทุกงานใช้บัญชี/โควตาเดียวกัน · ถ้าพร้อมกันเป็น 1 จะตั้งเป็น 2 ให้")) { $("schedMode").value = state?.schedule || "fifo"; return; }
+  const d = await post("/api/config", { schedule: v }); toast(d.message || d.error || "ผิดพลาด"); refresh();
 };
 $("maxPar").onchange = async () => {
   const n = +$("maxPar").value;

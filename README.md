@@ -5,6 +5,11 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 ## ทำไมต้องมีคิวกลาง
 - ทุกโปรเจกต์ใช้บัญชีโมเดลชุดเดียวกัน → ถ้ารันซ้อนกันจะชนโควตา · ค่าเริ่มต้นคิวนี้ทำ **ทีละงานทั้งเครื่อง** ตามลำดับที่ส่ง (FIFO)
 - **รันคู่ขนาน**: `python flashq.py config max_parallel 2` (1-8 · หรือเลือก "พร้อมกัน" ในหน้าเว็บ) → มีหลายช่องรัน หัวคิวได้ช่องก่อนเสมอ · `runnow <id>` = ให้งานที่รอคิวได้ **ช่องพิเศษครั้งเดียว** แม้เกินค่า (ตรวจไฟล์ที่แผนจะแตะซ้อนกับงานที่กำลังทำก่อน · ซ้อน = ต้องใส่ `--force`)
+- **จัดคิวอัตโนมัติ** `python flashq.py config schedule auto` (หรือเลือก "จัดคิว: อัตโนมัติ" ในหน้าเว็บ · ตั้ง max_parallel เป็น 2 ให้ถ้ายังเป็น 1) → ทุกครั้งที่มีช่องว่าง ไล่คิวตามลำดับแล้วเริ่ม **งานแรกที่ไม่ชน** กับงานที่กำลังทำ (ข้ามงานที่ชนได้) · ไม่มีไฟล์ config = `fifo` ทีละงานแบบเดิม
+  - **ชน** (อนุรักษ์ · ไม่แน่ใจ = ชน): โปรเจกต์ต่างกัน = ไม่ชน · โปรเจกต์เดียวกัน → ไฟล์ที่แผนจะแตะซ้อนกัน (glob/โฟลเดอร์ครอบ) · ดึงรายการไฟล์ไม่ได้ (เช่น `--message`) · แตะไฟล์ที่ทุกโมดูลใช้ร่วม (ไฟล์ระดับรากที่มีจริง เช่น `CMakeLists.txt` · โฟลเดอร์ `Common/` `Util/` `Shared/` `cmake/` · เพิ่มเองด้วย `"parallel_shared": ["Proto/"]` ใน `.flash.json`) · แผนประกาศ `flashq-parallel: no`
+  - แผนประกาศชุดไฟล์เองใน §0: `flashq-files: Client/Src/A.cpp, Client/Src/UI/*.h` (ใช้แทนการเดาจาก backtick · แม่แบบมีให้แล้ว)
+  - **กันอดตาย**: งานที่ชนแล้วรอเกิน `starve_min` นาที (ค่าเริ่มต้น 120 · `config starve_min 60`) = ล็อกเป็นหัวคิว งานหลังจากนั้นห้ามแซง
+  - `status` / หน้าเว็บบอกเหตุผลที่แต่ละงานยังไม่เริ่ม ("รอช่องว่าง" · "ชนกับ <job>: ไฟล์ X" · "แผนสั่งให้รอ" · "กันอดตาย") · ปุ่มรันเลยยังใช้บังคับเริ่มได้
 - ระหว่างรันหลายงาน `--switch-on-quota` จะ **ไม่สลับบัญชีซ้ำ** ถ้างานอื่นเพิ่งสลับไปแล้ว (ใช้บัญชีใหม่นั้นสั่งซ้ำแทน)
 - ของเดิม (ล็อกรายโปรเจกต์) เจองานซ้อนแล้วตอบ `BUSY` ทิ้ง · ตัวนี้ **รอคิวให้เอง** (`--no-wait` = พฤติกรรมเดิม)
 
@@ -12,7 +17,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | ส่วน | ที่ |
 |---|---|
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
-| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` · สัญญาณรันเลย `run_now/` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
+| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min`) · สัญญาณรันเลย `run_now/` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
 | คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
 | ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้ · `main_branch` `remote` `plan_dir` `rules`) |
@@ -34,6 +39,7 @@ python D:\MyCode\flashq\flashq.py                                          # ส
 python D:\MyCode\flashq\flashq.py list [--all] | log <id> | cancel <id>
 python D:\MyCode\flashq\flashq.py switch [next|cc|cc2|go2|go3|inferx]
 python D:\MyCode\flashq\flashq.py config [max_parallel [1-8]]                 # ดู/ตั้งจำนวนงานที่รันพร้อมกัน
+python D:\MyCode\flashq\flashq.py config schedule auto|fifo                # จัดคิวอัตโนมัติ/ตามลำดับ
 python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # รันงานที่รอคิวทันที (ช่องพิเศษ)
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`

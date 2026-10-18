@@ -552,5 +552,146 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 3)  # ไม่มี provider
 
 
+    # ---------- จัดคิวอัตโนมัติ (schedule auto) ----------
+    def auto_plan(self):
+        (self.proj / "PLAN.md").write_text(
+            "# plan\n- [ ] **T-01** `src/a.cpp`\n- [ ] **T-02** `src/a.cpp`\n- [ ] **T-03** `src/c.cpp`\n", encoding="utf-8")
+
+    def by_key(self):
+        out = {}
+        for f in (self.home / "jobs").glob("*.json"):
+            j = json.loads(f.read_text(encoding="utf-8"))
+            out[j.get("message") or j.get("tasks")] = j
+        return out
+
+    def submit(self, *spec, sleep="6", project=None):
+        args = ["run", *spec]
+        args += ["--attach", "none", "--no-open"] + (["--project", str(project)] if project else [])
+        p = self.run_q(*args, env={"FAKE_SLEEP": sleep}, wait=False)
+        self.addCleanup(lambda: (p.kill(), p.wait(timeout=30)) if p.poll() is None else None)
+        return p
+
+    def test_auto_skip_conflict_and_overlap_waits(self):
+        """auto: งานที่ไฟล์ซ้อนต้องรอ (เหตุผลบอกไฟล์) · งานถัดไปที่ไม่ชนได้เริ่มก่อน (ข้ามงานที่ชน)"""
+        self.auto_plan()
+        r = self.run_q("config", "schedule", "auto")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("max_parallel = 2", r.stdout)  # auto ตั้ง 2 ช่องให้เอง
+        self.assertIn("schedule = auto", self.run_q("config").stdout)
+        p1 = self.submit("PLAN.md", "T-01", sleep="8")
+        self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
+        p2 = self.submit("PLAN.md", "T-02", sleep="1")
+        time.sleep(1.5)
+        p3 = self.submit("PLAN.md", "T-03", sleep="1")
+        self.wait_for(lambda: self.by_key().get("T-03", {}).get("status") in ("running", "ok"), msg="T-03 ไม่ได้แซง")
+        st = self.run_q("status").stdout
+        self.assertIn("จัดคิวแบบ auto", st)
+        self.assertIn("ชนกับ", st)
+        self.assertIn("src/a.cpp", st)
+        o = [p.communicate(timeout=120)[0] for p in (p1, p2, p3)]
+        for x in o:
+            self.assertIn("FLASH_RUN=OK", x)
+        j = self.by_key()
+        self.assertLess(j["T-03"]["started"], j["T-01"]["finished"])  # แซงงานที่ชน
+        self.assertGreaterEqual(j["T-02"]["started"], j["T-01"]["finished"])  # ไฟล์ซ้อน = รอ
+        self.assertIn("ชนกับ", o[1])
+
+    def test_auto_other_project_runs_unknown_files_wait(self):
+        """auto: โปรเจกต์ต่างกันรันพร้อมกัน (แม้ไม่รู้ไฟล์) · โปรเจกต์เดียวกันที่ดึงรายการไฟล์ไม่ได้ = รอ"""
+        self.auto_plan()
+        proj2 = self.tmp / "proj2"
+        proj2.mkdir()
+        (proj2 / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False}), encoding="utf-8")
+        self.assertEqual(self.run_q("config", "schedule", "auto").returncode, 0)
+        self.assertEqual(self.run_q("config", "max_parallel", "3").returncode, 0)
+        p1 = self.submit("PLAN.md", "T-01", sleep="8")
+        self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
+        p2 = self.submit("--message", "SAME", sleep="1")
+        time.sleep(1.5)
+        p3 = self.submit("--message", "OTHER", sleep="1", project=proj2)
+        self.wait_for(lambda: self.by_key().get("OTHER", {}).get("status") in ("running", "ok"), msg="คนละโปรเจกต์ไม่ได้รันพร้อมกัน")
+        self.assertIn("ดึงรายการไฟล์ของงานนี้ไม่ได้", self.run_q("status").stdout)
+        for p in (p1, p2, p3):
+            self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
+        j = self.by_key()
+        self.assertLess(j["OTHER"]["started"], j["T-01"]["finished"])
+        self.assertGreaterEqual(j["SAME"]["started"], j["T-01"]["finished"])
+
+    def test_auto_starvation_locks_head(self):
+        """auto: งานที่ชนรอเกิน starve_min → ล็อกหัวคิว งานหลังจากนั้นห้ามแซงแม้ไม่ชน"""
+        self.auto_plan()
+        self.assertEqual(self.run_q("config", "schedule", "auto").returncode, 0)
+        self.assertEqual(self.run_q("config", "starve_min", "0.05").returncode, 1)  # ต่ำกว่าขั้นต่ำ
+        self.assertEqual(self.run_q("config", "starve_min", "0.1").returncode, 0)  # 6 วิ
+        p1 = self.submit("PLAN.md", "T-01", sleep="14")
+        self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
+        p2 = self.submit("PLAN.md", "T-02", sleep="1")
+        time.sleep(7.5)  # T-02 รอเกิน 6 วิ
+        p3 = self.submit("PLAN.md", "T-03", sleep="1")
+        time.sleep(2)
+        st = self.run_q("status").stdout
+        self.assertIn("ล็อกหัวคิว", st)
+        self.assertIn("กันอดตาย", st)
+        self.assertEqual(self.by_key()["T-03"]["status"], "queued")
+        for p in (p1, p2, p3):
+            self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
+        j = self.by_key()
+        self.assertGreaterEqual(j["T-03"]["started"], j["T-01"]["finished"])
+
+    def test_plan_declarations_and_conflicts(self):
+        """flashq-files / flashq-parallel ในแผน · เกณฑ์ชน: คนละโปรเจกต์ · ไฟล์ซ้อน · glob · ไฟล์/โฟลเดอร์ร่วม"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        P = str(self.proj)
+        (self.proj / "CMakeLists.txt").write_text("x", encoding="utf-8")
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "parallel_shared": ["Proto/"]}),
+                                               encoding="utf-8")
+        (self.proj / "A.md").write_text(
+            "# A\n## 0.\n- `flashq-files: Client/a.cpp, Client\\UI\\*.h`\n```\nflashq-files: Fake/x.cpp\n```\n"
+            "- [ ] **T-01** `Other/zzz.cpp`\n", encoding="utf-8")
+        (self.proj / "B.md").write_text("# B\nflashq-files: `MapEditor/b.cpp`\n- [ ] **T-01** x\n", encoding="utf-8")
+        (self.proj / "C.md").write_text("# C\nflashq-files: Client/UI/w.h\n", encoding="utf-8")
+        (self.proj / "D.md").write_text("# D\nflashq-files: <ไฟล์ที่แตะ>\nflashq-parallel: no\n- [ ] **T-01** `Tools/t.py`\n",
+                                        encoding="utf-8")
+        (self.proj / "E.md").write_text("# E\nflashq-files: Common/x.h\n", encoding="utf-8")
+        (self.proj / "F.md").write_text("# F\nflashq-files: CMakeLists.txt\n", encoding="utf-8")
+        (self.proj / "G.md").write_text("# G\nflashq-files: Proto/p.h\n", encoding="utf-8")
+        self.assertEqual(flashq.plan_meta(P, "A.md"), {"files": ["Client/UI/*.h", "Client/a.cpp"], "parallel": True})
+        self.assertEqual(flashq.plan_meta(P, "D.md"), {"files": None, "parallel": False})  # placeholder ถูกข้าม
+        self.assertEqual(flashq.job_info({"project": P, "plan": "D.md", "tasks": "T-01"})["files"], ["Tools/t.py"])
+        J = lambda plan, proj=P: {"id": plan, "project": proj, "plan": plan, "tasks": "T-01"}
+        c = lambda a, b: flashq.conflict_reason(J(a), J(b), flashq.job_info)
+        self.assertEqual(c("A.md", "B.md"), "")  # Client กับ MapEditor ไม่ชน
+        self.assertIn("Client/UI/*.h", c("A.md", "C.md"))  # glob ครอบไฟล์
+        self.assertIn("แผนสั่งให้รอ", c("D.md", "B.md"))
+        self.assertIn("flashq-parallel", c("B.md", "D.md"))
+        self.assertIn("ใช้ร่วม", c("E.md", "B.md"))  # Common/ = โฟลเดอร์ร่วมค่าเริ่มต้น
+        self.assertIn("CMakeLists.txt", c("F.md", "B.md"))  # ไฟล์ระดับรากที่มีจริง
+        self.assertIn("Proto/p.h", c("G.md", "B.md"))  # parallel_shared ของโปรเจกต์
+        self.assertIn("ดึงรายการไฟล์", c("NOPE.md", "B.md"))
+        self.assertEqual(flashq.conflict_reason(J("E.md"), J("E.md", str(self.tmp)), flashq.job_info), "")  # คนละโปรเจกต์
+        self.assertTrue(flashq.paths_overlap("**", "x/y.cpp"))
+        self.assertFalse(flashq.paths_overlap("Client/UI/*.h", "Client/a.cpp"))
+
+    def test_ui_schedule_config_and_reason(self):
+        """ui: POST /api/config schedule (ผิด = 400) · /api/state บอกโหมด + เหตุผลที่งานรอคิว"""
+        self.auto_plan()
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        self.assertEqual(self.http(base + "/api/config", json.dumps({"schedule": "lifo"}).encode(), hdr)[0], 400)
+        code, out = self.http(base + "/api/config", json.dumps({"schedule": "auto"}).encode(), hdr)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(json.loads(out)["max_parallel"], 2)
+        p1 = self.submit("PLAN.md", "T-01", sleep="6")
+        self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
+        p2 = self.submit("PLAN.md", "T-02", sleep="1")
+        st = self.wait_for(lambda: (lambda s: s if s["queued"] else None)(json.loads(self.http(base + "/api/state")[1])),
+                           msg="ไม่เห็นงานรอคิว")
+        self.assertEqual(st["schedule"], "auto")
+        self.assertIn("ชนกับ", st["queued"][0]["wait_reason"])
+        for p in (p1, p2):
+            self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
