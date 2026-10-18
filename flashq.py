@@ -49,23 +49,37 @@ def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def pid_alive(pid: int) -> bool:
+def _proc_info(pid: int) -> tuple[bool, int]:
+    """(ยังทำงานอยู่, เวลาเริ่ม process) — เวลาเริ่มใช้กัน pid ถูกนำกลับมาใช้ซ้ำ (Windows ใช้เลขซ้ำบ่อย)"""
     if not pid:
-        return False
+        return False, 0
     if os.name == "nt":
         k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = ctypes.c_void_p
         h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
-            return False
+            return False, 0
+        h = ctypes.c_void_p(h)
         code = ctypes.c_ulong()
         ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+        t = [ctypes.c_ulonglong() for _ in range(4)]
+        k32.GetProcessTimes(h, *(ctypes.byref(x) for x in t))
         k32.CloseHandle(h)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
+        return bool(ok) and code.value == 259, t[0].value  # STILL_ACTIVE · creation time
     try:
         os.kill(pid, 0)
-        return True
+        return True, 0
     except OSError:
-        return False
+        return False, 0
+
+
+def proc_start(pid: int) -> int:
+    return _proc_info(pid)[1]
+
+
+def pid_alive(pid: int, start: int = 0) -> bool:
+    alive, st = _proc_info(pid)
+    return alive and (not start or not st or st == start)
 
 
 def kill_tree(pid: int) -> None:
@@ -153,7 +167,7 @@ def save_job(job: dict) -> None:
 
 def live_state(j: dict) -> str:
     s = j.get("status", "?")
-    if s in ("queued", "running") and not pid_alive(j.get("pid", 0)):
+    if s in ("queued", "running") and not pid_alive(j.get("pid", 0), j.get("pid_start", 0)):
         return "dead"
     return s
 
@@ -162,7 +176,7 @@ def clear_stale_lock() -> None:
     if not LOCK.exists():
         return
     held = read_json(LOCK)
-    if held and pid_alive(held.get("pid", 0)):
+    if held and pid_alive(held.get("pid", 0), held.get("pid_start", 0)):
         return
     if read_json(LOCK) == held:  # ยังเป็นล็อกเดิมที่ตายแล้ว
         LOCK.unlink(missing_ok=True)
@@ -179,7 +193,7 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
             try:
                 fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"id": job["id"], "pid": os.getpid(), "since": now()}, f, ensure_ascii=False)
+                    json.dump({"id": job["id"], "pid": os.getpid(), "pid_start": proc_start(os.getpid()), "since": now()}, f, ensure_ascii=False)
                 return "ok"
             except FileExistsError:
                 pass
@@ -338,7 +352,8 @@ def cmd_run(a) -> int:
     title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
     model = a.model or configured_model()
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
-           "title": title, "model": model, "status": "queued", "pid": os.getpid(), "created": now()}
+           "title": title, "model": model, "status": "queued", "pid": os.getpid(),
+           "pid_start": proc_start(os.getpid()), "created": now()}
     save_job(job)
 
     got = acquire(job, a.wait_min, a.no_wait)
