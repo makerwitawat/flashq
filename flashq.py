@@ -736,17 +736,36 @@ def make_ui_server(port: int = 4097):
                 return self._send(200 if new else 400, {"ok": bool(new), "model": new, "message": buf.getvalue().strip()})
             return self._send(404, {"error": "ไม่พบ"})
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
-    srv.daemon_threads = True
-    return srv, token
+    class S(ThreadingHTTPServer):
+        daemon_threads = True
+        # Windows: SO_REUSEADDR ทำให้เปิด 2 ตัวบนพอร์ตเดียวกันได้ (ตัวที่สองแย่งคำขอ) → ปิด แล้วจองแบบ exclusive
+        allow_reuse_address = os.name != "nt"
+
+        def server_bind(self):
+            if os.name == "nt":
+                import socket
+                self.socket.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+            super().server_bind()
+
+    return S(("127.0.0.1", port), H), token
 
 
 def cmd_ui(a) -> int:
     try:
         srv, _ = make_ui_server(a.port)
     except OSError as e:
-        print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
-        return 1
+        import urllib.request
+        url = f"http://127.0.0.1:{a.port}/"
+        try:  # เปิดค้างอยู่แล้ว (เช่น ดับเบิลคลิก .bat ซ้ำ) → แค่เปิดเบราว์เซอร์
+            json.loads(urllib.request.urlopen(url + "api/state", timeout=3).read())
+        except Exception:
+            print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
+            return 1
+        print(f"UI_URL={url}  (เปิดอยู่แล้ว)", flush=True)
+        if not a.no_open:
+            import webbrowser
+            webbrowser.open(url)
+        return 0
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"UI_URL={url}  (Ctrl+C เพื่อปิด)", flush=True)
     if not a.no_open:

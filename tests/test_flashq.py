@@ -233,6 +233,13 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(d2["lines"], ["PONG"])
         self.assertEqual(d2["offset"], log.stat().st_size)
 
+    def test_ui_second_instance_reuses(self):
+        """เปิด ui ซ้ำพอร์ตเดิม → ไม่ bind ซ้อน (Windows SO_REUSEADDR) แต่บอกว่าเปิดอยู่แล้วและจบ 0"""
+        base = self.start_ui()
+        r = self.run_q("ui", "--port", base.rsplit(":", 1)[1], "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("เปิดอยู่แล้ว", r.stdout)
+
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")
         self.assertEqual(r.returncode, 0, r.stdout)
