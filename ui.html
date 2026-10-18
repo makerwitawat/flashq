@@ -152,6 +152,12 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-tile .s { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
 .of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow: hidden; }
 .of-scene svg { display: block; width: 100%; height: auto; max-height: 82vh; }
+.of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
+body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; }
+body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
+body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); }
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; gap: 0.3rem; }
 .of-card.quiet { border-color: var(--quota); }
@@ -327,14 +333,11 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
     <div class="of-tile"><div class="k">คาดว่าเสร็จทั้งหมด (ประมาณ)</div><div class="v" id="ofTE">-</div><div class="s" id="ofTEs"></div></div>
     <div class="of-tile"><div class="k">วันนี้จบแล้ว</div><div class="v" id="ofTD">-</div><div class="s" id="ofTDs"></div></div>
   </div>
+  <div class="of-body">
+  <div class="of-colL">
   <div class="of-scene" id="ofScene"></div>
-  <div class="of-cards" id="ofRuns"></div>
-  <div class="of-two">
-    <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
-    <section class="panel"><div class="ph"><h2>เพิ่งจบ</h2></div><div class="pb" id="ofRecent"></div></section>
-  </div>
-  <section class="panel">
-    <div class="ph"><h2>วิธีอ่านภาพ</h2></div>
+  <section class="panel" id="ofLegendBox" data-panel="oflegend">
+    <div class="ph"><h2>วิธีอ่านภาพ</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
     <div class="pb">
       <ul class="of-legend">
         <li>🧑‍💻 <b>นั่งโต๊ะ</b> = งานกำลังทำ (เลขช่องอยู่ที่โต๊ะ) · <b>โต๊ะว่าง</b> = ยังไม่มีงาน</li>
@@ -348,6 +351,15 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
       <p class="of-note">คลิกตัวละคร/การ์ดเพื่อไปดู log สดของงานนั้น</p>
     </div>
   </section>
+  </div>
+  <div class="of-colR">
+  <div class="of-cards" id="ofRuns"></div>
+  <div class="of-two">
+    <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
+    <section class="panel"><div class="ph"><h2>เพิ่งจบ</h2></div><div class="pb" id="ofRecent"></div></section>
+  </div>
+  </div>
+  </div>
 </div>
 
 <dialog id="submitDlg">
@@ -455,6 +467,7 @@ function layout() {  /* จำนวนคอลัมน์คิดเป็�
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const w = window.innerWidth / rem;
   document.body.dataset.layout = w >= 112 ? "3" : w >= 62 ? "2" : "1";
+  document.body.dataset.of = w >= 80 ? "2" : "1";
 }
 $("zoomIn").onclick = () => stepZoom(1);
 $("zoomOut").onclick = () => stepZoom(-1);
@@ -877,6 +890,7 @@ let prevRun = new Set(), ofSig = "", ologBusy = false;
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
 const pad2 = (n) => String(n).padStart(2, "0");
 const hueOf = (str) => { let h = 7; for (const c of String(str || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const shortWhat = (j) => j.message ? `ข้อความ: ${trunc(j.message, 40)}` : `${String(j.plan || "-").split(/[\/]/).pop()} ${j.tasks || ""}`;
 const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 function approx(s) {
   if (s == null || !isFinite(s)) return "-";
@@ -1116,7 +1130,7 @@ function sceneSVG(m) {
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
-    g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${what(j)}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
+    g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${shortWhat(j)}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
       ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash })}
       <rect class="of-badge" x="${150 - 15}" y="${y - 70}" width="30" height="15" rx="7.5"/><text class="of-badget" x="150" y="${y - 59}" text-anchor="middle">#${j.position}</text></g>`;
   });
@@ -1145,17 +1159,17 @@ function runCardHTML(r, k) {
 }
 function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
-  return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>รอมาแล้ว</th><th>คาดว่าเริ่ม</th><th>คาดว่าเสร็จ</th></tr>
+  return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>คาดการณ์</th></tr>
     ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
-      <td>${esc(j.project_name)} <span class="mono muted">${esc(what(j))}</span>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
-      <td class="nw" id="ofQW${k}"></td><td class="nw" id="ofQS${k}"></td><td class="nw" id="ofQE${k}"></td></tr>`).join("")}</table></div>
+      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span></div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
+      <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(what(j))}</span></td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span></td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
