@@ -11,7 +11,7 @@ description: >-
 คุณ = **ผู้วางแผน** · DeepSeek Flash จะทำตามแผนแบบไม่คิดเอง → **ทุกข้อในแผนต้องถูกจุดและพิสูจน์แล้ว** · ห้ามแก้โค้ดเองในคำสั่งนี้
 
 ## 0. ค่าโปรเจกต์
-- อ่าน `.flash.json` ที่รากโปรเจกต์ (ถ้ามี): `main_branch` (ค่าเริ่มต้น `master`) · `remote` (`origin`) · `plan_dir` (`docs/plans`) · `rules`
+- อ่าน `.flash.json` ที่รากโปรเจกต์ (ถ้ามี): `main_branch` (ไม่ตั้ง = ตรวจจาก `git symbolic-ref --short refs/remotes/<remote>/HEAD` หรือ `origin/main`/`origin/master` ที่มีจริง) · `remote` (`origin`) · โปรเจกต์ใหม่ที่ยังไม่มี `.flash.json` → รัน `python {{FLASHQ}}/flashq.py init` ก่อน · `plan_dir` (`docs/plans`) · `rules`
 - อ่าน `AGENTS.md`/`CLAUDE.md` ของโปรเจกต์ → กติกา build/test/commit/encoding ที่ต้องใส่ใน §0 ของแผน
 
 ## 1. สำรวจ + ยืนยัน (ห้ามเดา)

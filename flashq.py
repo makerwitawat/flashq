@@ -18,6 +18,7 @@
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
+  python flashq.py init [--project <dir>] [--force] [--install]         ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
   python flashq.py config schedule auto|fifo · config starve_min 120     โหมดจัดคิว · กันอดตาย (นาที)
@@ -139,9 +140,43 @@ def project_root(start: Path) -> tuple[Path, bool]:
     return Path(r.stdout.strip()).parent, True
 
 
+def _git(root: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def detect_remote(root: Path) -> str:
+    """origin ถ้ามี · ไม่มี origin แต่มี remote เดียว = remote นั้น · ไม่ใช่ git/ไม่มี remote = origin"""
+    remotes = _git(root, "remote").split()
+    if not remotes or "origin" in remotes:
+        return "origin"
+    return remotes[0] if len(remotes) == 1 else "origin"
+
+
+def detect_main_branch(root: Path, remote: str = "origin") -> str:
+    """branch หลักของ repo: remote HEAD → <remote>/main|master ที่มีจริง → branch ปัจจุบัน (checkout หลัก) → master"""
+    head = _git(root, "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD")
+    if head.startswith(remote + "/"):
+        return head[len(remote) + 1:]
+    for name in ("main", "master"):
+        if _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{remote}/{name}"):
+            return name
+    for name in ("main", "master"):  # ยังไม่มี remote → ดู branch ในเครื่อง
+        if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
+            return name
+    return _git(root, "branch", "--show-current") or DEFAULTS["main_branch"]
+
+
 def project_cfg(root: Path) -> dict:
+    """DEFAULTS < ตรวจอัตโนมัติ (remote/main_branch เมื่อ .flash.json ไม่ได้ตั้ง) < .flash.json"""
     cfg = dict(DEFAULTS)
-    cfg.update(read_json(root / ".flash.json"))
+    own = read_json(root / ".flash.json")
+    if (root / ".git").exists():
+        if "remote" not in own:
+            cfg["remote"] = detect_remote(root)
+        if "main_branch" not in own:
+            cfg["main_branch"] = detect_main_branch(root, own.get("remote") or cfg["remote"])
+    cfg.update(own)
     return cfg
 
 
@@ -787,6 +822,14 @@ def cmd_run(a) -> int:
             if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{plan}"],
                               capture_output=True).returncode != 0:
                 print(f"FLASH_RUN=FAIL ไม่พบแผนใน {ref}: {plan} (push แผนก่อน)")
+                have = [b for b in ("main", "master")
+                        if _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{cfg['remote']}/{b}")]
+                if have and cfg["main_branch"] not in have:
+                    print(f"หมายเหตุ: repo นี้มี {cfg['remote']}/{' , '.join(have)} · ถ้า branch หลักไม่ใช่ "
+                          f"{cfg['main_branch']} ให้ตั้ง main_branch ใน .flash.json (หรือรัน `flashq init`)")
+                elif not _git(root, "remote"):
+                    print("หมายเหตุ: repo นี้ยังไม่มี remote · ตั้ง \"require_plan_in_remote\": false ใน .flash.json "
+                          "ถ้าไม่ใช้ remote (หรือรัน `flashq init`)")
                 return 1
         elif not (root / plan).exists():
             print(f"FLASH_RUN=FAIL ไม่พบไฟล์แผน: {root / plan}")
@@ -1077,6 +1120,95 @@ def cmd_install(a) -> int:
             dst.write_text(text, encoding="utf-8")
             print(f"ติดตั้ง     {dst}")
     return rc
+
+
+def cmd_init(a) -> int:
+    """ตั้งค่าโปรเจกต์ใหม่ให้ใช้ flashq ได้ในคำสั่งเดียว: ตรวจ remote/branch หลัก → .flash.json · .gitignore · แม่แบบแผน
+    · เช็ก opencode + คำสั่ง global · ไม่ commit/push ให้ (แจ้งขั้นถัดไปแทน)"""
+    start = Path(a.project or os.getcwd())
+    root, is_git = project_root(start)
+    if not root.is_dir():
+        print(f"ไม่พบโฟลเดอร์โปรเจกต์: {root}")
+        return 1
+    print(f"โปรเจกต์: {root}" + ("" if is_git else "  (ไม่ใช่ git repo)"))
+    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+    todo: list[str] = []
+
+    # 1) .flash.json — ไม่ทับค่าที่ผู้ใช้ตั้งไว้ (--force = ทับเฉพาะช่องที่ตรวจเจอ)
+    path = root / ".flash.json"
+    own = read_json(path)
+    found: dict = {}
+    if is_git:
+        remote = detect_remote(root)
+        has_remote = bool(_git(root, "remote"))
+        found = {"main_branch": detect_main_branch(root, remote), "remote": remote}
+        if not has_remote:
+            found["require_plan_in_remote"] = False
+            todo.append("repo นี้ยังไม่มี remote → ตั้ง require_plan_in_remote=false ไว้ก่อน "
+                        "(เพิ่ม remote แล้วลบช่องนี้ออกเพื่อให้แผนต้อง push ก่อนส่ง)")
+    else:
+        found = {"require_plan_in_remote": False}
+    found["plan_dir"] = own.get("plan_dir") or "docs/plans"
+    new = dict(own)
+    for k, v in found.items():
+        if k not in new or a.force:
+            new[k] = v
+    if new != own or not path.exists():
+        write_json(path, new)
+        print(f"{'สร้าง' if not own else 'อัปเดต'}  .flash.json: " + json.dumps(new, ensure_ascii=False))
+        todo.append("commit + push .flash.json เข้า branch หลัก")
+    else:
+        print(f"เหมือนเดิม  .flash.json: {json.dumps(own, ensure_ascii=False)}")
+
+    # 2) .gitignore — .tmp/ (ไฟล์ชั่วคราวของ agent)
+    gi = root / ".gitignore"
+    lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    if not any(l.strip().rstrip("/") in (".tmp", "/.tmp") for l in lines):
+        gi.write_text("\n".join(lines + [".tmp/"]) + "\n", encoding="utf-8")
+        print("เพิ่ม       .gitignore: .tmp/")
+        todo.append("commit .gitignore")
+
+    # 3) แม่แบบแผน
+    tpl_src = REPO / "templates" / "FLASH_PLAN_TEMPLATE.md"
+    tpl_dst = root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md"
+    if tpl_src.exists() and not tpl_dst.exists():
+        tpl_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tpl_src, tpl_dst)
+        print(f"คัดลอก     {tpl_dst.relative_to(root).as_posix()} (แม่แบบแผน — ตั้งชื่อแผนจริงเป็น PLAN_FLASH_<เรื่อง>.md)")
+        todo.append("commit แม่แบบแผน")
+
+    # 4) เครื่องมือ: opencode + คำสั่ง global
+    if opencode_cmd():
+        print("พบ         opencode ใน PATH")
+    else:
+        print("ไม่พบ      opencode ใน PATH — ติดตั้ง opencode ก่อนส่งงาน")
+        todo.append("ติดตั้ง opencode ให้อยู่ใน PATH")
+    need = [p for p in (OC_CONFIG.parent / "command" / "flash.md", OC_CONFIG.parent / "agent" / "flash-worker.md",
+                        claude_home / "commands" / "flash-plan.md", claude_home / "commands" / "flash-check.md")
+            if not p.exists()]
+    proj_own = [p for p in (root / ".opencode" / "command" / "flash.md", root / ".opencode" / "agent" / "flash-worker.md")
+                if p.exists()]
+    if need and a.install:
+        print("ติดตั้งคำสั่ง global ที่ขาด ...")
+        cmd_install(argparse.Namespace(force=False))
+    elif need:
+        print("ยังไม่ได้ติดตั้งคำสั่ง global: " + ", ".join(p.name for p in need))
+        todo.append(f"python {REPO / 'flashq.py'} install  (แล้วรีโหลด opencode desktop)")
+    else:
+        print("พบ         คำสั่ง /flash /flash-plan /flash-check + agent flash-worker (global)")
+    if proj_own:
+        print("หมายเหตุ    โปรเจกต์มี flash.md/flash-worker.md ของตัวเอง → opencode ใช้ของโปรเจกต์ก่อน")
+
+    # 5) บัญชีโมเดล
+    if not configured_model():
+        todo.append(f"ตั้ง agent.flash-worker.model ใน {OC_CONFIG} (หรือส่ง --model ตอน run)")
+
+    print("\nพร้อมใช้ · ทดสอบการเชื่อมต่อ: " + f"python {REPO / 'flashq.py'} run --message \"ตอบแค่คำว่า PONG\" --project \"{root}\"")
+    if todo:
+        print("ขั้นต่อไป:")
+        for i, t in enumerate(todo, 1):
+            print(f"  {i}. {t}")
+    return 0
 
 
 # ---------- หน้าเว็บ dashboard (ui) ----------
@@ -1591,6 +1723,11 @@ def main() -> int:
     ins = sp.add_parser("install", help="ติดตั้ง /flash + flash-worker แบบ global")
     ins.add_argument("--force", action="store_true")
     ins.set_defaults(fn=cmd_install)
+    ini = sp.add_parser("init", help="ตั้งค่าโปรเจกต์ใหม่ (.flash.json ตรวจ branch หลักเอง · .gitignore · แม่แบบแผน)")
+    ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")
+    ini.add_argument("--force", action="store_true", help="ทับช่องใน .flash.json ด้วยค่าที่ตรวจเจอ")
+    ini.add_argument("--install", action="store_true", help="ติดตั้งคำสั่ง global ที่ขาดให้ด้วย (เหมือน install)")
+    ini.set_defaults(fn=cmd_init)
     pr = sp.add_parser("prune", help="ลบงานที่จบแล้ว + log ที่เก่ากว่า N วัน")
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")

@@ -31,6 +31,15 @@ python D:\MyCode\flashq\flashq.py install
 ```
 แล้วรีโหลด opencode desktop · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ)
 
+## โปรเจกต์ใหม่ (ครั้งเดียวต่อโปรเจกต์)
+```
+cd <โฟลเดอร์โปรเจกต์>
+python D:\MyCode\flashq\flashq.py init [--install] [--force]
+```
+- ตรวจ `remote` + branch หลัก (`main`/`master`/อื่น) จาก git เอง แล้วเขียน `.flash.json` · เพิ่ม `.tmp/` ใน `.gitignore` · คัดลอกแม่แบบแผนไป `docs/plans/` · เช็ก `opencode` + คำสั่ง global (`--install` = ติดตั้งที่ขาดให้) · ไม่มี remote = ตั้ง `require_plan_in_remote: false`
+- ไม่ทับค่าที่ตั้งไว้ใน `.flash.json` (`--force` = ทับด้วยค่าที่ตรวจเจอ) · รันซ้ำได้ · **ไม่ commit/push ให้** — ท้ายผลลัพธ์บอกขั้นถัดไป
+- ไม่รัน `init` ก็ได้: ถ้า `.flash.json` ไม่ได้ตั้ง `main_branch`/`remote` ตอน `run` จะตรวจจาก git เอง (remote HEAD → `origin/main`/`origin/master` ที่มีจริง) · ตั้งเองใน `.flash.json` ชนะเสมอ
+
 ## ใช้
 ```
 python D:\MyCode\flashq\flashq.py run docs\plans\PLAN_X.md T-01..T-03     # ที่โฟลเดอร์โปรเจกต์ (หรือ --project <dir>)
@@ -74,7 +83,7 @@ python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
 
 ผลลัพธ์: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|BUSY|QUEUE_TIMEOUT` + `job=<id>` · exit 0 = OK · 2 = BUSY · 3 = รอคิวเกินเวลา · อื่น ๆ = 1
 
-## `.flash.json` (ทุกช่องไม่บังคับ)
+## `.flash.json` (ทุกช่องไม่บังคับ · `main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git · `flashq init` สร้างให้)
 ```json
 {
   "main_branch": "master",

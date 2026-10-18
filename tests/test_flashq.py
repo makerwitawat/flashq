@@ -709,5 +709,96 @@ class FlashqTest(unittest.TestCase):
             self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
 
 
+class NewProjectTest(unittest.TestCase):
+    """โปรเจกต์ใหม่ที่ branch หลักไม่ใช่ master: ตรวจอัตโนมัติ + flashq init"""
+    setUp, tearDown, run_q, base = (FlashqTest.setUp, FlashqTest.tearDown, FlashqTest.run_q, FlashqTest.base)
+
+    def git(self, cwd, *args):
+        r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def make_repo(self, branch="main", push=True):
+        """repo ใหม่ (ไม่มี .flash.json) + bare origin · แผนถูก push เข้า origin/<branch>"""
+        shutil.rmtree(self.proj)
+        origin = self.tmp / "origin.git"
+        self.git(self.tmp, "init", "-q", "--bare", "-b", branch, str(origin))
+        self.proj.mkdir()
+        self.git(self.proj, "init", "-q", "-b", branch)
+        (self.proj / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+        self.git(self.proj, "add", "PLAN.md")
+        self.git(self.proj, "commit", "-q", "-m", "plan")
+        self.git(self.proj, "remote", "add", "origin", str(origin))
+        if push:
+            self.git(self.proj, "push", "-q", "origin", branch)
+
+    def test_autodetect_main_branch_without_flash_json(self):
+        self.make_repo("main")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+
+    def test_fail_hint_when_plan_not_pushed(self):
+        self.make_repo("main", push=False)
+        self.git(self.proj, "push", "-q", "origin", "main")  # มี origin/main แต่ไม่มีแผนนี้
+        r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ไม่พบแผนใน origin/main", r.stdout)
+
+    def test_explicit_main_branch_wins(self):
+        self.make_repo("main")
+        (self.proj / ".flash.json").write_text(json.dumps({"main_branch": "master"}), encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("origin/master", r.stdout)
+        self.assertIn("main_branch", r.stdout)  # คำแนะนำ
+
+    def test_init_creates_config_gitignore_template(self):
+        self.make_repo("main")
+        r = self.run_q("init")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
+        self.assertEqual((cfg["main_branch"], cfg["remote"], cfg["plan_dir"]), ("main", "origin", "docs/plans"))
+        self.assertNotIn("require_plan_in_remote", cfg)
+        self.assertIn(".tmp/", (self.proj / ".gitignore").read_text(encoding="utf-8"))
+        self.assertTrue((self.proj / "docs" / "plans" / "FLASH_PLAN_TEMPLATE.md").exists())
+        self.assertIn("ขั้นต่อไป", r.stdout)
+        # รันซ้ำ = ไม่เปลี่ยนอะไร ไม่เพิ่ม .tmp/ ซ้ำ
+        r2 = self.run_q("init")
+        self.assertEqual(r2.returncode, 0)
+        self.assertEqual((self.proj / ".gitignore").read_text(encoding="utf-8").count(".tmp/"), 1)
+        self.assertIn("เหมือนเดิม", r2.stdout)
+
+    def test_init_keeps_user_values_unless_force(self):
+        self.make_repo("main")
+        (self.proj / ".flash.json").write_text(json.dumps({"main_branch": "dev", "rules": "x"}), encoding="utf-8")
+        self.run_q("init")
+        cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
+        self.assertEqual((cfg["main_branch"], cfg["rules"]), ("dev", "x"))
+        self.run_q("init", "--force")
+        cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
+        self.assertEqual((cfg["main_branch"], cfg["rules"]), ("main", "x"))
+
+    def test_init_no_remote_disables_plan_in_remote(self):
+        shutil.rmtree(self.proj)
+        self.proj.mkdir()
+        self.git(self.proj, "init", "-q", "-b", "main")
+        r = self.run_q("init")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
+        self.assertEqual((cfg["main_branch"], cfg["require_plan_in_remote"]), ("main", False))
+
+    def test_init_install_flag_installs_missing_globals(self):
+        self.make_repo("main")
+        claude_home = self.tmp / "claude_home"
+        env = {"FLASHQ_CLAUDE_HOME": str(claude_home)}
+        r = self.run_q("init", env=env)
+        self.assertIn("ยังไม่ได้ติดตั้งคำสั่ง global", r.stdout)
+        r = self.run_q("init", "--install", env=env)
+        self.assertTrue((claude_home / "commands" / "flash-plan.md").exists(), r.stdout)
+        self.assertTrue((self.oc_cfg.parent / "command" / "flash.md").exists(), r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
