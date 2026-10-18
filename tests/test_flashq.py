@@ -165,6 +165,22 @@ class FlashqTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8")
 
+    def test_ui_office_tab_and_script_syntax(self):
+        """ui: หน้าเว็บมีแท็บออฟฟิศ · สคริปต์ในหน้าไม่มี syntax error (ตรวจด้วย node ถ้ามี)"""
+        (self.home / "jobs").mkdir(parents=True)
+        base = self.start_ui()
+        code, html = self.http(base + "/")
+        self.assertEqual(code, 200)
+        for marker in ('id="officeView"', 'id="dashView"', 'data-view="office"', "function officeUpdate", "function estimate"):
+            self.assertIn(marker, html)
+        node = shutil.which("node")
+        if node:
+            script = re.search(r"<script>(.*)</script>", html, re.S).group(1)
+            f = self.home / "ui_script.js"
+            f.write_text(script, encoding="utf-8")
+            r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_ui_state_and_cancel(self):
         """ui: /api/state เป็น JSON · POST ไม่มี token = 403 · token ถูก = ยกเลิกงานที่รอคิวได้"""
         sys.path.insert(0, str(REPO))

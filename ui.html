@@ -139,12 +139,91 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 #toast { position: fixed; right: 1rem; bottom: 1rem; background: var(--text); color: var(--bg); padding: 0.5rem 0.9rem; border-radius: 0.4rem; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 2rem); z-index: 100; white-space: pre-wrap; }
 #toast.show { opacity: .95; }
 kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-radius: 0.25rem; padding: 0 0.3rem; }
+
+/* ---------- แท็บ ออฟฟิศ ---------- */
+.group button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+#officeView { padding: 1rem; display: grid; gap: 1rem; max-width: 260rem; margin: 0 auto; }
+.of-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.of-head h2 { margin: 0; font-size: 1.15rem; flex: 1; min-width: min(100%, 14rem); }
+.of-tiles { display: grid; gap: 0.7rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); }
+.of-tile { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.5rem 0.8rem; min-width: 0; }
+.of-tile .k { color: var(--muted); font-size: 0.85rem; }
+.of-tile .v { font-size: 1.35rem; font-weight: 700; line-height: 1.3; }
+.of-tile .s { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow: hidden; }
+.of-scene svg { display: block; width: 100%; height: auto; max-height: 82vh; }
+.of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); }
+.of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; gap: 0.3rem; }
+.of-card.quiet { border-color: var(--quota); }
+.of-ch { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.of-proj { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-weight: 600; font-size: 0.88rem; color: #fff; background: hsl(var(--h) 55% 42%); }
+.of-bar { height: 0.7rem; background: var(--line); border-radius: 1rem; overflow: hidden; position: relative; }
+.of-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 1rem; transition: width .8s ease; }
+.of-bar.over i { background: var(--quota); }
+.of-bar.severe i { background: var(--fail); }
+.of-bar.ind i { width: 35%; position: absolute; animation: of-slide 1.6s linear infinite; }
+.of-line { overflow-wrap: anywhere; }
+.of-line .muted { font-size: 0.88rem; }
+.of-warn { color: var(--quota); font-weight: 600; }
+.of-note { color: var(--muted); font-size: 0.88rem; margin: 0; }
+.of-sub { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.4rem; }
+.of-sub h3 { margin: 0; font-size: 1rem; }
+.of-two { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); align-items: start; }
+.of-legend { display: grid; gap: 0.3rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); margin: 0.4rem 0 0; padding: 0; list-style: none; font-size: 0.9rem; }
+[data-oflog] { cursor: pointer; }
+[data-oflog]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.of-floor { fill: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.of-wall { fill: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.of-carpet { fill: color-mix(in srgb, var(--accent) 13%, var(--panel)); stroke: color-mix(in srgb, var(--accent) 35%, var(--panel)); stroke-dasharray: 6 5; }
+.of-win { fill: color-mix(in srgb, #7fc4ff 45%, var(--panel)); stroke: var(--line); }
+.of-door { fill: color-mix(in srgb, #b9854a 70%, var(--panel)); stroke: var(--line); }
+.of-desk { fill: color-mix(in srgb, #c9955a 70%, var(--panel)); }
+.of-deskf { fill: color-mix(in srgb, #8a5d2e 65%, var(--panel)); }
+.of-chair { fill: color-mix(in srgb, var(--muted) 55%, var(--panel)); }
+.of-mon { fill: #2a3342; }
+.of-scr { fill: #0f1620; }
+.of-scr.on { fill: #14384a; }
+.of-code { stroke: #6ee7b7; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 8 4; opacity: .85; }
+.of-st-work .of-code { animation: of-code 1.2s linear infinite; }
+.of-bubble { fill: var(--panel); stroke: var(--line); }
+.of-t { fill: var(--text); font-size: 12px; }
+.of-tb { fill: var(--text); font-size: 13px; font-weight: 700; }
+.of-tm { fill: var(--muted); font-size: 11px; }
+.of-badge { fill: var(--accent); }
+.of-badget { fill: var(--accent-text); font-size: 10px; font-weight: 700; }
+.of-pb-bg { fill: var(--line); }
+.of-pb { fill: var(--accent); transition: width .8s ease; }
+.of-pb.over { fill: var(--quota); } .of-pb.severe { fill: var(--fail); } .of-pb.ind { fill: var(--muted); opacity: .5; }
+.of-ok { fill: var(--ok); } .of-bad { fill: var(--fail); } .of-qt { fill: var(--quota); }
+.of-eye { transform-box: fill-box; transform-origin: center; animation: of-blink 4.5s infinite; }
+.of-st-work .of-aL { animation: of-typeL .45s ease-in-out infinite; }
+.of-st-work .of-aR { animation: of-typeR .45s ease-in-out infinite; }
+.of-st-ok .of-wL, .of-st-ok .of-wR { animation: of-wave .5s ease-in-out infinite; }
+.of-st-ok .of-body { animation: of-jump .7s ease-in-out infinite; }
+.of-st-wait .of-body { animation: of-bob 2.4s ease-in-out infinite; }
+.of-st-sleep .of-zz { animation: of-zz 2.4s ease-out infinite; }
+.of-st-quota .of-steam { animation: of-zz 2s ease-out infinite; }
+@keyframes of-typeL { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes of-typeR { 0%, 100% { transform: translateY(-3px); } 50% { transform: translateY(0); } }
+@keyframes of-blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+@keyframes of-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes of-jump { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-9px); } }
+@keyframes of-wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes of-zz { 0% { opacity: 0; transform: translate(0, 0); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(8px, -14px); } }
+@keyframes of-code { to { stroke-dashoffset: -24; } }
+@keyframes of-slide { from { left: -35%; } to { left: 100%; } }
+body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-paused .of-bar i { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .of-scene *, .of-bar i { animation: none !important; } }
 </style>
 </head>
 <body data-layout="1">
 <header>
   <h1>flashq · คิวกลาง</h1>
   <span class="muted" id="updated">กำลังโหลด…</span>
+  <span class="group" id="viewTabs" title="สลับมุมมอง (ปุ่ม O = ออฟฟิศ · D = แดชบอร์ด)">
+    <button data-view="dash" aria-pressed="true">แดชบอร์ด</button><button data-view="office" aria-pressed="false">🏢 ออฟฟิศ</button>
+  </span>
   <span class="sp"></span>
   <button class="primary" id="newJobBtn" title="ส่งงานใหม่เข้าคิว (N)">＋ ส่งงานใหม่</button>
   <button id="notifyBtn" title="แจ้งเตือนเมื่องานจบ">🔕 แจ้งเตือน: ปิด</button>
@@ -154,7 +233,7 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
   <button id="themeBtn" title="สลับธีม">ธีม: อัตโนมัติ</button>
 </header>
 <div id="backdrop"></div>
-<main>
+<main id="dashView">
   <div class="col" id="colA">
     <section class="panel warn" id="deadBox" hidden data-panel="dead">
       <div class="ph"><h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2></div>
@@ -231,11 +310,45 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
       <div class="ph"><h2>ปุ่มลัด</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb muted">
         <kbd>+</kbd> <kbd>-</kbd> <kbd>0</kbd> หรือ <kbd>Ctrl</kbd>+วงล้อ = ขนาด · <kbd>N</kbd> = ส่งงานใหม่ · <kbd>/</kbd> = ค้นหาใน log ·
-        <kbd>Esc</kbd> = ออกจากเต็มจอ · ลากมุมขวาล่างของประวัติ/log เพื่อปรับความสูง
+        <kbd>O</kbd> = ออฟฟิศ · <kbd>D</kbd> = แดชบอร์ด · <kbd>Esc</kbd> = ออกจากเต็มจอ · ลากมุมขวาล่างของประวัติ/log เพื่อปรับความสูง
       </div>
     </section>
   </div>
 </main>
+
+<div id="officeView" hidden>
+  <div class="of-head">
+    <h2 id="ofHead">กำลังโหลด…</h2>
+    <label class="muted"><input type="checkbox" id="ofCalm"> ลดการเคลื่อนไหว</label>
+  </div>
+  <div class="of-tiles">
+    <div class="of-tile"><div class="k">กำลังทำ</div><div class="v" id="ofTU">-</div><div class="s" id="ofTUs"></div></div>
+    <div class="of-tile"><div class="k">รอคิว</div><div class="v" id="ofTQ">-</div><div class="s" id="ofTQs"></div></div>
+    <div class="of-tile"><div class="k">คาดว่าเสร็จทั้งหมด (ประมาณ)</div><div class="v" id="ofTE">-</div><div class="s" id="ofTEs"></div></div>
+    <div class="of-tile"><div class="k">วันนี้จบแล้ว</div><div class="v" id="ofTD">-</div><div class="s" id="ofTDs"></div></div>
+  </div>
+  <div class="of-scene" id="ofScene"></div>
+  <div class="of-cards" id="ofRuns"></div>
+  <div class="of-two">
+    <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
+    <section class="panel"><div class="ph"><h2>เพิ่งจบ</h2></div><div class="pb" id="ofRecent"></div></section>
+  </div>
+  <section class="panel">
+    <div class="ph"><h2>วิธีอ่านภาพ</h2></div>
+    <div class="pb">
+      <ul class="of-legend">
+        <li>🧑‍💻 <b>นั่งโต๊ะ</b> = งานกำลังทำ (เลขช่องอยู่ที่โต๊ะ) · <b>โต๊ะว่าง</b> = ยังไม่มีงาน</li>
+        <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
+        <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
+        <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
+        <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
+        <li>😴 <b>นอนที่โซฟา</b> = งานที่ process ตาย (ดูแผงเตือนในแดชบอร์ด)</li>
+        <li>⏱ ทุก <b>เวลาที่ประมาณ</b> มาจากประวัติงานที่ผ่านมา (ค่ากลางต่อ T-xx) ไม่ใช่ค่ารับประกัน — คิวจริงอาจเร็ว/ช้ากว่านี้ได้</li>
+      </ul>
+      <p class="of-note">คลิกตัวละคร/การ์ดเพื่อไปดู log สดของงานนั้น</p>
+    </div>
+  </section>
+</div>
 
 <dialog id="submitDlg">
   <form method="dialog" id="submitForm">
@@ -481,8 +594,11 @@ async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     state = await r.json();
+    stateAt = Date.now();
     render();
     checkFinished();
+    officeTrack();
+    if (view === "office") { officeUpdate(); officePoll(); }
   } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
 }
 
@@ -745,8 +861,400 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "0") { zoom = 1; applyZoom(); }
   else if (e.key === "n" || e.key === "N") { e.preventDefault(); openSubmit(); }
   else if (e.key === "/") { e.preventDefault(); $("logSearch").focus(); }
+  else if (e.key === "o" || e.key === "O") setView("office");
+  else if (e.key === "d" || e.key === "D") setView("dash");
 });
 
+/* ================= ออฟฟิศ (มุมมองการ์ตูน) ================= */
+let view = store.get("view", "dash");
+if (view !== "dash" && view !== "office") view = "dash";
+let stateAt = Date.now();
+const olog = new Map();            // job id -> ข้อมูลที่อ่านจาก log (offset · เครื่องมือ · งานที่ commit แล้ว)
+const deskOf = new Map();          // job id -> {i: โต๊ะ, h: สีโปรเจกต์}  (จำไว้แสดงตอนจบ)
+const cele = [];                   // งานที่เพิ่งจบ แสดงที่โต๊ะเดิมสั้น ๆ
+let prevRun = new Set(), ofSig = "", ologBusy = false;
+
+const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
+const pad2 = (n) => String(n).padStart(2, "0");
+const hueOf = (str) => { let h = 7; for (const c of String(str || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+function approx(s) {
+  if (s == null || !isFinite(s)) return "-";
+  if (s < 45) return "<1 นาที";
+  const m = Math.round(s / 60);
+  return m < 60 ? `~${m} นาที` : `~${Math.floor(m / 60)} ชม. ${m % 60} นาที`;
+}
+function clockAt(sec) {
+  const d = new Date(Date.now() + sec * 1000);
+  const t = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? t : "วันถัดไป " + t;
+}
+function mmss(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(x)}` : `${m}:${pad2(x)}`;
+}
+
+/* --- งาน T-xx ในแผน --- */
+const normT = (t) => String(t).toUpperCase().replace(/^([A-Z]+)-0*(\d+)$/, "$1-$2");
+function parseTasks(s) {
+  const out = [];
+  for (const part of String(s || "").split(/[\s,]+/)) {
+    if (!part) continue;
+    const r = part.match(/^([A-Za-z]+)-(\d+)\.\.(?:[A-Za-z]+-)?(\d+)$/);
+    if (r) {
+      const a = +r[2], b = +r[3];
+      if (b >= a && b - a < 200) { for (let i = a; i <= b; i++) out.push(r[1].toUpperCase() + "-" + String(i).padStart(r[2].length, "0")); continue; }
+    }
+    const k = part.match(/^([A-Za-z]+)-(\d+)$/);
+    if (k) out.push(k[1].toUpperCase() + "-" + k[2]);
+  }
+  return out;
+}
+
+/* --- ประมาณการเวลา: จากประวัติงานที่จบ OK (ค่ากลาง · ต่อ 1 T-xx × จำนวนงาน) --- */
+function estimate(j) {
+  const hist = (state?.history || []).filter((h) => h.state === "ok" && h.duration_sec >= 5);
+  const isMsg = !!j.message;
+  const n = Math.max(1, parseTasks(j.tasks).length);
+  const same = hist.filter((h) => h.project === j.project && !!h.message === isMsg && (isMsg ? h.message === j.message : (h.plan === j.plan && h.tasks === j.tasks)));
+  if (same.length) return { sec: median(same.map((h) => h.duration_sec)), n: same.length, scope: "same" };
+  const per = (h) => h.duration_sec / Math.max(1, parseTasks(h.tasks).length);
+  const proj = hist.filter((h) => h.project === j.project && !!h.message === isMsg);
+  if (proj.length) return { sec: median(proj.map(per)) * n, n: proj.length, scope: "project" };
+  const all = hist.filter((h) => !!h.message === isMsg);
+  if (all.length) return { sec: median(all.map(per)) * n, n: all.length, scope: "all" };
+  return null;
+}
+const estRough = (e) => !e || e.n < 3 || e.scope === "all";
+const estWhy = (e) => !e ? "ยังไม่มีประวัติให้ประมาณ — พอมีงานที่จบ OK สักครั้งจะประมาณเวลาได้"
+  : e.scope === "same" ? `ประมาณจากงานเดิมที่เคยจบ OK ${e.n} ครั้ง → คาดว่าใช้ ${approx(e.sec)}${estRough(e) ? " (คร่าว)" : ""}`
+  : e.scope === "project" ? `ประมาณจากประวัติ ${e.n} งานของโปรเจกต์นี้ (ค่ากลางต่องาน × จำนวนงาน) คาดว่าใช้ ${approx(e.sec)}${estRough(e) ? " (คร่าว)" : ""}`
+  : `ประมาณจากงานทุกโปรเจกต์ ${e.n} งาน คาดว่าใช้ ${approx(e.sec)} (คร่าวมาก)`;
+const fallbackSec = () => median((state?.history || []).filter((h) => h.state === "ok" && h.duration_sec >= 5).map((h) => h.duration_sec)) ?? 600;
+
+/* --- ความคืบหน้าของงานที่กำลังทำ --- */
+function runInfo(r) {
+  const el = r.elapsed_sec == null ? null : r.elapsed_sec + (Date.now() - stateAt) / 1000;
+  const est = estimate(r), L = olog.get(r.id);
+  const list = parseTasks(r.tasks), n = list.length;
+  const doneList = L ? list.filter((t) => L.done.has(normT(t))) : [];
+  const cur = list.find((t) => !(L && L.done.has(normT(t)))) || "";
+  const doneFrac = n > 1 ? doneList.length / n : 0;
+  const timePct = el != null && est && est.sec > 0 ? el / est.sec * 100 : null;
+  let pct = null, rem = null, over = false;
+  if (timePct != null || doneFrac > 0) {
+    pct = Math.min(95, Math.max(timePct || 0, doneFrac * 100));
+    if (doneFrac * 100 > (timePct || 0) && el != null && doneFrac > 0) rem = el * (1 - doneFrac) / doneFrac;   // เร็วกว่าที่คาด → ใช้ความเร็วจริง
+    else if (est && el != null) { rem = est.sec - el; if (rem <= 0) { over = true; rem = null; } }
+  }
+  const severe = over && est && el > est.sec * 2;
+  const simRem = rem != null ? rem : over ? Math.max(60, est.sec * 0.15) : (est ? 0 : fallbackSec() / 2);
+  return { el, est, L, list, n, doneN: doneList.length, cur, pct, rem, over, severe, simRem };
+}
+
+/* --- อ่าน log ของงานที่กำลังทำ (ต่อจาก offset · ไม่อ่านซ้ำ) --- */
+const TOOL_TH = { read: "อ่านไฟล์", edit: "แก้ไฟล์", write: "เขียนไฟล์", patch: "แก้ไฟล์", apply_patch: "แก้ไฟล์", bash: "รันคำสั่ง", grep: "ค้นหาในไฟล์",
+  glob: "ค้นหาไฟล์", list: "ดูรายการไฟล์", todowrite: "จดแผนงาน", todoread: "ดูแผนงาน", task: "เรียกผู้ช่วย", webfetch: "เปิดเว็บ" };
+function activity(L) {
+  if (!L || !L.last) return "เริ่มงาน…";
+  const line = L.last;
+  if (line.startsWith("❌ {")) return "เจอข้อผิดพลาด";
+  const m = line.match(/^(?:🔧|❌)\s*([^:\s]+):\s*([\s\S]*)$/);
+  if (m) {
+    let b = (m[2].split(/\r?\n/)[0] || "").trim();
+    if (/[\\/]/.test(b) && !/\s/.test(b)) b = b.split(/[\\/]/).pop();
+    return `${line.startsWith("❌") ? "ติดขัด · " : ""}${TOOL_TH[m[1].toLowerCase()] || "ใช้ " + m[1]} ${b}`.trim();
+  }
+  return "คิด/สรุป: " + (line.split(/\r?\n/).find((x) => x.trim()) || "").trim();
+}
+async function officePoll() {
+  if (ologBusy || !state) return;
+  ologBusy = true;
+  try {
+    const runs = state.running_list || [];
+    for (const id of [...olog.keys()]) if (!runs.some((r) => r.id === id)) olog.delete(id);
+    await Promise.all(runs.map(async (r) => {
+      let L = olog.get(r.id);
+      if (!L) { L = { offset: 0, attempt: 0, size: -1, tools: 0, errs: 0, last: "", mention: "", done: new Set(), changedAt: Date.now() }; olog.set(r.id, L); }
+      const keys = new Set(parseTasks(r.tasks).map(normT));
+      for (let k = 0; k < 6; k++) {
+        const resp = await fetch(`/api/log?id=${encodeURIComponent(r.id)}&attempt=0&offset=${L.offset}`, { cache: "no-store" });
+        if (!resp.ok) break;
+        const d = await resp.json();
+        if (d.reset || (L.attempt && d.attempt && d.attempt !== L.attempt)) { L.tools = 0; L.errs = 0; L.last = ""; L.mention = ""; L.done = new Set(); }
+        L.attempt = d.attempt;
+        for (const line of d.lines || []) {
+          if (line.startsWith("🔧")) L.tools++;
+          else if (line.startsWith("❌") && !line.startsWith("❌ {")) L.errs++;
+          if (line.trim()) L.last = line;
+          const ids = [...line.matchAll(/\b[A-Za-z]+-\d{1,3}\b/g)].map((x) => normT(x[0])).filter((x) => keys.has(x));
+          if (ids.length) L.mention = ids[ids.length - 1];
+          if (/^🔧\s*bash:/.test(line) && /\bgit\b[^\n]*\bcommit\b/.test(line)) ids.forEach((x) => L.done.add(x));   // commit ที่ระบุ T-xx = งานนั้นเสร็จ
+        }
+        if (d.size !== L.size) { L.size = d.size; L.changedAt = Date.now(); }
+        const moved = d.offset !== L.offset;
+        L.offset = d.offset;
+        if (!moved || d.offset >= d.size) break;
+      }
+    }));
+  } catch (e) { /* รอบหน้าลองใหม่ */ } finally { ologBusy = false; }
+  officeUpdate();
+}
+
+/* --- ตามดูงานที่เพิ่งจบ (ชูมือ/ก้มหน้า/กาแฟ ที่โต๊ะเดิม) --- */
+function officeTrack() {
+  const cur = new Set((state.running_list || []).map((r) => r.id));
+  for (const id of prevRun) {
+    if (cur.has(id)) continue;
+    const h = (state.history || []).find((x) => x.id === id), d = deskOf.get(id);
+    if (h && d && FINAL.includes(h.state)) cele.push({ desk: d.i, state: h.state, id, h: d.h, until: Date.now() + 20000 });
+  }
+  prevRun = cur;
+}
+
+/* --- ตัวละคร (SVG) --- */
+const SKINS = ["#ffd9b8", "#f2c299", "#d9a272", "#fbe0c8"], HAIRS = ["#3b2a20", "#222a38", "#8a4b2a", "#c9a14a"];
+function hashN(s) { let h = 3; for (const c of String(s)) h = (h * 33 + c.charCodeAt(0)) >>> 0; return h; }
+function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false }) {
+  const color = `hsl(${hue} 55% 50%)`, skin = SKINS[hashN(seed) % 4], hair = HAIRS[(hashN(seed) >> 3) % 4];
+  const arm = (x1, y1, x2, y2, c) => `<g class="${c}"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="8" stroke-linecap="round"/><circle cx="${x2}" cy="${y2}" r="4" fill="${skin}"/></g>`;
+  const cup = `<g><rect x="19" y="-58" width="9" height="9" rx="2" fill="#fff" stroke="#7a5a3a"/><path d="M28 -56 q4 1 0 5" stroke="#7a5a3a" fill="none"/><g class="of-steam"><path d="M22 -62 q-2 -3 0 -6 M26 -62 q-2 -3 0 -6" stroke="#9aa5b5" fill="none" stroke-linecap="round"/></g></g>`;
+  let arms;
+  if (pose === "sit") arms = arm(-13, -42, -9, -25, "of-aL") + arm(13, -42, 9, -25, "of-aR");
+  else if (pose === "cheer") arms = arm(-14, -44, -27, -72, "of-wL") + arm(14, -44, 27, -72, "of-wR");
+  else if (pose === "coffee") arms = arm(-15, -42, -19, -22, "") + arm(14, -42, 23, -48, "") + cup;
+  else arms = arm(-15, -42, -19, -22, "") + arm(15, -42, 19, -22, "");
+  const legs = (pose === "stand" || pose === "sleep") ? `<rect x="-11" y="-17" width="9" height="17" rx="3" fill="#3b4a63"/><rect x="2" y="-17" width="9" height="17" rx="3" fill="#3b4a63"/>` : "";
+  const mouths = { happy: `<path d="M-5,-56 Q0,-48 5,-56Z" fill="#c0392b"/>`, smile: `<path d="M-4,-55 Q0,-51 4,-55" stroke="#5b3a29" fill="none" stroke-width="1.6" stroke-linecap="round"/>`,
+    sad: `<path d="M-4,-52 Q0,-56 4,-52" stroke="#5b3a29" fill="none" stroke-width="1.6" stroke-linecap="round"/>`, flat: `<path d="M-3,-54 h6" stroke="#5b3a29" stroke-width="1.6" stroke-linecap="round"/>`,
+    sleep: `<circle cx="0" cy="-54" r="1.9" fill="#5b3a29"/>` };
+  const eyes = mood === "sleep" ? `<path d="M-8,-61 h6 M2,-61 h6" stroke="#3b2a20" stroke-width="1.6" stroke-linecap="round"/>`
+    : `<circle class="of-eye" cx="-5" cy="-61" r="1.9" fill="#2b2118"/><circle class="of-eye" cx="5" cy="-61" r="1.9" fill="#2b2118"/>`;
+  const extra = (mood === "sad" ? `<ellipse cx="-8" cy="-55" rx="1.4" ry="2.2" fill="#6bb6ff"/>` : "")
+    + (pose === "sleep" ? `<g class="of-zz"><text x="14" y="-70" font-size="11" fill="currentColor" class="of-tm">z</text><text x="21" y="-78" font-size="9" class="of-tm">z</text></g>` : "")
+    + (sign ? `<g><rect x="12" y="-56" width="26" height="18" rx="3" fill="#fff" stroke="#9aa5b5"/><text x="25" y="-43" text-anchor="middle" font-size="11">⏸</text></g>` : "");
+  const tilt = pose === "sleep" ? ` transform="rotate(8 0 -62)"` : "";
+  return `<g transform="translate(${x},${y}) scale(${s})"><g class="of-body">${legs}<rect x="-15" y="-48" width="30" height="32" rx="9" fill="${color}"/>${arms}
+    <g${tilt}><circle cx="0" cy="-62" r="14" fill="${skin}"/><path d="M-14.5,-63 A14.5,14.5 0 0 1 14.5,-63 Q6,-69 -2,-66 Q-9,-64 -14.5,-63Z" fill="${hair}"/>
+    ${eyes}<circle cx="-9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/><circle cx="9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/>${mouths[mood] || mouths.smile}${extra}</g></g></g>`;
+}
+
+/* --- ฉาก --- */
+const DW = 190, DH = 188, SCENE_W = 1000, DESK_X0 = 235, DESK_Y0 = 72;
+function assignDesks(runs, N) {
+  const out = new Array(N).fill(null);
+  for (const r of runs) { const s = (r.slot | 0) - 1; if (s >= 0 && s < N && !out[s]) out[s] = r; }
+  for (const r of runs) { if (out.includes(r)) continue; const i = out.indexOf(null); if (i >= 0) out[i] = r; }
+  return out;
+}
+function officeModel() {
+  const runs = state.running_list || [];
+  const N = Math.min(12, Math.max(1, state.slots?.max || 1, runs.length, ...runs.map((r) => r.slot | 0)));
+  const desks = assignDesks(runs, N);
+  desks.forEach((r, i) => { if (r) deskOf.set(r.id, { i, h: hueOf(r.project_name) }); });
+  const now = Date.now();
+  for (let k = cele.length - 1; k >= 0; k--) if (cele[k].until <= now) cele.splice(k, 1);
+  const celeAt = {};
+  cele.forEach((c) => { if (c.desk < N && !desks[c.desk]) celeAt[c.desk] = c; });
+  return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [] };
+}
+const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
+  quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
+  nostart: { pose: "sit", mood: "sad", icon: "❓", text: "ไม่เริ่มทำงาน (NOSTART)", cls: "of-st-bad" } };
+
+function deskSVG(i, cx, cy, r, c) {
+  const px = cx + 72, py = cy + 150;
+  let who = "", bubble = "", label = "", stCls = "";
+  if (r) {
+    stCls = "of-st-work";
+    who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py });
+    bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
+      <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
+    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${esc(trunc(r.project_name, 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>`;
+  } else if (c) {
+    const k = CELE[c.state];
+    stCls = k.cls;
+    who = person({ seed: c.id, hue: c.h, pose: k.pose, mood: k.mood, x: px, y: py });
+    bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
+      <text class="of-t" x="${px}" y="${cy + 37}" text-anchor="middle">${k.icon} ${esc(k.text)}</text></g>`;
+    label = `<text class="of-tm" x="${cx + 16}" y="${cy + 162}">เพิ่งจบ · พักแป๊บ</text>`;
+  } else {
+    label = `<text class="of-tm" x="${cx + 16}" y="${cy + 162}">โต๊ะว่าง · รองานใหม่</text>`;
+  }
+  const bar = r ? `<rect class="of-pb-bg" x="${cx + 16}" y="${cy + 142}" width="158" height="8" rx="4"/><rect class="of-pb" id="ofPB${i}" x="${cx + 16}" y="${cy + 142}" width="0" height="8" rx="4"/>` : "";
+  const click = r ? ` data-oflog="${esc(r.id)}" tabindex="0" role="button" aria-label="${esc("ดู log ช่อง " + (i + 1) + " " + r.project_name)}"` : "";
+  return `<g class="${stCls}"${click}>
+    <rect class="of-chair" x="${px - 25}" y="${cy + 92}" width="50" height="52" rx="12"/>
+    ${who}
+    <rect class="of-desk" x="${cx + 4}" y="${cy + 108}" width="182" height="14" rx="5"/>
+    <rect class="of-deskf" x="${cx + 12}" y="${cy + 122}" width="166" height="16" rx="3"/>
+    <text class="of-tm" x="${cx + 92}" y="${cy + 134}" text-anchor="middle" style="fill:#fff;opacity:.85">ช่อง ${i + 1}</text>
+    <rect class="of-mon" x="${cx + 124}" y="${cy + 66}" width="54" height="38" rx="4"/><rect class="of-scr${r ? " on" : ""}" x="${cx + 128}" y="${cy + 70}" width="46" height="28" rx="2"/>
+    ${r ? `<line class="of-code" x1="${cx + 132}" y1="${cy + 77}" x2="${cx + 166}" y2="${cy + 77}"/><line class="of-code" x1="${cx + 132}" y1="${cy + 84}" x2="${cx + 160}" y2="${cy + 84}"/><line class="of-code" x1="${cx + 132}" y1="${cy + 91}" x2="${cx + 168}" y2="${cy + 91}"/>` : ""}
+    <rect class="of-mon" x="${cx + 146}" y="${cy + 104}" width="10" height="5"/>
+    <rect x="${cx + 44}" y="${cy + 103}" width="40" height="6" rx="2" fill="#4a5568"/>
+    <g><rect x="${cx + 12}" y="${cy + 98}" width="12" height="10" rx="2" fill="#a0653a"/><circle cx="${cx + 18}" cy="${cy + 93}" r="7" fill="#46a35e"/><circle cx="${cx + 13}" cy="${cy + 96}" r="4.5" fill="#5cba74"/></g>
+    ${bubble}${bar}${label}</g>`;
+}
+
+function sceneSVG(m) {
+  const cols = Math.min(4, m.N), rows = Math.ceil(m.N / 4);
+  const H = Math.max(530, DESK_Y0 + rows * DH + 24);
+  const areaW = SCENE_W - DESK_X0 - 10, ox = DESK_X0 + Math.max(0, (areaW - cols * DW) / 2);
+  const total = m.runs.length;
+  const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
+  let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
+    <rect class="of-floor" width="${SCENE_W}" height="${H}"/><rect class="of-wall" width="${SCENE_W}" height="58"/>
+    <rect class="of-win" x="300" y="10" width="60" height="38" rx="4"/><rect class="of-win" x="380" y="10" width="60" height="38" rx="4"/><rect class="of-win" x="460" y="10" width="60" height="38" rx="4"/>
+    <rect class="of-door" x="112" y="6" width="76" height="52" rx="6"/><circle cx="178" cy="34" r="3" fill="#f6d365"/>
+    <text class="of-tb" x="150" y="76" text-anchor="middle" style="font-size:12px">ประตู · คิวรอ</text>
+    <text class="of-tb" x="${SCENE_W - 16}" y="30" text-anchor="end" id="ofClock" style="font-size:15px"></text>
+    <text class="of-tm" x="${SCENE_W - 16}" y="48" text-anchor="end">flashq office</text>
+    <rect class="of-carpet" x="96" y="86" width="108" height="${H - 108}" rx="14"/>`;
+  m.desks.forEach((r, i) => { g += deskSVG(i, ox + (i % 4) * DW, DESK_Y0 + Math.floor(i / 4) * DH, r, m.celeAt[i]); });
+  const SHOW = 5;
+  m.queue.slice(0, SHOW).forEach((j, k) => {
+    const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
+    g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${what(j)}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
+      ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash })}
+      <rect class="of-badge" x="${150 - 15}" y="${y - 70}" width="30" height="15" rx="7.5"/><text class="of-badget" x="150" y="${y - 59}" text-anchor="middle">#${j.position}</text></g>`;
+  });
+  if (m.queue.length > SHOW) g += `<text class="of-tb" x="150" y="${150 + SHOW * 70 - 14}" text-anchor="middle">+${m.queue.length - SHOW} งานรออยู่</text>`;
+  if (!m.queue.length) g += `<text class="of-tm" x="150" y="200" text-anchor="middle">ไม่มีคิวรอ</text>`;
+  if (m.dead.length) {
+    g += `<g class="of-st-sleep"><title>${esc(`${m.dead.length} งานที่ process ตายแล้ว`)}</title><rect class="of-chair" x="14" y="${H - 80}" width="80" height="34" rx="10"/>
+      ${person({ seed: m.dead[0].id, hue: hueOf(m.dead[0].project_name), pose: "sleep", mood: "sleep", x: 54, y: H - 38, s: 0.62 })}
+      <text class="of-qt" x="54" y="${H - 22}" text-anchor="middle" style="font-size:11px;font-weight:700">😴 process ตาย ${m.dead.length}</text></g>`;
+  }
+  return g + `</svg>`;
+}
+
+/* --- การ์ดงาน / คิว / เพิ่งจบ --- */
+function runCardHTML(r, k) {
+  const plan = r.message ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop();
+  return `<article class="of-card" id="ofC${k}">
+    <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
+      <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
+    <div class="of-bar" id="ofCB${k}" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+    <div class="of-line"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
+    <div class="of-line">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
+    <div class="of-line">⏱ <span id="ofCE${k}"></span></div>
+    <div class="of-line muted" id="ofCM${k}"></div>
+    <div class="of-line muted" id="ofCA${k}"></div></article>`;
+}
+function queueHTML(m) {
+  if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
+  return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>รอมาแล้ว</th><th>คาดว่าเริ่ม</th><th>คาดว่าเสร็จ</th></tr>
+    ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
+      <td>${esc(j.project_name)} <span class="mono muted">${esc(what(j))}</span>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
+      <td class="nw" id="ofQW${k}"></td><td class="nw" id="ofQS${k}"></td><td class="nw" id="ofQE${k}"></td></tr>`).join("")}</table></div>
+    <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
+}
+function recentHTML() {
+  const h = (state.history || []).slice(0, 8);
+  if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
+  return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(what(j))}</span></td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+}
+
+/* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
+function setText(id, t) { const e = $(id); if (e && e.textContent !== t) e.textContent = t; }
+function officeUpdate() {
+  if (view !== "office" || !state) return;
+  const m = officeModel();
+  const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
+    m.queue.map((j) => [j.id, j.position, j.wait_reason]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => r.id)]);
+  if (sig !== ofSig) {
+    ofSig = sig;
+    $("ofScene").innerHTML = sceneSVG(m);
+    $("ofRuns").innerHTML = m.runs.map(runCardHTML).join("");
+    $("ofQueue").innerHTML = queueHTML(m);
+    $("ofRecent").innerHTML = recentHTML();
+  }
+  const now = Date.now();
+  setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
+  /* งานที่กำลังทำ */
+  const infos = m.runs.map(runInfo);
+  m.runs.forEach((r, k) => {
+    const ri = infos[k], L = ri.L, i = m.desks.indexOf(r);
+    const cls = ri.severe ? "severe" : ri.over ? "over" : ri.pct == null ? "ind" : "";
+    const bar = $("ofCB" + k);
+    if (bar) { bar.className = "of-bar" + (cls ? " " + cls : ""); bar.firstElementChild.style.width = ri.pct == null ? "" : ri.pct.toFixed(1) + "%"; ri.pct == null ? bar.removeAttribute("aria-valuenow") : bar.setAttribute("aria-valuenow", Math.round(ri.pct)); }
+    setText("ofCP" + k, ri.pct == null ? "ประมาณไม่ได้" : Math.round(ri.pct) + "%" + (ri.pct >= 95 ? "+" : ""));
+    const stepTxt = r.message ? "ข้อความทดสอบ" : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
+    setText("ofCS" + k, stepTxt + (L && L.mention && !ri.doneN && ri.n > 1 ? ` (log พูดถึง ${L.mention} ล่าสุด)` : ""));
+    const act = trunc(activity(L), 90);
+    setText("ofCT" + k, act);
+    let t;
+    if (ri.el == null) t = "ยังไม่ทราบเวลาเริ่ม";
+    else if (ri.rem != null) t = `ผ่านไป ${dur(Math.floor(ri.el))} · เหลือ ${approx(ri.rem)} (เสร็จราว ${clockAt(ri.rem)})`;
+    else if (ri.over) t = `ผ่านไป ${dur(Math.floor(ri.el))} · เกินที่คาดไว้ ${approx(ri.el - ri.est.sec)} แล้ว ยังทำอยู่${ri.severe ? " — ช้ากว่าปกติมาก ลองดู log" : ""}`;
+    else t = `ผ่านไป ${dur(Math.floor(ri.el))} · ยังประมาณเวลาที่เหลือไม่ได้`;
+    setText("ofCE" + k, t);
+    setText("ofCM" + k, estWhy(ri.est));
+    const quiet = L && now - L.changedAt > 180000;
+    setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${quiet ? ` · ⚠ log เงียบมา ${dur(Math.floor((now - L.changedAt) / 1000))} (นับตั้งแต่เปิดหน้านี้)` : ""}` : "");
+    const card = $("ofC" + k); if (card) card.classList.toggle("quiet", !!quiet || ri.severe);
+    const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
+    if (i >= 0) {
+      setText("ofB" + i, trunc(act, 24));
+      const pb = $("ofPB" + i);
+      if (pb) { pb.setAttribute("width", ((ri.pct == null ? 100 : ri.pct) * 1.58).toFixed(1)); pb.setAttribute("class", "of-pb" + (cls ? " " + cls : "")); }
+      setText("ofPT" + i, ri.el == null ? "" : `${mmss(ri.el)}${ri.rem != null ? " · เหลือ " + approx(ri.rem) : ri.over ? " · เกินที่คาด" : ""}`);
+    }
+  });
+  /* คิว: จำลองช่องว่าง → เวลาเริ่ม/เสร็จโดยประมาณ */
+  const slots = Math.max(state.slots?.max || 1, m.runs.length, 1), free = infos.map((x) => x.simRem);
+  while (free.length < slots) free.push(0);
+  const fb = fallbackSec();
+  let allEnd = free.length ? Math.max(...infos.map((x) => x.simRem), 0) : 0, anyRough = infos.some((x) => !x.est || estRough(x.est));
+  m.queue.forEach((j, k) => {
+    free.sort((a, b) => a - b);
+    const start = free[0], e = estimate(j), end = start + (e ? e.sec : fb);
+    free[0] = end; allEnd = Math.max(allEnd, end); if (estRough(e)) anyRough = true;
+    setText("ofQW" + k, dur(Math.floor((j.wait_sec ?? 0) + (now - stateAt) / 1000)));
+    setText("ofQS" + k, start < 30 ? "เริ่มได้เลย" : `${approx(start)} (${clockAt(start)})`);
+    setText("ofQE" + k, `${approx(end)} (${clockAt(end)})${estRough(e) ? " *" : ""}`);
+  });
+  /* หัวสรุป */
+  const s = state, used = s.slots?.used ?? m.runs.length, idle = Math.max(0, (s.slots?.max || 1) - used);
+  const busy = m.runs.length > 0, tail = m.queue.length;
+  setText("ofHead", busy ? `ตอนนี้ทำอยู่ ${m.runs.length} งาน${tail ? ` · รอคิว ${tail} งาน` : " · ไม่มีคิวรอ"}`
+    : tail ? `ยังไม่มีงานที่กำลังทำ · มี ${tail} งานรอคิว (กำลังจะเริ่ม)` : "ออฟฟิศว่าง ☕ ไม่มีงานในคิว — กด ＋ ส่งงานใหม่ ได้เลย");
+  setText("ofTU", `${m.runs.length} / ${s.slots?.max || 1} ช่อง`);
+  setText("ofTUs", idle ? `ว่าง ${idle} ช่อง · จัดคิว: ${s.schedule === "auto" ? "อัตโนมัติ" : "ตามลำดับ"}` : `เต็มทุกช่อง · จัดคิว: ${s.schedule === "auto" ? "อัตโนมัติ" : "ตามลำดับ"}`);
+  setText("ofTQ", `${tail} งาน`);
+  const longest = m.queue.reduce((a, j) => Math.max(a, j.wait_sec ?? 0), 0);
+  setText("ofTQs", tail ? `รอนานสุด ${dur(Math.floor(longest + (now - stateAt) / 1000))}` : "—");
+  const doneAll = busy || tail;
+  setText("ofTE", doneAll ? approx(allEnd) : "—");
+  setText("ofTEs", doneAll ? `ราว ${clockAt(allEnd)}${anyRough ? " · ประมาณคร่าว (ข้อมูลเก่ายังน้อย)" : ""}` : "ไม่มีงานค้าง");
+  const today = String(s.now || "").slice(0, 10), td = (s.history || []).filter((h) => (h.finished || "").startsWith(today));
+  const okN = td.filter((h) => h.state === "ok").length, badN = td.filter((h) => ["fail", "timeout", "nostart", "quota"].includes(h.state)).length;
+  setText("ofTD", `${td.length} งาน`);
+  setText("ofTDs", td.length ? `✓ ${okN} ผ่าน · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
+}
+
+/* --- สลับมุมมอง --- */
+function setView(v) {
+  if (v !== "dash" && v !== "office") return;
+  setMax(null);
+  view = v; store.set("view", v);
+  $("dashView").hidden = v !== "dash"; $("officeView").hidden = v !== "office";
+  document.querySelectorAll("#viewTabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+  if (v === "office" && state) { ofSig = ""; officeUpdate(); officePoll(); }
+}
+document.querySelectorAll("#viewTabs button").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
+function openLogFromOffice(id) { setView("dash"); openLog(id); }
+$("officeView").addEventListener("click", (e) => { const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
+$("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
+$("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };
+document.addEventListener("visibilitychange", () => document.body.classList.toggle("of-paused", document.hidden));
+setInterval(() => { if (view === "office" && !document.hidden) officeUpdate(); }, 1000);
+
+setView(view);
 applyTheme(); notifyLabel(); applyZoom();
 refresh();
 setInterval(refresh, 3000);
