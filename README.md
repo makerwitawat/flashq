@@ -12,9 +12,11 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
 | ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · `running.lock` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
-| ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้) |
+| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
+| ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้ · `main_branch` `remote` `plan_dir` `rules`) |
 
 โปรเจกต์ที่มี `.opencode/command/flash.md` หรือ `.opencode/agent/flash-worker.md` ของตัวเอง (เช่น IRIS_CODE_1.2) → opencode ใช้ของโปรเจกต์ก่อน
+· `/flash-plan` `/flash-check` แบบ global จะเช็คก่อนว่าโปรเจกต์มี `.claude/commands/` หรือ `.opencode/command/` ชื่อเดียวกันไหม — มี = ทำตามไฟล์ของโปรเจกต์แทน
 
 ## ติดตั้งครั้งแรก
 ```

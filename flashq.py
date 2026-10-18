@@ -527,15 +527,19 @@ def cmd_switch(a) -> int:
 
 
 def cmd_install(a) -> int:
-    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ (แทน {{FLASHQ}} ด้วย path repo นี้)"""
-    dst_root = OC_CONFIG.parent
+    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ และ claude/commands/*.md ไป ~/.claude/commands/
+    (แทน {{FLASHQ}} ด้วย path repo นี้)"""
+    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+    pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command"),
+             (REPO / "opencode" / "agent", OC_CONFIG.parent / "agent"),
+             (REPO / "claude" / "commands", claude_home / "commands")]
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     rc = 0
-    for sub in ("command", "agent"):
-        (dst_root / sub).mkdir(parents=True, exist_ok=True)
-        for src in sorted((REPO / "opencode" / sub).glob("*.md")):
+    for src_dir, dst_dir in pairs:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for src in sorted(src_dir.glob("*.md")):
             text = src.read_text(encoding="utf-8").replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
-            dst = dst_root / sub / src.name
+            dst = dst_dir / src.name
             if dst.exists():
                 old = dst.read_text(encoding="utf-8")
                 if old == text:

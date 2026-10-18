@@ -125,6 +125,23 @@ class FlashqTest(unittest.TestCase):
         p2.wait(timeout=30)
         self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
 
+    def test_install_claude_and_opencode(self):
+        claude = self.tmp / "claude_home"
+        env = {"FLASHQ_CLAUDE_HOME": str(claude)}
+        (claude / "commands").mkdir(parents=True)
+        (claude / "commands" / "flash-check.md").write_text("ของผู้ใช้เอง\n", encoding="utf-8")
+        r = self.run_q("install", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)  # ข้ามไฟล์ที่ไม่ได้มาจาก flashq
+        plan = (claude / "commands" / "flash-plan.md").read_text(encoding="utf-8")
+        self.assertIn("flashq:managed", plan)
+        self.assertNotIn("{{FLASHQ}}", plan)
+        self.assertEqual((claude / "commands" / "flash-check.md").read_text(encoding="utf-8"), "ของผู้ใช้เอง\n")
+        self.assertTrue((self.tmp / "command" / "flash.md").exists())
+        r = self.run_q("install", "--force", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("flashq:managed", (claude / "commands" / "flash-check.md").read_text(encoding="utf-8"))
+        self.assertTrue(list((claude / "commands").glob("flash-check.md.bak-flashq-*")))
+
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")
         self.assertEqual(r.returncode, 0, r.stdout)
