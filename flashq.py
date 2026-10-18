@@ -18,7 +18,7 @@
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
-  python flashq.py init [--project <dir>] [--force] [--install]         ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
+  python flashq.py init [--project <dir>] [--force] [--install] [--commit]       ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
   python flashq.py config schedule auto|fifo · config starve_min 120     โหมดจัดคิว · กันอดตาย (นาที)
@@ -1203,6 +1203,28 @@ def cmd_init(a) -> int:
     if not configured_model():
         todo.append(f"ตั้ง agent.flash-worker.model ใน {OC_CONFIG} (หรือส่ง --model ตอน run)")
 
+    # 6) --commit: commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้างอยู่) · push เมื่ออยู่ branch หลักและมี remote
+    if a.commit and is_git:
+        mine = [p for p in (".flash.json", ".gitignore", (root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md").relative_to(root).as_posix())
+                if (root / p).exists()]
+        dirty = _git(root, "status", "--porcelain", "--", *mine)
+        if dirty:
+            subprocess.run(["git", "-C", str(root), "add", "--", *mine], check=False)
+            r = subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
+                                "--", *mine], capture_output=True, text=True)
+            print("commit     " + ("สำเร็จ" if r.returncode == 0 else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+            todo = [t for t in todo if not t.startswith("commit")]
+        else:
+            print("commit     ไม่มีอะไรต้อง commit")
+        branch, remote = _git(root, "branch", "--show-current"), new.get("remote", "origin")
+        if _git(root, "remote") and branch == new["main_branch"]:
+            r = subprocess.run(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"],
+                               capture_output=True, text=True)
+            print("push       " + (f"{remote}/{new['main_branch']} สำเร็จ" if r.returncode == 0
+                                     else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+        elif _git(root, "remote"):
+            todo.append(f"อยู่ branch '{branch}' ไม่ใช่ {new['main_branch']} → merge เข้า {new['main_branch']} แล้ว push เอง")
+
     print("\nพร้อมใช้ · ทดสอบการเชื่อมต่อ: " + f"python {REPO / 'flashq.py'} run --message \"ตอบแค่คำว่า PONG\" --project \"{root}\"")
     if todo:
         print("ขั้นต่อไป:")
@@ -1727,6 +1749,7 @@ def main() -> int:
     ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")
     ini.add_argument("--force", action="store_true", help="ทับช่องใน .flash.json ด้วยค่าที่ตรวจเจอ")
     ini.add_argument("--install", action="store_true", help="ติดตั้งคำสั่ง global ที่ขาดให้ด้วย (เหมือน install)")
+    ini.add_argument("--commit", action="store_true", help="commit เฉพาะไฟล์ที่ init แตะ + push (ถ้าอยู่ branch หลัก)")
     ini.set_defaults(fn=cmd_init)
     pr = sp.add_parser("prune", help="ลบงานที่จบแล้ว + log ที่เก่ากว่า N วัน")
     pr.add_argument("--days", type=float, default=30)

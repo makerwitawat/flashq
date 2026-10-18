@@ -780,6 +780,20 @@ class NewProjectTest(unittest.TestCase):
         cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
         self.assertEqual((cfg["main_branch"], cfg["rules"]), ("main", "x"))
 
+    def test_init_commit_pushes_only_own_files(self):
+        self.make_repo("main")
+        (self.proj / "other.txt").write_text("ค้าง\n", encoding="utf-8")  # ไฟล์ค้างที่ init ต้องไม่แตะ
+        r = self.run_q("init", "--commit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("push       origin/main สำเร็จ", r.stdout)
+        self.git(self.proj, "fetch", "-q", "origin")
+        files = self.git(self.proj, "ls-tree", "-r", "--name-only", "origin/main").split()
+        self.assertIn(".flash.json", files)
+        self.assertNotIn("other.txt", files)
+        self.assertIn("?? other.txt", self.git(self.proj, "status", "--short"))
+        r2 = self.run_q("init", "--commit")  # รันซ้ำ = ไม่มีอะไรต้อง commit
+        self.assertIn("ไม่มีอะไรต้อง commit", r2.stdout)
+
     def test_init_no_remote_disables_plan_in_remote(self):
         shutil.rmtree(self.proj)
         self.proj.mkdir()

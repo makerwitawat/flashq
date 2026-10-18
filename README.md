@@ -34,8 +34,9 @@ python D:\MyCode\flashq\flashq.py install
 ## โปรเจกต์ใหม่ (ครั้งเดียวต่อโปรเจกต์)
 ```
 cd <โฟลเดอร์โปรเจกต์>
-python D:\MyCode\flashq\flashq.py init [--install] [--force]
+python D:\MyCode\flashq\flashq.py init --install --commit       # ครบในคำสั่งเดียว
 ```
+**ง่ายสุด:** พิมพ์ `/flash-init` ใน Claude Code ที่โปรเจกต์นั้น (หรือสั่ง `/flash-plan` ได้เลย — ถ้าไม่มี `.flash.json` จะรัน init ให้เอง) · ตัวเลือก: `--install` ติดตั้งคำสั่ง global ที่ขาด · `--commit` commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้าง) + push ถ้าอยู่ branch หลัก · `--force` ทับด้วยค่าที่ตรวจเจอ
 - ตรวจ `remote` + branch หลัก (`main`/`master`/อื่น) จาก git เอง แล้วเขียน `.flash.json` · เพิ่ม `.tmp/` ใน `.gitignore` · คัดลอกแม่แบบแผนไป `docs/plans/` · เช็ก `opencode` + คำสั่ง global (`--install` = ติดตั้งที่ขาดให้) · ไม่มี remote = ตั้ง `require_plan_in_remote: false`
 - ไม่ทับค่าที่ตั้งไว้ใน `.flash.json` (`--force` = ทับด้วยค่าที่ตรวจเจอ) · รันซ้ำได้ · **ไม่ commit/push ให้** — ท้ายผลลัพธ์บอกขั้นถัดไป
 - ไม่รัน `init` ก็ได้: ถ้า `.flash.json` ไม่ได้ตั้ง `main_branch`/`remote` ตอน `run` จะตรวจจาก git เอง (remote HEAD → `origin/main`/`origin/master` ที่มีจริง) · ตั้งเองใน `.flash.json` ชนะเสมอ
