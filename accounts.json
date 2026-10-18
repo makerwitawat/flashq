@@ -1,0 +1,11 @@
+{
+  "agent": "flash-worker",
+  "_note": "ลำดับบัญชี (ฟรี/โควตาก่อน · จ่ายเงินท้ายสุด) — ทุกตัวต้องเป็นโมเดลเดียวกัน · ชื่อ provider ต้องมีใน ~/.config/opencode/opencode.json",
+  "accounts": [
+    ["cc", "commandcode/deepseek/deepseek-v4.1-flash"],
+    ["cc2", "commandcode2/deepseek/deepseek-v4.1-flash"],
+    ["go2", "opencode-go2/deepseek-v4.1-flash"],
+    ["go3", "opencode-go3/deepseek-v4.1-flash"],
+    ["inferx", "inferx/deepseek-v4.1-flash"]
+  ]
+}
