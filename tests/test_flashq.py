@@ -233,6 +233,68 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(d2["lines"], ["PONG"])
         self.assertEqual(d2["offset"], log.stat().st_size)
 
+    def test_ui_stop_running_and_dead(self):
+        """ui: หยุดงานที่กำลังทำ (ต้อง confirm=id · สั่ง abort session บน server) + ป้ายงานที่ process ตาย + รับทราบ"""
+        import http.server
+        import threading
+        sys.path.insert(0, str(REPO))
+        import flashq
+        hits = []
+
+        class Fake(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                hits.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Length", "4")
+                self.end_headers()
+                self.wfile.write(b"true")
+
+            def log_message(self, *a):
+                pass
+        oc = http.server.HTTPServer(("127.0.0.1", 0), Fake)
+        threading.Thread(target=oc.serve_forever, daemon=True).start()
+        self.addCleanup(oc.shutdown)
+
+        (self.home / "jobs").mkdir(parents=True)
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait(timeout=30)))
+        st0 = flashq.proc_start(sleeper.pid)
+        run_id, dead_id = "20990101_000000_2", "20980101_000000_3"
+        (self.home / "running.lock").write_text(json.dumps({"id": run_id, "pid": sleeper.pid, "pid_start": st0}), encoding="utf-8")
+        (self.home / "jobs" / f"{run_id}.json").write_text(json.dumps(
+            {"id": run_id, "status": "running", "pid": sleeper.pid, "pid_start": st0, "session": "ses_x",
+             "attach": f"http://127.0.0.1:{oc.server_address[1]}", "created": "2099-01-01 00:00:00",
+             "started": "2099-01-01 00:00:01", "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}), encoding="utf-8")
+        (self.home / "jobs" / f"{dead_id}.json").write_text(json.dumps(
+            {"id": dead_id, "status": "running", "pid": 999999, "created": "2098-01-01 00:00:00",
+             "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-02"}), encoding="utf-8")
+        base = self.start_ui()
+        token = re.search(r'const TOKEN = "([^"]+)"', self.http(base + "/")[1]).group(1)
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["running"]["id"], run_id)
+        self.assertEqual([d["id"] for d in st["dead"]], [dead_id])
+        self.assertIn("run PLAN.md T-02 --project", st["dead"][0]["rerun"])
+
+        self.assertEqual(self.http(base + "/api/stop", json.dumps({"id": run_id}).encode(), hdr)[0], 400)
+        self.assertEqual(self.http(base + "/api/stop", json.dumps({"id": run_id, "confirm": run_id}).encode(),
+                                   {"Content-Type": "application/json"})[0], 403)
+        code, body = self.http(base + "/api/stop", json.dumps({"id": run_id, "confirm": run_id}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        self.assertIn("หยุด session ses_x", json.loads(body)["message"])
+        self.assertEqual(len(hits), 1)
+        self.assertTrue(hits[0].startswith("/session/ses_x/abort?directory="), hits)
+        sleeper.wait(timeout=30)
+        self.assertFalse((self.home / "running.lock").exists())
+
+        code, body = self.http(base + "/api/dismiss", json.dumps({"id": dead_id}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertIsNone(st["running"])
+        self.assertEqual(st["dead"], [])
+        self.assertEqual({h["id"]: h["state"] for h in st["history"]}, {run_id: "cancelled", dead_id: "dead"})
+
     def test_ui_second_instance_reuses(self):
         """เปิด ui ซ้ำพอร์ตเดิม → ไม่ bind ซ้อน (Windows SO_REUSEADDR) แต่บอกว่าเปิดอยู่แล้วและจบ 0"""
         base = self.start_ui()

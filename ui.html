@@ -65,6 +65,10 @@ td.nw { white-space: nowrap; }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
 #toast { position: fixed; right: 16px; bottom: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
 #toast.show { opacity: .95; }
+.warn { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 8%, var(--panel)); }
+.warn h2 { color: var(--fail); }
+.dead-item { padding: 8px 0; border-top: 1px solid var(--line); }
+.dead-item:first-of-type { border-top: 0; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 </style>
 </head>
@@ -77,6 +81,10 @@ td.nw { white-space: nowrap; }
 </header>
 <main>
   <div class="col">
+    <section class="warn" id="deadBox" hidden>
+      <h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2>
+      <div id="dead"></div>
+    </section>
     <section>
       <h2>กำลังทำ</h2>
       <div id="running"></div>
@@ -159,8 +167,21 @@ function render() {
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
     </div>
-    <div class="row" style="margin-top:8px"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${checkBtn(r)}</div>`
+    <div class="row" style="margin-top:8px"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${checkBtn(r)}
+      <span style="flex:1"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div>`
     : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ</div>`;
+
+  $("deadBox").hidden = !s.dead.length;
+  $("dead").innerHTML = s.dead.map((j) => `<div class="dead-item">
+    <div><b>${esc(j.project_name)}</b> <span class="mono">${esc(what(j))}</span>
+      <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
+    ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนส่งใหม่</div>` : ""}
+    <div class="row" style="margin-top:4px">
+      <button data-log="${esc(j.id)}">ดู log</button>
+      ${j.rerun ? `<button data-copy="${esc(j.rerun)}">คัดลอกคำสั่งส่งใหม่</button>` : ""}
+      ${checkBtn(j)}
+      <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
+    </div></div>`).join("");
 
   $("qcount").textContent = s.queued.length ? `(${s.queued.length} งาน)` : "";
   $("queued").innerHTML = s.queued.length ? `<div class="table-wrap"><table>
@@ -233,13 +254,31 @@ async function pollLog() {
 }
 
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cancel],[data-switch],[data-log]");
+  const t = ev.target.closest("[data-copy],[data-cancel],[data-stop],[data-dismiss],[data-switch],[data-log]");
   if (!t) return;
   if (t.dataset.copy) { ev.stopPropagation(); return copyText(t.dataset.copy); }
   if (t.dataset.cancel) {
     ev.stopPropagation();
     if (!confirm(`ยกเลิกงาน ${t.dataset.cancel} ?`)) return;
     const d = await post("/api/cancel", { id: t.dataset.cancel }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  }
+  if (t.dataset.stop) {
+    ev.stopPropagation();
+    const id = t.dataset.stop, j = state?.running;
+    if (!confirm(`หยุดงานที่กำลังทำ?
+
+${j ? j.project_name + " · " + what(j) : id}
+
+opencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง`)) return;
+    const tail = id.slice(-5);
+    const typed = prompt(`ยืนยันชั้นที่ 2: พิมพ์ 5 ตัวท้ายของ job (${tail}) เพื่อหยุดงาน`);
+    if (typed === null) return;
+    if (typed.trim() !== tail) { toast("พิมพ์ไม่ตรง — ไม่ได้หยุดงาน"); return; }
+    const d = await post("/api/stop", { id, confirm: id }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  }
+  if (t.dataset.dismiss) {
+    ev.stopPropagation();
+    const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.switch) {
     const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh();

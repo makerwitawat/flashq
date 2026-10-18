@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
-LIVE_URL = "http://127.0.0.1:4096"
+LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 START_LIMIT_SEC = 180
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
 DEFAULTS = {
@@ -371,6 +371,8 @@ def cmd_run(a) -> int:
         if attach == LIVE_URL and not ensure_live_server(exe):
             print("WARN: เปิด server 4096 ไม่ขึ้น → รันแยก (ดูสดไม่ได้)", flush=True)
             attach = ""
+        job["attach"] = attach
+        save_job(job)
         timeout_min = a.timeout_min or cfg["timeout_min"]
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
         while True:
@@ -460,17 +462,36 @@ def cmd_log(a) -> int:
     return 0
 
 
+def abort_session(j: dict) -> str:
+    """สั่ง opencode server หยุด session ของงาน (ฆ่า `opencode run --attach` อย่างเดียว session บน server ยังเดินต่อ)
+    คืนข้อความผล ("" = ไม่ต้องทำ)"""
+    import urllib.parse
+    import urllib.request
+    server = j.get("attach", LIVE_URL)
+    if not j.get("session") or not server:
+        return ""
+    url = (f"{server.rstrip('/')}/session/{urllib.parse.quote(j['session'])}/abort?"
+           + urllib.parse.urlencode({"directory": j.get("project", "")}))
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=5).read()
+        return f"หยุด session {j['session']} บน server แล้ว"
+    except Exception as e:
+        return f"WARN: หยุด session {j['session']} บน server ไม่ได้ ({e})"
+
+
 def cancel_job(j: dict) -> tuple[bool, str]:
     """ยกเลิกงานที่รอคิว/กำลังทำ (ใช้ร่วมกับ cmd_cancel และหน้า ui)"""
-    if live_state(j) not in ("queued", "running"):
-        return False, f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {live_state(j)})"
+    st = live_state(j)
+    if st not in ("queued", "running"):
+        return False, f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {st})"
+    note = abort_session(j) if st == "running" else ""
     kill_tree(j["pid"])
     if j.get("child_pid"):
         kill_tree(j["child_pid"])
     j.update(status="cancelled", finished=now())
     save_job(j)
     release(j)
-    return True, f"ยกเลิก {j['id']} แล้ว"
+    return True, f"ยกเลิก {j['id']} แล้ว" + (f" · {note}" if note else "")
 
 
 def cmd_cancel(a) -> int:
@@ -576,12 +597,18 @@ def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
     clear_stale_lock()
     held = read_json(LOCK)
-    running, queued, history = None, [], []
+    running, queued, history, dead = None, [], [], []
     for j in jobs():
         st = live_state(j)
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "created", "started", "finished", "session", "result", "rc")}
         row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
+        if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
+            row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
+                       child_alive=pid_alive(j.get("child_pid") or 0),
+                       rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
+                              if j.get("plan") else ""))
+            dead.append(row)
         if st == "running" and (not held or held.get("id") == j["id"]):
             row["elapsed_sec"] = _secs(j.get("started", ""))
             running = row
@@ -589,7 +616,8 @@ def ui_state() -> dict:
             row["wait_sec"] = _secs(j.get("created", ""))
             queued.append(row)
         else:
-            row["duration_sec"] = _secs(j.get("started") or j.get("created", ""), j.get("finished", ""))
+            row["duration_sec"] = (_secs(j.get("started") or j.get("created", ""), j["finished"])
+                                   if j.get("finished") else None)  # งานตายไม่มีเวลาจบ = ไม่รู้ระยะเวลา
             history.append(row)
     for i, row in enumerate(queued, 1):
         row["position"] = i
@@ -598,7 +626,7 @@ def ui_state() -> dict:
     providers = cfg.get("provider", {})
     acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
                 for s, m in accs]
-    return {"now": now(), "lock": held, "running": running, "queued": queued, "history": history[::-1][:300],
+    return {"now": now(), "lock": held, "running": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
             "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in history + queued + ([running] if running else []) if r["project_name"]})}
 
@@ -727,6 +755,24 @@ def make_ui_server(port: int = 4097):
                     return self._send(409, {"ok": False, "message": f"ยกเลิกได้เฉพาะงานที่รอคิว (สถานะ {live_state(j)})"})
                 ok, msg = cancel_job(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/stop":  # หยุดงานที่กำลังทำ — หน้าเว็บยืนยัน 2 ชั้น + body ต้องมี confirm=id
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                if body.get("confirm") != j["id"]:
+                    return self._send(400, {"ok": False, "message": "ต้องยืนยันด้วย id ของงาน"})
+                if live_state(j) != "running":
+                    return self._send(409, {"ok": False, "message": f"งานนี้ไม่ได้กำลังทำ (สถานะ {live_state(j)})"})
+                ok, msg = cancel_job(j)
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
+                    return self._send(409, {"ok": False, "message": "ไม่ใช่งานที่ process ตายค้างสถานะ"})
+                j.update(status="dead", dismissed=now())  # ไม่ใส่ finished: ไม่รู้ว่าตายเมื่อไร
+                save_job(j)
+                release(j)
+                return self._send(200, {"ok": True, "message": f"บันทึก {j['id']} เป็น 'ตาย' แล้ว"})
             if path == "/api/switch":
                 import contextlib
                 import io
