@@ -126,7 +126,13 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 [hidden] { display: none !important; }
 #cmdPreview { background: var(--code); border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.4rem 0.6rem; overflow-wrap: anywhere; white-space: pre-wrap; margin: 0; }
 #submitMsg { white-space: pre-wrap; margin: 0; }
-#submitMsg.err { color: var(--fail); }
+#submitMsg.err, #rnMsg.err { color: var(--fail); }
+.run-item { padding: 0.6rem 0; border-top: 1px solid var(--line); }
+.run-item:first-child { border-top: 0; padding-top: 0; }
+.rn-cmp { border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
+.rn-cmp.bad { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 10%, var(--panel)); }
+.rn-list { margin: 0.2rem 0 0 1.2rem; padding: 0; }
+.rn-warn { margin: 0.3rem 0 0 1.2rem; padding: 0; color: var(--muted); }
 
 #toast { position: fixed; right: 1rem; bottom: 1rem; background: var(--text); color: var(--bg); padding: 0.5rem 0.9rem; border-radius: 0.4rem; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 2rem); z-index: 100; white-space: pre-wrap; }
 #toast.show { opacity: .95; }
@@ -153,7 +159,9 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
       <div class="pb" id="dead"></div>
     </section>
     <section class="panel" data-panel="running">
-      <div class="ph"><h2>กำลังทำ</h2><span class="sp"></span>
+      <div class="ph"><h2>กำลังทำ <span class="muted" id="slotInfo"></span></h2><span class="sp"></span>
+        <label class="muted" title="จำนวนงานที่รันพร้อมกันได้ (max_parallel) · 1 = ทีละงานแบบเดิม">พร้อมกัน
+          <select id="maxPar"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
         <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb" id="running"></div>
     </section>
@@ -259,6 +267,18 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
     </div>
   </form>
 </dialog>
+<dialog id="runNowDlg">
+  <form method="dialog">
+    <h2>รันเลย (คู่ขนาน) — ตรวจก่อนรัน</h2>
+    <div id="rnBody">กำลังตรวจ…</div>
+    <label id="rnAckRow" hidden style="color:var(--fail)"><input type="checkbox" id="rnAck"> <b>เข้าใจแล้วว่ามีไฟล์ซ้อน — ยืนยันจะรันพร้อมกัน</b></label>
+    <p id="rnMsg"></p>
+    <div class="row" style="justify-content:flex-end">
+      <button value="cancel" formnovalidate>ปิด</button>
+      <button id="rnGo" class="primary" value="default">รันเลย</button>
+    </div>
+  </form>
+</dialog>
 <div id="toast"></div>
 
 <script>
@@ -351,7 +371,9 @@ function actBtns(j, { retry = true, short = true } = {}) {
 function render() {
   const s = state;
   $("updated").textContent = `อัปเดต ${s.now}`;
-  document.title = s.running ? `▶ ${dur(s.running.elapsed_sec)} · ${s.running.project_name} · flashq` : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
+  const runs = s.running_list || (s.running ? [s.running] : []);
+  document.title = runs.length ? `▶${runs.length > 1 ? runs.length + " งาน" : ""} ${dur(runs[0].elapsed_sec)} · ${runs[0].project_name} · flashq`
+    : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
 
   $("deadBox").hidden = !s.dead.length;
   $("dead").innerHTML = s.dead.map((j) => `<div class="dead-item">
@@ -364,10 +386,13 @@ function render() {
       <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
     </div></div>`).join("");
 
-  const r = s.running;
-  $("running").innerHTML = r ? `
+  const sl = s.slots || { used: runs.length, max: 1 };
+  $("slotInfo").textContent = `(ใช้ช่อง ${sl.used}/${sl.max}${sl.used > sl.max ? " · มีช่องพิเศษ" : ""})`;
+  if (document.activeElement !== $("maxPar")) $("maxPar").value = String(sl.max);
+  $("running").innerHTML = runs.length ? runs.map((r) => `<div class="run-item">
     <div class="kv">
-      <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b></div>
+      <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b>
+        ${r.slot ? `<span class="muted">· ช่อง ${r.slot}${r.extra ? " (พิเศษ)" : ""}</span>` : ""}</div>
       <div>โปรเจกต์</div><div>${esc(r.project_name)} <span class="muted mono">${esc(r.project)}</span></div>
       <div>แผน</div><div class="mono">${esc(r.message ? "(ทดสอบ --message)" : r.plan)}</div>
       <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}</div>
@@ -376,7 +401,7 @@ function render() {
     </div>
     <div class="row" style="margin-top:0.5rem"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${actBtns(r, { retry: false, short: false })}
       ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : ""}
-      <span class="sp"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div>`
+      <span class="sp"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div></div>`).join("")
     : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ${s.queued.length ? "" : " · กด <b>＋ ส่งงานใหม่</b> เพื่อรันคิว"}</div>`;
 
   $("qcount").textContent = s.queued.length ? `(${s.queued.length} งาน)` : "";
@@ -384,7 +409,8 @@ function render() {
     <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
     ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td><td class="nw">${dur(j.wait_sec)}</td>
-      <td class="act"><button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
+      <td class="act">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="ให้งานนี้ได้ช่องเพิ่มทันที รันพร้อมงานที่กำลังทำ (ตรวจไฟล์ซ้อนก่อน)">รันเลย (คู่ขนาน)</button>`}
+        <button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`;
 
   const sel = $("projFilter"), cur = sel.value || store.get("proj", "");
@@ -429,7 +455,7 @@ $("notifyBtn").onclick = async () => {
 };
 function checkFinished() {
   const now = {};
-  if (state.running) now[state.running.id] = "running";
+  (state.running_list || []).forEach((j) => { now[j.id] = "running"; });
   state.queued.forEach((j) => { now[j.id] = "queued"; });
   state.history.forEach((j) => { now[j.id] = j.state; });
   if (prevStates) {
@@ -476,7 +502,7 @@ function openLog(id) {
   logJob = id; logOffset = 0; logAttempt = 0; logLines = []; logDone = false;
   $("logTitle").textContent = id; $("attemptSel").innerHTML = ""; $("log").textContent = ""; $("log").dataset.mode = "all";
   const p = $("logBox"); p.classList.remove("collapsed");
-  const j = [state?.running, ...(state?.queued || []), ...(state?.history || []), ...(state?.dead || [])].find((x) => x && x.id === id);
+  const j = [...(state?.running_list || []), ...(state?.queued || []), ...(state?.history || []), ...(state?.dead || [])].find((x) => x && x.id === id);
   logSession = j?.session || ""; $("logOpen").hidden = !logSession;
   if (document.body.dataset.layout !== "3") p.scrollIntoView({ behavior: "smooth", block: "start" });
   if (state) render();
@@ -585,7 +611,7 @@ $("submitGo").onclick = async (e) => {
 
 /* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cancel],[data-stop],[data-dismiss],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
+  const t = ev.target.closest("[data-copy],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
   const panel = t.closest(".panel");
   if (t.hasAttribute("data-collapse")) {
@@ -599,8 +625,9 @@ document.addEventListener("click", async (ev) => {
     if (!confirm(`ยกเลิกงาน ${t.dataset.cancel} ?`)) return;
     const d = await post("/api/cancel", { id: t.dataset.cancel }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
+  if (t.dataset.runnow) { ev.stopPropagation(); return openRunNow(t.dataset.runnow); }
   if (t.dataset.stop) {
-    const id = t.dataset.stop, j = state?.running;
+    const id = t.dataset.stop, j = (state?.running_list || []).find((x) => x.id === id);
     if (!confirm(`หยุดงานที่กำลังทำ?\n\n${j ? j.project_name + " · " + what(j) : id}\n\nopencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง`)) return;
     const tail = id.slice(-5);
     const typed = prompt(`ยืนยันชั้นที่ 2: พิมพ์ 5 ตัวท้ายของ job (${tail}) เพื่อหยุดงาน`);
@@ -619,6 +646,58 @@ document.addEventListener("click", async (ev) => {
   if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.log) openLog(t.dataset.log);
 });
+/* ---------- รันเลย (คู่ขนาน) + จำนวนช่อง ---------- */
+const rnDlg = $("runNowDlg");
+let rnJob = null, rnRep = null;
+async function openRunNow(id) {
+  const j = (state?.queued || []).find((x) => x.id === id);
+  rnJob = id; rnRep = null;
+  $("rnBody").textContent = "กำลังตรวจไฟล์ที่แผนจะแตะ…"; $("rnMsg").textContent = ""; $("rnMsg").className = "";
+  $("rnAck").checked = false; $("rnAckRow").hidden = true; $("rnGo").disabled = true;
+  rnDlg.showModal();
+  let rep;
+  try { const r = await fetch(`/api/overlap?id=${encodeURIComponent(id)}`, { cache: "no-store" }); rep = await r.json(); if (!r.ok) throw new Error(rep.error); }
+  catch (e) { $("rnBody").textContent = "ตรวจไม่ได้: " + (e.message || "เชื่อมต่อ server ไม่ได้"); return; }
+  if (rnJob !== id) return;
+  rnRep = rep;
+  const fileList = (fs) => fs === null ? `<i>ตรวจไม่ได้</i>` : fs.length ? `<ul class="rn-list mono">${fs.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : `<i>ไม่พบ path ในงานที่สั่ง</i>`;
+  const same = rep.running.some((r) => r.same_project);
+  const models = [...new Set([j?.model, ...rep.running.map((r) => r.model)].filter(Boolean))];
+  let h = `<div><b>${esc(j?.project_name || "")}</b> <span class="mono">${esc(j ? what(j) : id)}</span></div>
+    <div class="muted">ใช้ช่อง ${rep.used}/${rep.max_parallel} → งานนี้ได้ช่องเพิ่มทันที (ช่องพิเศษครั้งเดียว ไม่เปลี่ยนค่าพร้อมกัน)</div>`;
+  if (!rep.running.length) h += `<div class="rn-cmp">ไม่มีงานที่กำลังทำ — งานนี้จะเริ่มเลย</div>`;
+  for (const r of rep.running) {
+    const st = r.overlap === null ? (r.same_project ? `<b style="color:var(--quota)">ตรวจไฟล์ไม่ได้</b> (ดึง path จากแผนไม่ได้ — ตรวจเองก่อน)` : "คนละโปรเจกต์")
+      : r.overlap.length ? `<b style="color:var(--fail)">⚠ ไฟล์ซ้อน ${r.overlap.length} ไฟล์</b>${fileList(r.overlap)}` : `<span style="color:var(--ok)">✓ ไม่มีไฟล์ซ้อน</span>`;
+    h += `<div class="rn-cmp${r.overlap && r.overlap.length ? " bad" : ""}">
+      <div>เทียบกับงานที่กำลังทำ: <b>${esc(r.project_name)}</b> <span class="mono">${esc(r.message ? "ข้อความ: " + r.message : r.plan + " " + r.tasks)}</span></div>
+      <div>${r.same_project ? `<b style="color:var(--quota)">โปรเจกต์เดียวกัน</b>` : "คนละโปรเจกต์"} · ${st}</div></div>`;
+  }
+  h += `<details><summary class="muted">ไฟล์ที่งานนี้จะแตะ (จากแผน)</summary>${fileList(rep.files)}</details>
+    <ul class="rn-warn">
+      <li>ใช้บัญชี/โควตาเดียวกัน${models.length ? ` (<span class="mono">${esc(models.join(", "))}</span>)` : ""} — สองงานกินโควตาพร้อมกัน และถ้า QUOTA แล้วสลับบัญชี จะกระทบทุกงานที่รันอยู่ (งานจากโค้ดใหม่จะไม่สลับซ้ำถ้างานอื่นสลับไปแล้ว)</li>
+      ${same ? `<li>โปรเจกต์เดียวกันใช้ checkout เดียวกัน — build/เทสต์ของงานหนึ่งอาจเห็นไฟล์ที่อีกงานแก้ค้างครึ่งทาง (คิว commit/build ของโปรเจกต์ เช่น commit-worklist.ps1 กับ build_lock ของ IRIS_CODE_1.2 กันชนตอน commit/build แต่ไม่กันไฟล์ครึ่งแก้)</li>` : ""}
+      ${rep.legacy ? `<li>งานนี้ส่งด้วยโค้ดรุ่นก่อน → วิธีรันเลย = ย้ายงานที่ถือช่อง 1 ไปช่องเลขอื่น (งานนั้นทำต่อปกติ) แล้วงานนี้เข้าช่อง 1 ภายใน ~3 วิ · งานนี้ไม่มีระบบกันสลับบัญชีซ้ำ</li>` : ""}
+    </ul>`;
+  $("rnBody").innerHTML = h;
+  $("rnAckRow").hidden = !rep.any_overlap;
+  $("rnGo").disabled = rep.any_overlap;
+}
+$("rnAck").onchange = () => { $("rnGo").disabled = !!rnRep?.any_overlap && !$("rnAck").checked; };
+$("rnGo").onclick = async (e) => {
+  e.preventDefault();
+  if (!rnJob || !rnRep) return;
+  $("rnGo").disabled = true; $("rnMsg").className = ""; $("rnMsg").textContent = "กำลังสั่ง…";
+  const d = await post("/api/runnow", { id: rnJob, ack_overlap: $("rnAck").checked });
+  if (d.ok) { rnDlg.close(); toast(d.message); const id = rnJob; refresh(); setTimeout(() => openLog(id), 800); }
+  else { $("rnMsg").className = "err"; $("rnMsg").textContent = d.message || d.error || "ผิดพลาด"; $("rnGo").disabled = false; }
+};
+$("maxPar").onchange = async () => {
+  const n = +$("maxPar").value;
+  if (n > 1 && !confirm(`ให้รันพร้อมกันได้ ${n} งาน?\n\nทุกงานใช้บัญชี/โควตาเดียวกัน และงานโปรเจกต์เดียวกันจะแก้ checkout เดียวกันพร้อมกัน\n(งานที่รอคิวจะเริ่มเพิ่มทันทีถ้ามีช่องว่าง)`)) { $("maxPar").value = String(state?.slots?.max || 1); return; }
+  const d = await post("/api/config", { max_parallel: n }); toast(d.message || d.error || "ผิดพลาด"); refresh();
+};
+
 $("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
 $("projFilter").onchange = () => { store.set("proj", $("projFilter").value); render(); };
 $("stateFilter").onchange = () => render();

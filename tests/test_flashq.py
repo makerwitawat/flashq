@@ -397,6 +397,153 @@ class FlashqTest(unittest.TestCase):
         self.assertFalse(old_log.exists())
         self.assertTrue((self.home / "jobs" / "new.json").exists())
 
+    def jobs_by_tasks(self):
+        out = {}
+        for f in (self.home / "jobs").glob("*.json"):
+            j = json.loads(f.read_text(encoding="utf-8"))
+            out[j.get("tasks")] = j
+        return out
+
+    def wait_for(self, cond, sec=40, msg="เงื่อนไขไม่เป็นจริง"):
+        t0 = time.time()
+        while time.time() - t0 < sec:
+            v = cond()
+            if v:
+                return v
+            time.sleep(0.3)
+        self.fail(msg)
+
+    def test_parallel_two_slots(self):
+        """max_parallel=2 (CLI config) → 2 งานรันพร้อมกันคนละช่อง · status แสดงทุกช่อง · ค่าเริ่มต้นยังเป็น 1"""
+        self.assertIn("max_parallel = 1", self.run_q("config").stdout)
+        r = self.run_q("config", "max_parallel", "9")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        r = self.run_q("config", "max_parallel", "2")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
+        time.sleep(1.5)
+        p2 = self.run_q("run", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
+        self.wait_for(lambda: all(j.get("status") == "running" for j in self.jobs_by_tasks().values())
+                      and len(self.jobs_by_tasks()) == 2, msg="ไม่ได้รัน 2 งานพร้อมกัน")
+        st = self.run_q("status").stdout
+        self.assertIn("ช่อง 2/2", st)
+        self.assertIn("ช่อง 1", st)
+        self.assertTrue((self.home / "running.lock").exists())
+        self.assertTrue((self.home / "running-2.lock").exists())
+        o1, o2 = p1.communicate(timeout=120)[0], p2.communicate(timeout=120)[0]
+        self.assertIn("FLASH_RUN=OK", o1)
+        self.assertIn("FLASH_RUN=OK", o2)
+        self.assertNotIn("QUEUED", o2)
+        j = self.jobs_by_tasks()
+        self.assertEqual({j["T-01"]["slot"], j["T-02"]["slot"]}, {1, 2})
+        self.assertLess(j["T-02"]["started"], j["T-01"]["finished"])  # ซ้อนกันจริง
+        self.assertEqual(sorted(p.name for p in self.home.glob("running*.lock")), [])
+
+    def overlap_plan(self):
+        (self.proj / "PLAN.md").write_text(
+            "# plan\n## 1. กลุ่ม A\n"
+            "- [ ] **T-01** `src/a.cpp` ~10 (`Foo`)\n  - ก่อน: `old/ignored.cpp`\n  - commit: `fix(x): y (T-01)`\n"
+            "- [ ] **T-02** `src/a.cpp`\n  - ไฟล์: `include/b.h`\n"
+            "- [ ] **T-03** `src/c.cpp`\n"
+            "## 4. บันทึกผล\n`src/zzz.cpp`\n", encoding="utf-8")
+
+    def test_plan_files_and_overlap(self):
+        """ดึง path ไฟล์จากแผนตามงานที่สั่ง (ข้าม ก่อน/commit · ตรวจไม่ได้ = None) + เทียบไฟล์ซ้อน"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        self.overlap_plan()
+        P = str(self.proj)
+        self.assertEqual(flashq.plan_files(P, "PLAN.md", "T-01"), ["src/a.cpp"])
+        self.assertEqual(flashq.plan_files(P, "PLAN.md", "T-02..T-03"), ["include/b.h", "src/a.cpp", "src/c.cpp"])
+        self.assertIsNone(flashq.plan_files(P, "PLAN.md", "T-09"))
+        self.assertIsNone(flashq.plan_files(P, "NOPE.md", "T-01"))
+        self.assertIsNone(flashq.plan_files(P, "", ""))
+        self.assertTrue(flashq.paths_overlap("Src\\A.cpp", "src/a.cpp"))
+        self.assertTrue(flashq.paths_overlap("cworking/script/", "cworking/script/x.txt"))
+        self.assertTrue(flashq.paths_overlap("a.cpp", "src/a.cpp"))
+        self.assertFalse(flashq.paths_overlap("src/a.cpp", "lib/a.cpp"))
+
+    def test_ui_run_now_extra_slot(self):
+        """ปุ่มรันเลย: max_parallel=1 งานที่ 2 รอคิว → ตรวจไฟล์ซ้อน (ซ้อน = ต้อง ack) → ได้ช่องพิเศษ รันพร้อมงานแรก"""
+        self.overlap_plan()
+        p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "12"}, wait=False)
+        self.wait_for(lambda: self.jobs_by_tasks().get("T-01", {}).get("status") == "running")
+        p2 = self.run_q("run", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "1"}, wait=False)
+        j2 = self.wait_for(lambda: self.jobs_by_tasks().get("T-02"))
+        time.sleep(1.5)
+        self.assertEqual(self.jobs_by_tasks()["T-02"]["status"], "queued")
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        rep = json.loads(self.http(base + f"/api/overlap?id={j2['id']}")[1])
+        self.assertEqual(rep["running"][0]["overlap"], ["src/a.cpp"])
+        self.assertTrue(rep["running"][0]["same_project"])
+        self.assertTrue(rep["any_overlap"])
+        self.assertFalse(rep["legacy"])
+        body = json.dumps({"id": j2["id"]}).encode()
+        self.assertEqual(self.http(base + "/api/runnow", body, {"Content-Type": "application/json"})[0], 403)
+        self.assertEqual(self.http(base + "/api/runnow", body, hdr)[0], 409)  # ไฟล์ซ้อน ยังไม่ ack
+        code, out = self.http(base + "/api/runnow", json.dumps({"id": j2["id"], "ack_overlap": True}).encode(), hdr)
+        self.assertEqual(code, 200, out)
+        o2 = p2.communicate(timeout=60)[0]
+        self.assertIn("FLASH_RUN=OK", o2)
+        self.assertIsNone(p1.poll())  # งานแรกยังรันอยู่ = ได้ช่องพิเศษจริง
+        j = self.jobs_by_tasks()
+        self.assertEqual(j["T-02"]["slot"], 2)
+        self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
+        self.assertFalse((self.home / "run_now" / j2["id"]).exists())
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["slots"]["used"], 0)
+        self.assertEqual(st["slots"]["max"], 1)
+
+    def test_ui_config_and_legacy_run_now(self):
+        """/api/config ตั้ง max_parallel · รันเลยงานโค้ดเก่า (ไม่มี qv) = ย้ายเจ้าของ running.lock ไปช่องอื่นให้ช่อง 1 ว่าง"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        (self.home / "jobs").mkdir(parents=True)
+        procs = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"]) for _ in range(2)]
+        for sp in procs:
+            self.addCleanup(lambda sp=sp: (sp.kill(), sp.wait(timeout=30)))
+        run_id, q_id = "20990101_000000_5", "20990101_000001_6"
+        st0, st1 = (flashq.proc_start(sp.pid) for sp in procs)
+        lock = {"id": run_id, "pid": procs[0].pid, "pid_start": st0, "since": "2099-01-01 00:00:00"}
+        (self.home / "running.lock").write_text(json.dumps(lock), encoding="utf-8")
+        for jid, sp, st, status in ((run_id, procs[0], st0, "running"), (q_id, procs[1], st1, "queued")):
+            (self.home / "jobs" / f"{jid}.json").write_text(json.dumps(
+                {"id": jid, "status": status, "pid": sp.pid, "pid_start": st, "created": f"2099-01-01 00:00:0{jid[-1]}",
+                 "started": "2099-01-01 00:00:05", "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}),
+                encoding="utf-8")
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        self.assertEqual(self.http(base + "/api/config", json.dumps({"max_parallel": 0}).encode(), hdr)[0], 400)
+        self.assertEqual(self.http(base + "/api/config", json.dumps({"max_parallel": 3}).encode(),
+                                   {"Content-Type": "application/json"})[0], 403)
+        code, out = self.http(base + "/api/config", json.dumps({"max_parallel": 3}).encode(), hdr)
+        self.assertEqual(code, 200, out)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual((st["slots"]["used"], st["slots"]["max"]), (1, 3))
+        self.assertEqual([r["id"] for r in st["running_list"]], [run_id])
+        self.assertTrue(st["queued"][0]["legacy"])
+        code, out = self.http(base + "/api/runnow", json.dumps({"id": q_id}).encode(), hdr)
+        self.assertEqual(code, 200, out)
+        self.assertFalse((self.home / "running.lock").exists())
+        self.assertEqual(json.loads((self.home / "running-2.lock").read_text(encoding="utf-8"))["id"], run_id)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["running_list"][0]["slot"], 2)
+        # เจ้าของเดิม (โค้ดเก่า) ปล่อยล็อกด้วยการเทียบ id ที่ running.lock → ไม่ลบช่องของคนอื่น · พอ process ตาย ช่องที่ย้ายไปถูกล้างเอง
+        procs[0].kill()
+        procs[0].wait(timeout=30)
+        self.assertEqual(json.loads(self.http(base + "/api/state")[1])["slots"]["used"], 0)
+        self.assertFalse((self.home / "running-2.lock").exists())
+
+    def test_quota_no_double_switch(self):
+        """รันคู่ขนาน: QUOTA แต่บัญชีถูกงานอื่นสลับไปแล้ว → ใช้บัญชีนั้น ไม่สลับซ้ำ"""
+        other = "commandcode2/deepseek/deepseek-v4.1-flash"
+        r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota", "FAKE_SET_MODEL": other})
+        self.assertIn("โดยงานอื่น", r.stdout)
+        self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"], other)
+        calls = [json.loads(x) for x in self.args_out.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([c[c.index("--model") + 1] for c in calls], ["p1/m", other])
+
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")
         self.assertEqual(r.returncode, 0, r.stdout)

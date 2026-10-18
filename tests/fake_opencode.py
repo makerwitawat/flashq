@@ -4,6 +4,7 @@
   FAKE_SLEEP=<วินาที>   หน่วงก่อนจบ (ค่าเริ่มต้น 0)
   FAKE_MODE=ok|quota|nostart|fail
   FAKE_ARGS_OUT=<path>  เขียน argv ลงไฟล์ (ต่อท้าย)
+  FAKE_SET_MODEL=<model> (คู่ FAKE_MODE=quota) เขียนโมเดลนี้ลง FLASHQ_OPENCODE_CONFIG ก่อนตอบ quota
 """
 import json
 import os
@@ -21,6 +22,13 @@ sid = f"ses_fake{os.getpid()}"
 print(json.dumps({"type": "step_start", "sessionID": sid}), flush=True)
 time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 if mode == "quota":
+    if os.environ.get("FAKE_SET_MODEL"):  # จำลองงานอื่นที่รันคู่ขนานสลับบัญชีไปก่อน
+        cfg_path = os.environ["FLASHQ_OPENCODE_CONFIG"]
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["agent"]["flash-worker"]["model"] = os.environ["FAKE_SET_MODEL"]
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
     print(json.dumps({"type": "error", "sessionID": sid, "error": {"message": "429 rate limit"}}), flush=True)
     sys.exit(1)
 if mode == "fail":

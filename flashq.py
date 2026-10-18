@@ -5,7 +5,8 @@
 → จบ = พิมพ์ `FLASH_RUN=...` → Claude ตรวจต่อ
 
 ที่เก็บ:
-- โค้ด = โฟลเดอร์นี้ (repo flashq) · ข้อมูลตอนรัน = `%USERPROFILE%\\.flashq\\` (jobs/ logs/ running.lock) — ไม่อยู่ใน git ของโปรเจกต์ใด
+- โค้ด = โฟลเดอร์นี้ (repo flashq) · ข้อมูลตอนรัน = `%USERPROFILE%\\.flashq\\` (jobs/ logs/ running*.lock config.json) — ไม่อยู่ใน git ของโปรเจกต์ใด
+- ช่องรัน: ช่อง 1 = `running.lock` (ชื่อเดิม · เข้ากันกับ process โค้ดเก่า) · ช่อง n≥2 = `running-<n>.lock` · จำนวนช่อง = `max_parallel` ใน config.json (ค่าเริ่มต้น 1 = ทีละงานแบบเดิม)
 - ค่าเฉพาะโปรเจกต์ = `.flash.json` ที่รากโปรเจกต์ (ไม่มี = ค่าเริ่มต้น DEFAULTS)
 
 ใช้:
@@ -15,6 +16,8 @@
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
+  python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
+  python flashq.py runnow <id> [--force]                                ให้งานที่รอคิวได้ช่องพิเศษทันที (คู่ขนาน)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
@@ -33,6 +36,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
+CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
+CONFIG_DEFAULTS = {"max_parallel": 1}
+MAX_SLOTS = 8          # เพดานของ max_parallel
+QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
+SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 START_LIMIT_SEC = 180
@@ -174,48 +182,273 @@ def live_state(j: dict) -> str:
     return s
 
 
+def read_config() -> dict:
+    cfg = dict(CONFIG_DEFAULTS)
+    cfg.update(read_json(CONFIG))
+    return cfg
+
+
+def max_parallel() -> int:
+    try:
+        return min(MAX_SLOTS, max(1, int(read_config().get("max_parallel", 1))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def set_max_parallel(n: int) -> str:
+    """คืนข้อผิดพลาด ("" = สำเร็จ)"""
+    if not 1 <= n <= MAX_SLOTS:
+        return f"max_parallel ต้องอยู่ระหว่าง 1-{MAX_SLOTS}"
+    cfg = read_json(CONFIG)
+    cfg["max_parallel"] = n
+    write_json(CONFIG, cfg)
+    return ""
+
+
+def slot_path(n: int) -> Path:
+    return LOCK if n == 1 else HOME / f"running-{n}.lock"
+
+
+def slot_files() -> list[tuple[int, Path]]:
+    out = []
+    for f in HOME.glob("running*.lock"):
+        m = SLOT_RE.match(f.name)
+        if m:
+            out.append((int(m.group(1) or 1), f))
+    return sorted(out)
+
+
 def clear_stale_lock() -> None:
-    if not LOCK.exists():
-        return
-    held = read_json(LOCK)
-    if held and pid_alive(held.get("pid", 0), held.get("pid_start", 0)):
-        return
-    if read_json(LOCK) == held:  # ยังเป็นล็อกเดิมที่ตายแล้ว
-        LOCK.unlink(missing_ok=True)
+    """ลบช่องที่ process เจ้าของตายแล้ว (ทุกช่อง)"""
+    for _, f in slot_files():
+        held = read_json(f)
+        if held and pid_alive(held.get("pid", 0), held.get("pid_start", 0)):
+            continue
+        try:
+            if not held and time.time() - f.stat().st_mtime < 5:  # เพิ่งสร้าง (O_EXCL แล้วกำลังเขียน) — ยังไม่ใช่ล็อกตาย
+                continue
+        except OSError:
+            continue
+        if read_json(f) == held:  # ยังเป็นล็อกเดิมที่ตายแล้ว
+            f.unlink(missing_ok=True)
+
+
+def held_slots() -> list[dict]:
+    """ช่องที่ถูกใช้อยู่ (ล้างช่องตายก่อน) · [{id, pid, since, extra, slot}]"""
+    clear_stale_lock()
+    out = []
+    for n, f in slot_files():
+        h = read_json(f)
+        if h:
+            out.append({**h, "slot": n})
+    return out
+
+
+def take_slot(job: dict, extra: bool) -> int:
+    """จองช่องว่างเลขต่ำสุดแบบ O_EXCL · คืนเลขช่อง (0 = ไม่ได้)"""
+    for n in range(1, MAX_SLOTS * 4 + 1):
+        p = slot_path(n)
+        if p.exists():
+            continue
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"id": job["id"], "pid": os.getpid(), "pid_start": proc_start(os.getpid()), "since": now(),
+                       "extra": extra}, f, ensure_ascii=False)
+        return n
+    return 0
 
 
 def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
-    """คืน "ok" | "busy" | "timeout" · FIFO ตาม created ของงานที่ยังมีชีวิต"""
+    """คืน "ok" | "busy" | "timeout" · FIFO ตาม created ของงานที่ยังมีชีวิต
+    ได้ช่องเมื่อ ไม่มีงานรอก่อนหน้า + ช่องที่ใช้ < max_parallel · หรือมีสัญญาณ run_now (ช่องพิเศษ เกิน max_parallel ได้)"""
     t0, last = time.time(), None
     key = (job["created"], job["id"])
+    flag = RUN_NOW / job["id"]
     while True:
-        clear_stale_lock()
-        ahead = [j for j in jobs() if j.get("status") == "queued" and (j["created"], j["id"]) < key and live_state(j) == "queued"]
-        if not ahead and not LOCK.exists():
-            try:
-                fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"id": job["id"], "pid": os.getpid(), "pid_start": proc_start(os.getpid()), "since": now()}, f, ensure_ascii=False)
+        held = held_slots()
+        limit = max_parallel()
+        legacy_blocked = LOCK.exists()  # job โค้ดเก่ารอได้แค่ running.lock → ช่อง 1 ไม่ว่าง = ไม่นับว่าขวางคิว
+        ahead = [j for j in jobs() if j.get("status") == "queued" and (j["created"], j["id"]) < key
+                 and live_state(j) == "queued" and not (legacy_blocked and j.get("qv", 0) < QUEUE_VERSION)]
+        boost = flag.exists()
+        if boost or (not ahead and len(held) < limit):
+            n = take_slot(job, extra=boost and (bool(ahead) or len(held) >= limit))
+            if n:
+                flag.unlink(missing_ok=True)
+                job["slot"] = n
                 return "ok"
-            except FileExistsError:
-                pass
-        held = read_json(LOCK)
+            time.sleep(0.5)
+            continue
+        ids = ", ".join(h.get("id", "?") for h in held) or "-"
         if no_wait:
-            print(f"FLASH_RUN=BUSY มีงานอื่นทำอยู่ job={held.get('id', '?')} pid={held.get('pid', '?')}", flush=True)
+            print(f"FLASH_RUN=BUSY มีงานอื่นทำอยู่ job={ids} (ช่อง {len(held)}/{limit})", flush=True)
             return "busy"
-        pos = len(ahead) + (1 if LOCK.exists() else 0)
-        if pos != last:
-            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {held.get('id', '-')}) — รอคิว…", flush=True)
-            last = pos
+        pos = len(ahead) + 1
+        if (pos, len(held), limit) != last:
+            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids} · ช่อง {len(held)}/{limit}) — รอคิว…", flush=True)
+            last = (pos, len(held), limit)
         if time.time() - t0 > wait_min * 60:
             print(f"FLASH_RUN=QUEUE_TIMEOUT รอคิวเกิน {wait_min:g} นาที", flush=True)
             return "timeout"
-        time.sleep(3)
+        for _ in range(6):  # ~3 วิ แต่ตื่นทันทีเมื่อมีสัญญาณ run_now
+            time.sleep(0.5)
+            if flag.exists():
+                break
 
 
 def release(job: dict) -> None:
-    if read_json(LOCK).get("id") == job["id"]:
+    for _, f in slot_files():
+        if read_json(f).get("id") == job["id"]:
+            f.unlink(missing_ok=True)
+    (RUN_NOW / job["id"]).unlink(missing_ok=True)
+
+
+def request_run_now(j: dict) -> tuple[bool, str]:
+    """ให้งานที่รอคิวได้ช่องพิเศษทันที (เกิน max_parallel ได้ครั้งเดียว)
+    · job โค้ดใหม่ (qv>=2) = วางไฟล์สัญญาณ run_now/<id>
+    · job โค้ดเก่า (รอได้แค่ running.lock) = ย้ายเจ้าของ running.lock ไปช่องเลขอื่นให้ช่อง 1 ว่าง
+      (โค้ดเก่าปล่อยล็อกด้วยการเทียบ id → ไม่ลบช่องของงานอื่น · ช่องที่ย้ายไปถูกล้างเองเมื่อ process เจ้าของจบ)"""
+    if live_state(j) != "queued":
+        return False, f"รันเลยได้เฉพาะงานที่รอคิว (สถานะ {live_state(j)})"
+    if j.get("qv", 0) >= QUEUE_VERSION:
+        RUN_NOW.mkdir(parents=True, exist_ok=True)
+        (RUN_NOW / j["id"]).write_text(now(), encoding="utf-8")
+        return True, f"สั่งรันเลย {j['id']} แล้ว — จะได้ช่องพิเศษภายในไม่กี่วินาที"
+    key = (j.get("created", ""), j["id"])
+    ahead = [x for x in jobs() if x["id"] != j["id"] and x.get("status") == "queued" and live_state(x) == "queued"
+             and (x.get("created", ""), x["id"]) < key]
+    if ahead:
+        return False, (f"งานนี้ส่งด้วยโค้ดเก่าและยังมีงานรอก่อนหน้า {len(ahead)} งาน (โค้ดเก่าไม่แซงคิว) — "
+                       "ยกเลิกแล้วส่งใหม่ หรือรันเลยงานหัวคิวก่อน")
+    clear_stale_lock()
+    held = read_json(LOCK)
+    if not LOCK.exists():
+        return True, "ช่อง 1 ว่างอยู่แล้ว — งานจะเริ่มเองภายใน ~3 วิ"
+    for n in range(2, MAX_SLOTS * 4 + 1):
+        p = slot_path(n)
+        if p.exists():
+            continue
+        try:
+            os.link(LOCK, p)  # ล้มเหลวถ้าปลายทางมีอยู่แล้ว (กันทับช่องที่เพิ่งมีคนจอง)
+        except FileExistsError:
+            continue
+        except OSError as e:
+            return False, f"ย้ายช่องไม่ได้ ({e})"
         LOCK.unlink(missing_ok=True)
+        return True, f"ย้ายงาน {held.get('id', '?')} ไปช่อง {n} แล้ว — งานนี้ (ส่งด้วยโค้ดเก่า) จะได้ช่อง 1 ภายใน ~3 วิ"
+    return False, "ไม่มีช่องว่างให้ย้าย"
+
+
+# ---------- ตรวจไฟล์ซ้อนก่อนรันคู่ขนาน ----------
+TASK_MARK_RE = re.compile(r"^\s*(?:[-*]\s*\[[ xX]\]\s*\**\s*|#{2,4}\s+\**)(T-\d+[A-Za-z]*)\b")
+SKIP_LABELS = ("ก่อน", "หลัง", "ยืนยัน", "หลักฐาน", "commit")
+PATHISH_RE = re.compile(r"^[\w.\-/\\:*~]+$")
+
+
+def task_matcher(spec: str):
+    """"T-01..T-03,T-05,T-02R" → ฟังก์ชันเช็ค id งาน · None = อ่านรูปแบบไม่ได้"""
+    rules = []
+    for part in (x.strip() for x in (spec or "").split(",")):
+        m = re.fullmatch(r"T-(\d+)[A-Za-z]*\s*\.\.\s*T-(\d+)[A-Za-z]*", part, re.I)
+        if m:
+            rules.append((int(m[1]), int(m[2]), None))
+            continue
+        m = re.fullmatch(r"T-(\d+)([A-Za-z]*)", part, re.I)
+        if m:
+            rules.append((int(m[1]), int(m[1]), m[2].upper()))
+    if not rules:
+        return None
+
+    def ok(tid: str) -> bool:
+        m = re.match(r"T-(\d+)([A-Za-z]*)", tid, re.I)
+        n, suf = int(m[1]), m[2].upper()
+        return any(lo <= n <= hi and (s is None or s == suf) for lo, hi, s in rules)
+    return ok
+
+
+def plan_files(project: str, plan: str, tasks: str) -> list[str] | None:
+    """path ไฟล์ที่งาน T-xx ที่สั่งจะแตะ — จาก `backtick` ในบล็อกของงาน (หัวงาน + บรรทัด "ไฟล์" ฯลฯ)
+    ข้ามบรรทัด ก่อน/หลัง/ยืนยัน/หลักฐาน/commit และ code block · None = ตรวจไม่ได้ (ไม่มีแผน/อ่านไม่ได้/ไม่เจอหัวงาน)"""
+    if not plan:
+        return None
+    try:
+        text = (Path(project) / plan).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = task_matcher(tasks)
+    if not match:
+        return None
+    files, found, cur, fence = set(), False, False, False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        m = TASK_MARK_RE.match(line)
+        if m:
+            cur = match(m.group(1))
+            found = found or cur
+        elif line.startswith("## ") or line.strip() == "---":
+            cur = False
+        if not cur or re.sub(r"^\s*[-*]\s*", "", line).startswith(SKIP_LABELS):
+            continue
+        for tok in re.findall(r"`([^`\n]+)`", line):
+            for t in tok.split():
+                t = re.sub(r":\d+(-\d+)?$", "", t.strip("~,;()\"'"))
+                base = re.split(r"[/\\]", t.rstrip("/\\"))[-1]
+                if not (t and PATHISH_RE.match(t) and not t.startswith(("-", "/", "http:", "https:")) and not t[0].isdigit()
+                        and ("/" in t or "\\" in t or re.search(r"\.[A-Za-z]\w{0,5}$", t))
+                        and re.search(r"[A-Za-z0-9]", base) and not re.fullmatch(r"\.\w+", base)):
+                    continue
+                is_dir = t.endswith(("/", "\\"))
+                p = Path(t)
+                if p.is_absolute():
+                    try:
+                        t = p.relative_to(Path(project)).as_posix() + ("/" if is_dir else "")
+                    except ValueError:
+                        pass
+                files.add(t.replace("\\", "/"))
+    return sorted(files) if found else None
+
+
+def _pnorm(p: str) -> str:
+    p = p.replace("\\", "/").lower()
+    return p[2:] if p.startswith("./") else p
+
+
+def paths_overlap(a: str, b: str) -> bool:
+    a, b = _pnorm(a), _pnorm(b)
+    if a == b or (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b)):
+        return True
+    if a.endswith("/") or b.endswith("/"):
+        return False
+    if "/" not in a or "/" not in b:  # ฝั่งหนึ่งมีแค่ชื่อไฟล์ → เทียบชื่อไฟล์
+        return a.rsplit("/", 1)[-1] == b.rsplit("/", 1)[-1]
+    return False
+
+
+def overlap_report(target: dict) -> dict:
+    """เทียบงานที่จะรันเลยกับทุกงานที่กำลังทำ: โปรเจกต์เดียวกันไหม · ไฟล์ซ้อน (None = ตรวจไม่ได้)"""
+    mine = plan_files(target.get("project", ""), target.get("plan", ""), target.get("tasks", ""))
+    items = []
+    for j in jobs():
+        if j["id"] == target["id"] or live_state(j) != "running":
+            continue
+        same = _pnorm(j.get("project", "")) == _pnorm(target.get("project", ""))
+        theirs = plan_files(j.get("project", ""), j.get("plan", ""), j.get("tasks", ""))
+        over = None if (mine is None or theirs is None) else (
+            sorted({a for a in mine for b in theirs if paths_overlap(a, b)}) if same else [])
+        items.append({"id": j["id"], "project_name": Path(j.get("project", "")).name, "plan": j.get("plan", ""),
+                      "tasks": j.get("tasks", ""), "message": j.get("message", ""), "model": j.get("model", ""),
+                      "same_project": same, "files": theirs, "overlap": over})
+    return {"id": target["id"], "files": mine, "running": items,
+            "any_overlap": any(i["overlap"] for i in items),
+            "unknown": any(i["same_project"] and i["overlap"] is None for i in items),
+            "legacy": target.get("qv", 0) < QUEUE_VERSION, "max_parallel": max_parallel(), "used": len(held_slots())}
 
 
 # ---------- opencode ----------
@@ -355,7 +588,7 @@ def cmd_run(a) -> int:
     model = a.model or configured_model()
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
-           "pid_start": proc_start(os.getpid()), "created": now()}
+           "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION}
     save_job(job)
 
     got = acquire(job, a.wait_min, a.no_wait)
@@ -366,8 +599,9 @@ def cmd_run(a) -> int:
 
     res = {"status": "FAIL", "rc": -1}
     try:
-        job.update(status="running", started=now())
+        job.update(status="running", started=now())  # job["slot"] ตั้งโดย acquire
         save_job(job)
+        print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
         attach = LIVE_URL if a.attach == "live" else ("" if a.attach == "none" else a.attach)
         if attach == LIVE_URL and not ensure_live_server(exe):
             print("WARN: เปิด server 4096 ไม่ขึ้น → รันแยก (ดูสดไม่ได้)", flush=True)
@@ -395,6 +629,11 @@ def cmd_run(a) -> int:
                 continue
             if res["status"] == "QUOTA" and not a.model and switches < a.switch_on_quota:
                 switches += 1
+                cur = configured_model()
+                if cur and job["model"] and cur != job["model"]:  # งานอื่นที่รันคู่ขนานสลับไปแล้ว → ใช้ตาม ไม่สลับซ้ำ (กันสลับรัว)
+                    print(f"QUOTA → บัญชีถูกสลับเป็น {cur} แล้ว (โดยงานอื่น) → สั่งงานเดิมซ้ำด้วยบัญชีนั้น (ครั้งที่ {switches})", flush=True)
+                    job["model"] = cur
+                    continue
                 new = switch_account("next")
                 if new and new != job["model"]:
                     print(f"QUOTA → สลับบัญชีเป็น {new} แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
@@ -434,10 +673,13 @@ def cmd_list(a) -> int:
 
 
 def cmd_status(a) -> int:
-    clear_stale_lock()
-    held = read_json(LOCK)
+    held = held_slots()
     q = [j for j in jobs() if live_state(j) == "queued"]
-    print(f"กำลังทำ: {held.get('id', '-')}" + (f" (pid {held['pid']} ตั้งแต่ {held.get('since')})" if held else ""))
+    print(f"กำลังทำ: {len(held)} งาน (ช่อง {len(held)}/{max_parallel()})" + ("" if held else " — ว่าง"))
+    for h in held:
+        j = next((x for x in jobs() if x["id"] == h.get("id")), {})
+        print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
+              + (f" · {Path(j.get('project', '')).name} {j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
         print(f"  {i}. {j['id']} {Path(j['project']).name} {j.get('plan') or '--message'} {j.get('tasks', '')}")
@@ -500,6 +742,45 @@ def cmd_cancel(a) -> int:
     if not j:
         return 1
     ok, msg = cancel_job(j)
+    print(msg)
+    return 0 if ok else 1
+
+
+def cmd_config(a) -> int:
+    if not a.key:
+        for k, v in read_config().items():
+            print(f"{k} = {v}")
+        return 0
+    if a.key != "max_parallel":
+        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel")
+        return 1
+    if a.value is None:
+        print(f"max_parallel = {max_parallel()}")
+        return 0
+    try:
+        err = set_max_parallel(int(a.value))
+    except ValueError:
+        err = "max_parallel ต้องเป็นตัวเลข"
+    if err:
+        print(err)
+        return 1
+    print(f"max_parallel = {max_parallel()} (งานที่รอคิวใช้ค่าใหม่ภายใน ~3 วิ)")
+    return 0
+
+
+def cmd_runnow(a) -> int:
+    j = find_job(a.id)
+    if not j:
+        return 1
+    rep = overlap_report(j)
+    for it in rep["running"]:
+        over = it["overlap"]
+        print(f"เทียบกับ {it['id']} ({it['project_name']}{' · โปรเจกต์เดียวกัน' if it['same_project'] else ''}): "
+              + ("ตรวจไฟล์ไม่ได้" if over is None else ("ไฟล์ซ้อน: " + ", ".join(over) if over else "ไม่มีไฟล์ซ้อน")))
+    if rep["any_overlap"] and not a.force:
+        print("หยุด: มีไฟล์ซ้อนกับงานที่กำลังทำ — ใส่ --force ถ้ายืนยันจะรันคู่ขนาน")
+        return 1
+    ok, msg = request_run_now(j)
     print(msg)
     return 0 if ok else 1
 
@@ -596,9 +877,9 @@ def _secs(a: str, b: str = "") -> int | None:
 
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
-    clear_stale_lock()
-    held = read_json(LOCK)
-    running, queued, history, dead = None, [], [], []
+    held = held_slots()
+    slot_of = {h.get("id"): h for h in held}
+    running, queued, history, dead = [], [], [], []
     for j in jobs():
         st = live_state(j)
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
@@ -610,11 +891,13 @@ def ui_state() -> dict:
                        rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
                               if j.get("plan") else ""))
             dead.append(row)
-        if st == "running" and (not held or held.get("id") == j["id"]):
-            row["elapsed_sec"] = _secs(j.get("started", ""))
-            running = row
+        if st == "running":
+            h = slot_of.get(j["id"], {})
+            row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")))
+            running.append(row)
         elif st == "queued":
-            row["wait_sec"] = _secs(j.get("created", ""))
+            row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
+                       run_now=(RUN_NOW / j["id"]).exists())
             queued.append(row)
         else:
             row["duration_sec"] = (_secs(j.get("started") or j.get("created", ""), j["finished"])
@@ -627,8 +910,9 @@ def ui_state() -> dict:
     providers = cfg.get("provider", {})
     acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
                 for s, m in accs]
-    rows = history + queued + ([running] if running else [])
-    return {"now": now(), "lock": held, "running": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
+    rows = history + queued + running
+    return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
+            "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
             "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
@@ -894,6 +1178,11 @@ def make_ui_server(port: int = 4097):
                 except ValueError:
                     return self._send(400, {"error": "attempt/offset ต้องเป็นตัวเลข"})
                 return self._send(200, log_tail(j, attempt, offset))
+            if u.path == "/api/overlap":
+                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0]), None)
+                if not j:
+                    return self._send(404, {"error": "ไม่พบงาน"})
+                return self._send(200, overlap_report(j))
             if u.path == "/api/plans":
                 return self._send(200, {"plans": list_plans(q.get("project", [""])[0])})
             return self._send(404, {"error": "ไม่พบ"})
@@ -925,6 +1214,24 @@ def make_ui_server(port: int = 4097):
                     return self._send(409, {"ok": False, "message": f"งานนี้ไม่ได้กำลังทำ (สถานะ {live_state(j)})"})
                 ok, msg = cancel_job(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/runnow":  # รันเลย (ช่องพิเศษ) — มีไฟล์ซ้อนต้องส่ง ack_overlap=true
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                rep = overlap_report(j)
+                if rep["any_overlap"] and body.get("ack_overlap") is not True:
+                    return self._send(409, {"ok": False, "message": "มีไฟล์ซ้อนกับงานที่กำลังทำ — ต้องติ๊กยืนยันก่อน", "report": rep})
+                ok, msg = request_run_now(j)
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/config":
+                try:
+                    err = set_max_parallel(int(body.get("max_parallel")))
+                except (TypeError, ValueError):
+                    err = "max_parallel ต้องเป็นตัวเลข"
+                if err:
+                    return self._send(400, {"ok": False, "message": err})
+                return self._send(200, {"ok": True, "max_parallel": max_parallel(),
+                                        "message": f"ตั้งจำนวนงานพร้อมกัน = {max_parallel()} แล้ว"})
             if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
                 if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
@@ -1067,6 +1374,14 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel)")
+    cf.add_argument("key", nargs="?")
+    cf.add_argument("value", nargs="?")
+    cf.set_defaults(fn=cmd_config)
+    rn = sp.add_parser("runnow", help="ให้งานที่รอคิวได้ช่องพิเศษทันที (รันคู่ขนาน)")
+    rn.add_argument("id")
+    rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
+    rn.set_defaults(fn=cmd_runnow)
     ui = sp.add_parser("ui", help="หน้าเว็บ dashboard ในเครื่อง (127.0.0.1)")
     ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")
