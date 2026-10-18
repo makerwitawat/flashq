@@ -739,7 +739,7 @@ $("submitGo").onclick = async (e) => {
   $("submitGo").disabled = false;
   if (d.ok) {
     Object.assign(prefs, { project: b.project, ...runOpts(b) }); store.set("submit", prefs);
-    dlg.close(); toast(d.message); refresh(); if (d.job) setTimeout(() => openLog(d.job), 600);
+    dlg.close(); toast(d.message); refresh(); if (d.job && view === "dash") setTimeout(() => openLog(d.job), 600);
   } else { $("submitMsg").className = "err"; $("submitMsg").textContent = d.message || d.error || "ส่งไม่สำเร็จ"; }
 };
 
@@ -774,7 +774,7 @@ document.addEventListener("click", async (ev) => {
     const j = [...(state?.history || []), ...(state?.dead || [])].find((x) => x.id === t.dataset.retry);
     if (!confirm(`ส่งงานนี้เข้าคิวอีกครั้ง?\n\n${j ? j.project_name + " · " + what(j) : t.dataset.retry}\n\n(ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน)`)) return;
     const d = await post("/api/retry", { id: t.dataset.retry, ...runOpts(prefs) }); toast(d.message || d.error || "ผิดพลาด");
-    refresh(); if (d.ok && d.job) setTimeout(() => openLog(d.job), 600); return;
+    refresh(); if (d.ok && d.job && view === "dash") setTimeout(() => openLog(d.job), 600); return;
   }
   if (t.dataset.open) { const d = await post("/api/open", { id: t.dataset.open }); toast(d.message || "ผิดพลาด"); return; }
   if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
@@ -823,7 +823,7 @@ $("rnGo").onclick = async (e) => {
   if (!rnJob || !rnRep) return;
   $("rnGo").disabled = true; $("rnMsg").className = ""; $("rnMsg").textContent = "กำลังสั่ง…";
   const d = await post("/api/runnow", { id: rnJob, ack_overlap: $("rnAck").checked });
-  if (d.ok) { rnDlg.close(); toast(d.message); const id = rnJob; refresh(); setTimeout(() => openLog(id), 800); }
+  if (d.ok) { rnDlg.close(); toast(d.message); const id = rnJob; refresh(); if (view === "dash") setTimeout(() => openLog(id), 800); }
   else { $("rnMsg").className = "err"; $("rnMsg").textContent = d.message || d.error || "ผิดพลาด"; $("rnGo").disabled = false; }
 };
 $("schedMode").onchange = async () => {
@@ -879,7 +879,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ================= ออฟฟิศ (มุมมองการ์ตูน) ================= */
-let view = store.get("view", "dash");
+let view = store.get("view", "office");
 if (view !== "dash" && view !== "office") view = "dash";
 let stateAt = Date.now();
 const olog = new Map();            // job id -> ข้อมูลที่อ่านจาก log (offset · เครื่องมือ · งานที่ commit แล้ว)
@@ -1162,7 +1162,7 @@ function queueHTML(m) {
   return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>คาดการณ์</th></tr>
     ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
       <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span></div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
-      <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b></td></tr>`).join("")}</table></div>
+      <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b><div class="row" style="margin-top:0.3rem">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="บังคับให้เริ่มทันทีในช่องพิเศษ (ตรวจไฟล์ซ้อนก่อน)">รันเลย</button>`}<button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></div></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
 function recentHTML() {
@@ -1178,7 +1178,7 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => r.id)]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => r.id)]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -1261,7 +1261,7 @@ function setView(v) {
 }
 document.querySelectorAll("#viewTabs button").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
 function openLogFromOffice(id) { setView("dash"); openLog(id); }
-$("officeView").addEventListener("click", (e) => { const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
 $("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
 $("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
 $("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };
