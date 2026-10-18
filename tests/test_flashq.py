@@ -87,6 +87,17 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q(*self.base())
         self.assertEqual(r.returncode, 0, r.stdout)
 
+    def test_reused_pid_not_blocking(self):
+        """ล็อก/งานรอคิวที่ pid ยังมีชีวิตแต่เวลาเริ่มไม่ตรง (pid ถูกใช้ซ้ำ) ต้องไม่ขวางคิว"""
+        (self.home / "jobs").mkdir(parents=True)
+        me = os.getpid()
+        (self.home / "running.lock").write_text(json.dumps({"id": "old", "pid": me, "pid_start": 1}), encoding="utf-8")
+        (self.home / "jobs" / "0_old.json").write_text(json.dumps(
+            {"id": "0_old", "status": "queued", "pid": me, "pid_start": 1, "created": "2000-01-01 00:00:00",
+             "project": str(self.proj)}), encoding="utf-8")
+        r = self.run_q(*self.base(), "--wait-min", "0.2")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
     def test_quota_switch(self):
         r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota"})
         self.assertIn("FLASH_RUN=QUOTA", r.stdout)
