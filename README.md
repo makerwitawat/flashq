@@ -34,6 +34,15 @@ python D:\MyCode\flashq\flashq.py switch [next|cc|cc2|go2|go3|inferx]
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`
 
+### หน้าเว็บ dashboard
+```
+python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
+```
+- เปิด `http://127.0.0.1:4097/` (bind 127.0.0.1 เท่านั้น · stdlib ล้วน · หน้าเดียว `ui.html` ไม่โหลดอะไรจากเน็ต · ธีมอัตโนมัติ/สว่าง/มืด) · `--port 0` = สุ่มพอร์ต · Ctrl+C ปิด
+- แสดง: งานที่กำลังทำ (โปรเจกต์ · แผน · T-xx · บัญชี/โมเดล · เวลาผ่านไป) · คิวรอพร้อมลำดับ · ประวัติ (OK/FAIL/QUOTA/TIMEOUT/NOSTART สีต่างกัน · ระยะเวลา · กรองตามโปรเจกต์) · บัญชีปัจจุบัน + รายการบัญชี · รีเฟรชเองทุก 3 วิ (`/api/state`)
+- คลิกงาน → log สด (poll ทุก 2 วิ ด้วย offset · เลือกรอบได้) · ปุ่ม: ยกเลิกงานที่รอคิว · สลับบัญชี · คัดลอก `/flash-check <แผน>`
+- ปุ่มที่เปลี่ยนสถานะ (POST) ต้องผ่าน Host/Origin = 127.0.0.1/localhost + token สุ่มต่อการรัน (ฝังในหน้า) กัน CSRF
+
 ตัวเลือกที่ใช้บ่อยของ `run`: `--switch-on-quota 4` (โควตาหมด → สลับบัญชีถัดไปแล้วสั่งซ้ำเอง · งานที่ติ๊ก `[x]` แล้วจะถูกข้าม) · `--wait-min 720` (รอคิวได้นานสุด) · `--no-wait` · `--attach none` (ไม่ดูสด) · `--no-open`
 
 ผลลัพธ์: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|BUSY|QUEUE_TIMEOUT` + `job=<id>` · exit 0 = OK · 2 = BUSY · 3 = รอคิวเกินเวลา · อื่น ๆ = 1

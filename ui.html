@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flashq คิวกลาง</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2430; --muted: #687385; --line: #e2e6ec;
+  --accent: #2f6fdb; --accent-text: #ffffff; --hover: #eef3fb; --code: #f1f3f6;
+  --ok: #1f8a4c; --fail: #c53030; --quota: #b7791f; --timeout: #7b4fd0; --nostart: #2b8a9a; --other: #8a94a3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
+    --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920;
+    --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
+  --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920;
+  --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", "Leelawadee UI", Tahoma, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 17px; margin: 0; }
+header .sp { flex: 1; }
+.muted { color: var(--muted); }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 320px; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+section h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.col { display: grid; gap: 16px; align-content: start; min-width: 0; }
+button, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--fail); }
+button:disabled { opacity: .5; cursor: default; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.kv div { overflow-wrap: anywhere; }
+.empty { color: var(--muted); padding: 6px 0; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--hover); }
+tr.sel td { background: var(--hover); }
+.badge { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; white-space: nowrap; }
+.s-ok { background: var(--ok); } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; }
+.s-timeout { background: var(--timeout); } .s-nostart { background: var(--nostart); color: #10262a; } .s-other { background: var(--other); }
+.s-running { background: var(--accent); color: var(--accent-text); } .s-queued { background: var(--other); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+.acc { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.acc:last-child { border-bottom: 0; }
+.acc .m { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.acc.cur b { color: var(--accent); }
+pre#log { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 10px; height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; }
+td.mono { overflow-wrap: anywhere; min-width: 180px; }
+td.nw { white-space: nowrap; }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+#toast { position: fixed; right: 16px; bottom: 16px; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
+#toast.show { opacity: .95; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>flashq · คิวกลาง</h1>
+  <span class="muted" id="updated">กำลังโหลด…</span>
+  <span class="sp"></span>
+  <button id="themeBtn" title="สลับธีม">ธีม: อัตโนมัติ</button>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>กำลังทำ</h2>
+      <div id="running"></div>
+    </section>
+    <section>
+      <h2>คิวรอ <span class="muted" id="qcount"></span></h2>
+      <div id="queued"></div>
+    </section>
+    <section>
+      <h2>ประวัติ
+        <span class="sp" style="flex:1"></span>
+        <select id="projFilter"><option value="">ทุกโปรเจกต์</option></select>
+      </h2>
+      <div class="table-wrap" id="history"></div>
+    </section>
+    <section id="logBox" hidden>
+      <h2>log <span class="mono muted" id="logTitle"></span>
+        <span style="flex:1"></span>
+        <select id="attemptSel" title="รอบที่"></select>
+        <label class="muted"><input type="checkbox" id="follow" checked> ตามท้าย</label>
+        <button id="logClose">ปิด</button>
+      </h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>บัญชี flash-worker</h2>
+      <div class="muted" style="margin-bottom:6px">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
+      <div id="accounts"></div>
+      <div class="row" style="margin-top:8px"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button></div>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+const TOKEN = "{{TOKEN}}";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
+  nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
+  dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
+const badge = (st) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}">${esc(t)}</span>`; };
+const dur = (s) => {
+  if (s == null || s < 0) return "-";
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h} ชม. ${m} นาที` : m ? `${m} นาที ${x} วิ` : `${x} วิ`;
+};
+const what = (j) => j.message ? `ข้อความ: ${j.message}` : `${j.plan || "-"} ${j.tasks || ""}`;
+let state = null, logJob = null, logOffset = 0, logAttempt = 0, logTimer = null;
+
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  return { ok: r.ok, ...d };
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+  toast(`คัดลอกแล้ว: ${text}`);
+}
+
+function checkBtn(j, short) {
+  return j.plan ? `<button data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอกคำสั่ง /flash-check ${esc(j.plan)}">${short ? "คัดลอก" : "คัดลอก /flash-check"}</button>` : "";
+}
+
+function render() {
+  const s = state;
+  $("updated").textContent = `อัปเดต ${s.now}`;
+  const r = s.running;
+  $("running").innerHTML = r ? `
+    <div class="kv">
+      <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b></div>
+      <div>โปรเจกต์</div><div>${esc(r.project_name)} <span class="muted mono">${esc(r.project)}</span></div>
+      <div>แผน</div><div class="mono">${esc(r.message ? "(ทดสอบ --message)" : r.plan)}</div>
+      <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}</div>
+      <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
+      <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${checkBtn(r)}</div>`
+    : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ</div>`;
+
+  $("qcount").textContent = s.queued.length ? `(${s.queued.length} งาน)` : "";
+  $("queued").innerHTML = s.queued.length ? `<div class="table-wrap"><table>
+    <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
+    ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
+      <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td><td class="nw">${dur(j.wait_sec)}</td>
+      <td><button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
+    </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`;
+
+  const sel = $("projFilter"), cur = sel.value;
+  sel.innerHTML = `<option value="">ทุกโปรเจกต์</option>` + s.projects.map((p) => `<option${p === cur ? " selected" : ""}>${esc(p)}</option>`).join("");
+  const hist = s.history.filter((j) => !sel.value || j.project_name === sel.value);
+  $("history").innerHTML = hist.length ? `<table>
+    <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>เริ่ม</th><th>ระยะเวลา</th><th>/flash-check</th></tr>
+    ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
+      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td>
+      <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td>${checkBtn(j, true)}</td></tr>`).join("")}
+    </table>` : `<div class="empty">ยังไม่มีประวัติ</div>`;
+
+  $("curModel").textContent = s.current_model || "(ยังไม่ตั้ง)";
+  $("accounts").innerHTML = s.accounts.map((a) => `<div class="acc${a.model === s.current_model ? " cur" : ""}">
+    <b>${a.model === s.current_model ? "● " : ""}${esc(a.short)}</b><span class="m">${esc(a.model)}${a.available ? "" : " (ไม่มีใน provider!)"}</span>
+    <button data-switch="${esc(a.short)}" ${a.model === s.current_model || !a.available ? "disabled" : ""}>ใช้</button></div>`).join("") || `<div class="empty">ไม่มีรายการบัญชี</div>`;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    state = await r.json();
+    render();
+  } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
+}
+
+function openLog(id) {
+  logJob = id; logOffset = 0; logAttempt = 0;
+  $("log").textContent = ""; $("logTitle").textContent = id; $("attemptSel").innerHTML = "";
+  $("logBox").hidden = false; $("logBox").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (state) render();
+  clearTimeout(logTimer); pollLog();
+}
+
+async function pollLog() {
+  if (!logJob) return;
+  const id = logJob;
+  try {
+    const r = await fetch(`/api/log?id=${encodeURIComponent(id)}&attempt=${logAttempt}&offset=${logOffset}`, { cache: "no-store" });
+    const d = await r.json();
+    if (id !== logJob) return;
+    if (!r.ok) { $("log").textContent = d.error || "อ่าน log ไม่ได้"; return; }
+    const pre = $("log");
+    if (d.reset) pre.textContent = "";
+    const asel = $("attemptSel");
+    if (asel.options.length !== d.attempts) {
+      asel.innerHTML = Array.from({ length: d.attempts }, (_, i) => `<option value="${i + 1}">รอบ ${i + 1}</option>`).join("");
+    }
+    asel.value = String(d.attempt || "");
+    if (!logAttempt) logAttempt = d.attempt;
+    logOffset = d.offset;
+    if (d.lines.length) pre.append(d.lines.join("\n") + "\n");
+    const live = d.state === "running" || d.state === "queued";
+    if (!live && d.offset >= d.size && !pre.dataset.done) {
+      pre.dataset.done = "1";
+      if (!d.attempts) pre.append(d.state === "queued" ? "(ยังรอคิว — ยังไม่มี log)\n" : "(ไม่มีไฟล์ log)\n");
+      if (d.last) pre.append("\n---- ข้อความท้าย ----\n" + d.last + "\n");
+    }
+    if ($("follow").checked) pre.scrollTop = pre.scrollHeight;
+    if (live || d.offset < d.size) { delete pre.dataset.done; }
+  } catch (e) {}
+  logTimer = setTimeout(pollLog, 2000);
+}
+
+document.addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-copy],[data-cancel],[data-switch],[data-log]");
+  if (!t) return;
+  if (t.dataset.copy) { ev.stopPropagation(); return copyText(t.dataset.copy); }
+  if (t.dataset.cancel) {
+    ev.stopPropagation();
+    if (!confirm(`ยกเลิกงาน ${t.dataset.cancel} ?`)) return;
+    const d = await post("/api/cancel", { id: t.dataset.cancel }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  }
+  if (t.dataset.switch) {
+    const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  }
+  if (t.dataset.log) openLog(t.dataset.log);
+});
+$("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
+$("projFilter").onchange = () => { try { localStorage.setItem("flashq.proj", $("projFilter").value); } catch (e) {} render(); };
+$("logClose").onclick = () => { logJob = null; clearTimeout(logTimer); $("logBox").hidden = true; if (state) render(); };
+$("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffset = 0; $("log").textContent = ""; delete $("log").dataset.done; clearTimeout(logTimer); pollLog(); };
+
+const THEMES = ["auto", "light", "dark"], THEME_TH = { auto: "อัตโนมัติ", light: "สว่าง", dark: "มืด" };
+function applyTheme(t) {
+  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
+  $("themeBtn").textContent = `ธีม: ${THEME_TH[t]}`;
+}
+let theme = "auto";
+try { theme = localStorage.getItem("flashq.theme") || "auto"; } catch (e) {}
+applyTheme(theme);
+$("themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; applyTheme(theme); try { localStorage.setItem("flashq.theme", theme); } catch (e) {} };
+try { const p = localStorage.getItem("flashq.proj"); if (p) $("projFilter").innerHTML = `<option value="">ทุกโปรเจกต์</option><option selected>${esc(p)}</option>`; } catch (e) {}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

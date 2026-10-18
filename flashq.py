@@ -14,6 +14,7 @@
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
+  python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
 import argparse
@@ -459,21 +460,26 @@ def cmd_log(a) -> int:
     return 0
 
 
-def cmd_cancel(a) -> int:
-    j = find_job(a.id)
-    if not j:
-        return 1
+def cancel_job(j: dict) -> tuple[bool, str]:
+    """ยกเลิกงานที่รอคิว/กำลังทำ (ใช้ร่วมกับ cmd_cancel และหน้า ui)"""
     if live_state(j) not in ("queued", "running"):
-        print(f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {live_state(j)})")
-        return 1
+        return False, f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {live_state(j)})"
     kill_tree(j["pid"])
     if j.get("child_pid"):
         kill_tree(j["child_pid"])
     j.update(status="cancelled", finished=now())
     save_job(j)
     release(j)
-    print(f"ยกเลิก {j['id']} แล้ว")
-    return 0
+    return True, f"ยกเลิก {j['id']} แล้ว"
+
+
+def cmd_cancel(a) -> int:
+    j = find_job(a.id)
+    if not j:
+        return 1
+    ok, msg = cancel_job(j)
+    print(msg)
+    return 0 if ok else 1
 
 
 def accounts() -> tuple[str, list[list[str]]]:
@@ -555,6 +561,206 @@ def cmd_install(a) -> int:
     return rc
 
 
+# ---------- หน้าเว็บ dashboard (ui) ----------
+def _secs(a: str, b: str = "") -> int | None:
+    """จำนวนวินาทีจาก a ถึง b (ว่าง = ตอนนี้)"""
+    try:
+        t0 = datetime.strptime(a, "%Y-%m-%d %H:%M:%S")
+        t1 = datetime.strptime(b, "%Y-%m-%d %H:%M:%S") if b else datetime.now()
+        return int((t1 - t0).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def ui_state() -> dict:
+    """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
+    clear_stale_lock()
+    held = read_json(LOCK)
+    running, queued, history = None, [], []
+    for j in jobs():
+        st = live_state(j)
+        row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
+                                         "created", "started", "finished", "session", "result", "rc")}
+        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
+        if st == "running" and (not held or held.get("id") == j["id"]):
+            row["elapsed_sec"] = _secs(j.get("started", ""))
+            running = row
+        elif st == "queued":
+            row["wait_sec"] = _secs(j.get("created", ""))
+            queued.append(row)
+        else:
+            row["duration_sec"] = _secs(j.get("started") or j.get("created", ""), j.get("finished", ""))
+            history.append(row)
+    for i, row in enumerate(queued, 1):
+        row["position"] = i
+    agent, accs = accounts()
+    cfg = read_json(OC_CONFIG)
+    providers = cfg.get("provider", {})
+    acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
+                for s, m in accs]
+    return {"now": now(), "lock": held, "running": running, "queued": queued, "history": history[::-1][:300],
+            "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
+            "projects": sorted({r["project_name"] for r in history + queued + ([running] if running else []) if r["project_name"]})}
+
+
+def _fmt_event(line: str) -> str | None:
+    """แปลง 1 บรรทัด JSON ของ opencode เป็นข้อความอ่านง่าย · None = ข้าม"""
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return line
+    part = ev.get("part") or {}
+    t = ev.get("type")
+    if t == "text" and part.get("text"):
+        return part["text"]
+    if t == "tool_use":
+        state = part.get("state") or {}
+        inp = state.get("input") or {}
+        brief = inp.get("command") or inp.get("filePath") or inp.get("pattern") or inp.get("description") or ""
+        mark = "❌" if state.get("status") == "error" else "🔧"
+        return f"{mark} {part.get('tool', '?')}: {str(brief)[:300]}"
+    if t == "error" or "error" in ev:
+        return "❌ " + json.dumps(ev.get("error", ev), ensure_ascii=False)[:600]
+    return None
+
+
+def log_tail(j: dict, attempt: int, offset: int, limit: int = 256 * 1024) -> dict:
+    """อ่าน log ต่อจาก offset (ไบต์) เฉพาะบรรทัดที่จบแล้ว — ไม่อ่านทั้งไฟล์ซ้ำ"""
+    logs = j.get("logs") or []
+    out = {"attempts": len(logs), "attempt": 0, "offset": 0, "size": 0, "lines": [], "reset": False,
+           "state": live_state(j), "last": j.get("last", "")}
+    if not logs:
+        return out
+    idx = attempt - 1 if 1 <= attempt <= len(logs) else len(logs) - 1
+    p = Path(logs[idx])
+    size = p.stat().st_size if p.exists() else 0
+    if offset > size or offset < 0:  # ไฟล์ถูกเขียนใหม่ → เริ่มต้น
+        offset, out["reset"] = 0, True
+    data = b""
+    if size > offset:
+        with open(p, "rb") as f:
+            f.seek(offset)
+            data = f.read(limit)
+        cut = data.rfind(b"\n")
+        if cut >= 0:
+            data = data[:cut + 1]
+        elif len(data) < limit:  # บรรทัดยังเขียนไม่จบ รอรอบหน้า
+            data = b""
+    lines = [x for x in (_fmt_event(s) for s in data.decode("utf-8", errors="replace").splitlines() if s.strip()) if x]
+    out.update(attempt=idx + 1, offset=offset + len(data), size=size, lines=lines)
+    return out
+
+
+def make_ui_server(port: int = 4097):
+    """สร้าง server (ยังไม่ serve) · คืน (server, token) — bind 127.0.0.1 เท่านั้น"""
+    import secrets
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    token = secrets.token_urlsafe(24)
+
+    class H(BaseHTTPRequestHandler):
+        server_version = "flashq-ui"
+
+        def log_message(self, *args):  # เงียบ (poll ทุก 2-3 วิ)
+            pass
+
+        def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8") -> None:
+            if not isinstance(body, (bytes, str)):
+                body = json.dumps(body, ensure_ascii=False)
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _host_ok(self) -> bool:
+            """กัน DNS rebinding: Host ต้องเป็น 127.0.0.1/localhost พอร์ตนี้ · Origin (ถ้ามี) ต้องตรงด้วย"""
+            p = self.server.server_address[1]
+            allowed = {f"127.0.0.1:{p}", f"localhost:{p}"}
+            if self.headers.get("Host", "") not in allowed:
+                return False
+            origin = self.headers.get("Origin")
+            return origin is None or origin in {f"http://{h}" for h in allowed}
+
+        def do_GET(self):
+            if not self._host_ok():
+                return self._send(403, {"error": "host/origin ไม่ได้รับอนุญาต"})
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if u.path == "/":
+                html = (REPO / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token)
+                return self._send(200, html, "text/html; charset=utf-8")
+            if u.path == "/api/state":
+                return self._send(200, ui_state())
+            if u.path == "/api/log":
+                jid = q.get("id", [""])[0]
+                j = next((x for x in jobs() if x.get("id") == jid), None)
+                if not j:
+                    return self._send(404, {"error": f"ไม่พบงาน {jid}"})
+                try:
+                    attempt, offset = int(q.get("attempt", ["0"])[0]), int(q.get("offset", ["0"])[0])
+                except ValueError:
+                    return self._send(400, {"error": "attempt/offset ต้องเป็นตัวเลข"})
+                return self._send(200, log_tail(j, attempt, offset))
+            return self._send(404, {"error": "ไม่พบ"})
+
+        def do_POST(self):
+            if not self._host_ok() or not secrets.compare_digest(self.headers.get("X-Flashq-Token", ""), token):
+                return self._send(403, {"error": "ไม่ได้รับอนุญาต (host/origin/token)"})
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+            except ValueError:
+                return self._send(400, {"error": "body ต้องเป็น JSON"})
+            path = urlparse(self.path).path
+            if path == "/api/cancel":
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                if live_state(j) != "queued":
+                    return self._send(409, {"ok": False, "message": f"ยกเลิกได้เฉพาะงานที่รอคิว (สถานะ {live_state(j)})"})
+                ok, msg = cancel_job(j)
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/switch":
+                import contextlib
+                import io
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    new = switch_account(str(body.get("target") or "next"))
+                return self._send(200 if new else 400, {"ok": bool(new), "model": new, "message": buf.getvalue().strip()})
+            return self._send(404, {"error": "ไม่พบ"})
+
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    srv.daemon_threads = True
+    return srv, token
+
+
+def cmd_ui(a) -> int:
+    try:
+        srv, _ = make_ui_server(a.port)
+    except OSError as e:
+        print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
+        return 1
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    print(f"UI_URL={url}  (Ctrl+C เพื่อปิด)", flush=True)
+    if not a.no_open:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+    return 0
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # pipe บน Windows = cp874 พังกับไทย/อีโมจิ
     HOME.mkdir(parents=True, exist_ok=True)
@@ -592,6 +798,10 @@ def main() -> int:
     ins = sp.add_parser("install", help="ติดตั้ง /flash + flash-worker แบบ global")
     ins.add_argument("--force", action="store_true")
     ins.set_defaults(fn=cmd_install)
+    ui = sp.add_parser("ui", help="หน้าเว็บ dashboard ในเครื่อง (127.0.0.1)")
+    ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
+    ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")
+    ui.set_defaults(fn=cmd_ui)
     a = ap.parse_args()
     return a.fn(a) if a.cmd else cmd_status(a)  # ไม่ใส่คำสั่ง = status
 

@@ -1,12 +1,16 @@
 """เทสต์ flashq ด้วย opencode ปลอม (ไม่เรียกโมเดลจริง) · รัน: python tests\\test_flashq.py"""
 import json
 import os
+import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -141,6 +145,93 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("flashq:managed", (claude / "commands" / "flash-check.md").read_text(encoding="utf-8"))
         self.assertTrue(list((claude / "commands").glob("flash-check.md.bak-flashq-*")))
+
+    def start_ui(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        p = subprocess.Popen([sys.executable, str(FLASHQ), "ui", "--port", str(port), "--no-open"], cwd=self.proj,
+                             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+        self.addCleanup(lambda: (p.kill(), p.communicate(timeout=30)))
+        line = p.stdout.readline()
+        self.assertIn("UI_URL=", line)
+        return f"http://127.0.0.1:{port}"
+
+    def http(self, url, data=None, headers=None):
+        req = urllib.request.Request(url, data=data, headers=headers or {}, method="POST" if data is not None else "GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8")
+
+    def test_ui_state_and_cancel(self):
+        """ui: /api/state เป็น JSON · POST ไม่มี token = 403 · token ถูก = ยกเลิกงานที่รอคิวได้"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        (self.home / "jobs").mkdir(parents=True)
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait(timeout=30)))
+        jid = "20990101_000000_1"
+        (self.home / "jobs" / f"{jid}.json").write_text(json.dumps(
+            {"id": jid, "status": "queued", "pid": sleeper.pid, "pid_start": flashq.proc_start(sleeper.pid),
+             "created": "2099-01-01 00:00:00", "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}), encoding="utf-8")
+        base = self.start_ui()
+
+        code, body = self.http(base + "/api/state")
+        self.assertEqual(code, 200)
+        st = json.loads(body)
+        self.assertIsNone(st["running"])
+        self.assertEqual([j["id"] for j in st["queued"]], [jid])
+        self.assertEqual(st["queued"][0]["position"], 1)
+        self.assertEqual(st["current_model"], "p1/m")
+        self.assertTrue(any(a["short"] == "cc" for a in st["accounts"]))
+
+        code, html = self.http(base + "/")
+        self.assertEqual(code, 200)
+        token = re.search(r'const TOKEN = "([^"]+)"', html).group(1)
+        self.assertNotEqual(token, "{{TOKEN}}")
+
+        payload = json.dumps({"id": jid}).encode()
+        hdr = {"Content-Type": "application/json"}
+        self.assertEqual(self.http(base + "/api/cancel", payload, hdr)[0], 403)
+        self.assertEqual(self.http(base + "/api/cancel", payload, {**hdr, "X-Flashq-Token": "ผิด".encode().hex()})[0], 403)
+        self.assertEqual(self.http(base + "/api/cancel", payload,
+                                   {**hdr, "X-Flashq-Token": token, "Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.http(base + "/api/state", headers={"Host": "evil.example"})[0], 403)
+
+        code, body = self.http(base + "/api/cancel", payload, {**hdr, "X-Flashq-Token": token})
+        self.assertEqual(code, 200, body)
+        self.assertTrue(json.loads(body)["ok"])
+        sleeper.wait(timeout=30)  # process ของงานถูก kill
+        job = json.loads((self.home / "jobs" / f"{jid}.json").read_text(encoding="utf-8"))
+        self.assertEqual(job["status"], "cancelled")
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["queued"], [])
+        self.assertEqual(st["history"][0]["state"], "cancelled")
+
+        code, body = self.http(base + "/api/switch", json.dumps({"target": "cc2"}).encode(), {**hdr, "X-Flashq-Token": token})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"],
+                         "commandcode2/deepseek/deepseek-v4.1-flash")
+
+    def test_ui_log_tail_offset(self):
+        """ui: /api/log อ่านต่อจาก offset เฉพาะบรรทัดที่จบแล้ว"""
+        (self.home / "jobs").mkdir(parents=True)
+        (self.home / "logs").mkdir(parents=True)
+        log = self.home / "logs" / "j_1.jsonl"
+        log.write_text(json.dumps({"type": "text", "part": {"text": "สวัสดี"}}) + "\n" + '{"type":"te', encoding="utf-8")
+        (self.home / "jobs" / "j.json").write_text(json.dumps(
+            {"id": "j", "status": "ok", "created": "2026-01-01 00:00:00", "project": str(self.proj), "logs": [str(log)]}),
+            encoding="utf-8")
+        base = self.start_ui()
+        d = json.loads(self.http(base + "/api/log?id=j&offset=0")[1])
+        self.assertEqual(d["lines"], ["สวัสดี"])
+        with open(log, "a", encoding="utf-8") as f:
+            f.write('xt","part":{"text":"PONG"}}\n')
+        d2 = json.loads(self.http(base + f"/api/log?id=j&offset={d['offset']}")[1])
+        self.assertEqual(d2["lines"], ["PONG"])
+        self.assertEqual(d2["offset"], log.stat().st_size)
 
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")
