@@ -1128,7 +1128,7 @@ function deskSVG(i, cx, cy, r, c) {
     who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: isVerify(r) });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
-    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? "🔍 " : ""}${esc(trunc(r.project_name, isVerify(r) ? 11 : 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>`;
+    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? "🔍 " : ""}${esc(trunc(r.project_name, isVerify(r) ? 11 : 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 177}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 17))}<title>${esc(modelText(r))}</title></text>` : ""}`;
   } else if (c) {
     const k = CELE[c.state];
     stCls = k.cls;
@@ -1181,7 +1181,7 @@ function sceneSVG(m) {
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
-    g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${shortWhat(j)}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
+    g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${shortWhat(j)}${modelText(j) ? "\n🤖 " + modelText(j) : ""}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
       ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash, checker: isVerify(j) })}
       <rect class="of-badge" x="${150 - 15}" y="${y - 70}" width="30" height="15" rx="7.5"/><text class="of-badget" x="150" y="${y - 59}" text-anchor="middle">#${j.position}</text></g>`;
   });
@@ -1204,6 +1204,7 @@ function modelText(j) {
   const acc = (state.accounts || []).find((a) => a.model === raw);
   return `${name}${rest.length ? " · " + prov : ""}${acc && acc.short ? " (" + acc.short + ")" : ""}${j && j.model ? "" : " · ค่าเริ่มต้น"}`;
 }
+function modelShort(j) { const raw = (j && j.model) || state.current_model || ""; return raw.split("/").slice(1).join("/") || raw; }
 function modelChip(j) { const t = modelText(j); return t ? `<div class="of-line muted" title="โมเดล · เจ้า (บัญชี)">🤖 ${esc(t)}</div>` : ""; }
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? "🔍 ตรวจ " : "") + (r.message ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
