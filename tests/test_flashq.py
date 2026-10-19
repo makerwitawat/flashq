@@ -661,6 +661,25 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=OK", p2.communicate(timeout=60)[0])
         self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
 
+    def test_verify_uses_agent_own_model_and_subagent_fails(self):
+        """agent อื่นใช้โมเดลของตัวเองใน config (ไม่ทับด้วยโมเดล flash-worker) · agent เป็น subagent → FAIL ไม่ใช่ OK"""
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        cfg["agent"]["my-checker"] = {"model": "p9/checker-model"}
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--agent", "my-checker")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--model") + 1], "p9/checker-model")
+        self.args_out.unlink()
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open")  # flash-verifier ไม่มี model ของตัวเอง
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertNotIn("--model", argv)
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--switch-on-quota", "2",
+                       env={"FAKE_MODE": "subagent"})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("subagent", r.stdout)
+
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
         with socket.socket() as s:
