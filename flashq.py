@@ -52,6 +52,7 @@ SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 START_LIMIT_SEC = 180
+SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
 DEFAULTS = {
     "main_branch": "master",          # branch ที่ opencode ต้องอยู่ + ที่แผนต้องถูก push ไป
@@ -201,6 +202,14 @@ def configured_model() -> str:
     """โมเดลของ flash-worker ใน opencode.json — ไม่ส่ง --model แล้ว opencode run จะใช้ "model" บนสุดของ config แทน"""
     try:
         return read_json(OC_CONFIG)["agent"]["flash-worker"]["model"]
+    except (KeyError, TypeError):
+        return ""
+
+
+def agent_model(agent: str) -> str:
+    """โมเดลที่ agent นั้นตั้งไว้เองใน opencode.json (agent.<ชื่อ>.model) — ว่างถ้าไม่ได้ตั้ง"""
+    try:
+        return read_json(OC_CONFIG)["agent"][agent]["model"]
     except (KeyError, TypeError):
         return ""
 
@@ -813,6 +822,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     last = texts[-1] if texts else ""
     if status == "OK" and (rc != 0 or errors):
         status = "FAIL"
+    if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
+        status = "FAIL"
+        errors.append("agent ที่ระบุเป็น subagent (opencode ตกไปใช้ agent เริ่มต้น) — ตั้ง mode: all หรือ primary ใน agent นั้น")
     # ตรวจโควตาจาก error/stderr จริงเท่านั้น — ไม่กวาดข้อความสรุปของ worker (คำว่า balance/quota ในเนื้องานเกมทำให้สลับบัญชีเกินจำเป็น)
     # worker รายงานโควตาเองด้วยบรรทัด "FAIL: quota" (flash.md)
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
@@ -877,7 +889,9 @@ def cmd_run(a) -> int:
         title = f"flash-verify {Path(plan).stem} {a.tasks}"
     else:
         title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
-    model = a.model or configured_model()
+    worker_like = agent in ("", "flash-worker")
+    # agent อื่น (ผู้ตรวจ/ผู้สำรวจ) ใช้โมเดลที่ตั้งไว้ใน agent นั้นเอง — ไม่ทับด้วยโมเดลของ flash-worker
+    model = a.model or (configured_model() if worker_like else agent_model(agent))
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
            "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind == "verify"),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
@@ -925,7 +939,7 @@ def cmd_run(a) -> int:
                 nostart_retry -= 1
                 print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
                 continue
-            if res["status"] == "QUOTA" and not a.model and switches < a.switch_on_quota:
+            if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:  # สลับบัญชีเฉพาะ flash-worker
                 switches += 1
                 cur = configured_model()
                 if cur and job["model"] and cur != job["model"]:  # งานอื่นที่รันคู่ขนานสลับไปแล้ว → ใช้ตาม ไม่สลับซ้ำ (กันสลับรัว)
