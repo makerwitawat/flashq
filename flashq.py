@@ -682,9 +682,13 @@ def ensure_live_server(exe: list[str]) -> bool:
     flags = 0
     if os.name == "nt":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-    subprocess.Popen([*exe, "serve", "--port", "4096", "--hostname", "127.0.0.1"], cwd=str(HOME),
-                     stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags,
-                     env={k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"})
+    sp = subprocess.Popen([*exe, "serve", "--port", "4096", "--hostname", "127.0.0.1"], cwd=str(HOME),
+                          stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags,
+                          env={k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"})
+    try:  # เก็บ pid ไว้ให้ปิดได้ (taskkill /PID <pid> /T /F) — server นี้เปิดค้างโดยตั้งใจ
+        (HOME / "live_server.pid").write_text(str(sp.pid), encoding="utf-8")
+    except OSError:
+        pass
     for _ in range(30):
         time.sleep(1)
         if up():
@@ -694,10 +698,16 @@ def ensure_live_server(exe: list[str]) -> bool:
 
 def wait_session(p: subprocess.Popen, log: Path) -> str | None:
     """รอ sessionID ใน log · "" = process จบก่อน · None = ไม่ขึ้นใน START_LIMIT_SEC (เจอตอน desktop เพิ่งเปิดใหม่)"""
+    pos, buf = 0, ""  # อ่านเฉพาะส่วนที่เพิ่มต่อท้าย (ไม่อ่านทั้งไฟล์ซ้ำทุกวินาที)
     for _ in range(START_LIMIT_SEC):
         if p.poll() is not None:
             return ""
-        m = re.search(r'"sessionID":"(ses_[^"]+)"', log.read_text(encoding="utf-8", errors="replace"))
+        with open(log, "rb") as f:
+            f.seek(pos)
+            chunk = f.read()
+        pos += len(chunk)
+        buf = (buf[-200:] + chunk.decode("utf-8", errors="replace"))
+        m = re.search(r'"sessionID":"(ses_[^"]+)"', buf)
         if m:
             return m.group(1)
         time.sleep(1)
@@ -761,7 +771,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     last = texts[-1] if texts else ""
     if status == "OK" and (rc != 0 or errors):
         status = "FAIL"
-    if QUOTA_RE.search(" ".join(errors) + errtxt[-2000:] + last[-500:]) and (rc != 0 or errors or "FAIL: quota" in last):
+    # ตรวจโควตาจาก error/stderr จริงเท่านั้น — ไม่กวาดข้อความสรุปของ worker (คำว่า balance/quota ในเนื้องานเกมทำให้สลับบัญชีเกินจำเป็น)
+    # worker รายงานโควตาเองด้วยบรรทัด "FAIL: quota" (flash.md)
+    if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
         status = "QUOTA"
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools,
             "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last}
@@ -791,6 +803,13 @@ def cmd_run(a) -> int:
         elif not (root / plan).exists():
             print(f"FLASH_RUN=FAIL ไม่พบไฟล์แผน: {root / plan}")
             return 1
+        if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
+            br = subprocess.run(["git", "-C", str(root), "branch", "--show-current"],
+                                capture_output=True, text=True).stdout.strip()
+            if br != cfg["main_branch"]:
+                print(f"FLASH_RUN=FAIL checkout หลัก {root} อยู่บน branch '{br or '(detached)'}' ไม่ใช่ "
+                      f"{cfg['main_branch']} → สลับกลับ {cfg['main_branch']} (git switch {cfg['main_branch']}) แล้วสั่งใหม่")
+                return 1
 
     exe = opencode_cmd()
     if not exe:

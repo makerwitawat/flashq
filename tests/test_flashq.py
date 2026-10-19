@@ -110,6 +110,30 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(cfg["agent"]["flash-worker"]["model"], "commandcode/deepseek/deepseek-v4.1-flash")
         self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 2)
 
+    def test_quota_ignores_balance_word_in_summary(self):
+        """คำว่า balance ในสรุปท้ายของ worker (เนื้องานเกม) ต้องไม่ถูกตีเป็นโควตาหมด"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "failbalance"})
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertNotIn("FLASH_RUN=QUOTA", r.stdout)
+
+    def test_quota_when_worker_reports_fail_quota(self):
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "failquota"})
+        self.assertIn("FLASH_RUN=QUOTA", r.stdout)
+
+    def test_branch_preflight(self):
+        """checkout หลักไม่อยู่บน main_branch → FAIL พร้อมสาเหตุ ไม่ส่งงานให้ opencode · กลับ master แล้วรันได้"""
+        git = lambda *a: subprocess.run(["git", "-C", str(self.proj), *a], capture_output=True, text=True)
+        git("init", "-q")
+        git("symbolic-ref", "HEAD", "refs/heads/feature")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ไม่ใช่ master", r.stdout)
+        self.assertFalse(self.args_out.exists())
+        git("symbolic-ref", "HEAD", "refs/heads/master")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+
     def test_quota_no_switch_by_default(self):
         r = self.run_q(*self.base(), env={"FAKE_MODE": "quota"})
         self.assertEqual(r.returncode, 1)
