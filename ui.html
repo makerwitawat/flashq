@@ -152,6 +152,11 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-tile .s { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
 .of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow: hidden; }
 .of-scene svg { display: block; width: 100%; height: auto; max-height: 82vh; }
+@media (max-width: 720px) {  /* จอเล็ก: ฉากไม่ย่อจนตัวเล็กเกินอ่าน — กว้างขั้นต่ำแล้วเลื่อนซ้าย-ขวาได้ */
+  .of-scene { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .of-scene::before { content: "↔ เลื่อนดูทั้งฉากได้"; display: block; position: sticky; left: 0; padding: 0.25rem 0.6rem; font-size: 0.72rem; color: var(--muted); }
+  .of-scene svg { width: 720px; max-width: none; max-height: none; }
+}
 .of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
 body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
@@ -350,6 +355,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
         <li>🚶 <b>ผู้ตรวจประจำออฟฟิศ</b> (แถบม่วงใต้โต๊ะ) = ว่างจะเดินลาดตระเวนรองานตรวจ · มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ</li>
+        <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
         <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
@@ -617,8 +623,8 @@ function beep(notes) {
 }
 function playFinish(st) {
   if (!soundOn) return;
-  if (st === "OK") beep([[660, 0.14], [880, 0.22]]);
-  else if (st === "QUOTA") beep([[440, 0.3]]);
+  if (st === "ok") beep([[660, 0.14], [880, 0.22]]);
+  else if (st === "quota") beep([[440, 0.3]]);
   else beep([[440, 0.16], [300, 0.3]]);
 }
 $("soundBtn").onclick = () => {
@@ -645,6 +651,24 @@ function checkFinished() {
   prevStates = now;
 }
 
+/* ผลตรวจจาก /flash-check (flashq review done) → แจ้งเตือน + เสียง เหมือนงานจบ */
+let seenReviews = null;
+function checkReviews() {
+  const done = state.reviews_done || [];
+  if (seenReviews) {
+    for (const r of done) {
+      if (seenReviews.has(r.id)) continue;
+      const ok = r.status === "pass", txt = `${ok ? "ตรวจผ่าน ✅" : "ตรวจไม่ผ่าน ❌"} · ${r.project_name} · ${r.plan_name} ${r.tasks || ""}`;
+      toast(txt);
+      playFinish(ok ? "ok" : "fail");
+      if (notifyOn && "Notification" in window && Notification.permission === "granted") {
+        try { new Notification("flashq: ผลตรวจ", { body: txt, tag: r.id }); } catch (e) {}
+      }
+    }
+  }
+  seenReviews = new Set(done.map((r) => r.id));
+}
+
 async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
@@ -652,6 +676,7 @@ async function refresh() {
     stateAt = Date.now();
     render();
     checkFinished();
+    checkReviews();
     officeTrack();
     if (view === "office") { officeUpdate(); officePoll(); }
   } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
@@ -1117,7 +1142,9 @@ function officeModel() {
   for (let k = cele.length - 1; k >= 0; k--) if (cele[k].until <= now) cele.splice(k, 1);
   const celeAt = {};
   cele.forEach((c) => { if (c.desk < N && !desks[c.desk]) celeAt[c.desk] = c; });
-  return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [] };
+  const el = (r) => (r.done_sec || 0) + (now - stateAt) / 1000;
+  const reviews = state.reviews || [], reviewFin = (state.reviews_done || []).find((r) => el(r) <= 20) || null;
+  return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [], reviews, reviewFin };
 }
 const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
   quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
@@ -1176,10 +1203,15 @@ function sceneSVG(m) {
   m.desks.forEach((r, i) => { g += deskSVG(i, ox + (i % 4) * DW, DESK_Y0 + Math.floor(i / 4) * DH, r, m.celeAt[i]); });
   {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = เดินลาดตระเวนในแถบใต้โต๊ะ · มีงานตรวจรันอยู่ = ยืนประจำ บอกช่องที่ตรวจ
     const vi = m.desks.map((r, i) => (r && isVerify(r) ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
+    const rv = m.reviews[0], fin = m.reviewFin;
     const sy = stripY + 8, py = sy + 78, colX = vi.length ? ox + (vi[0] % 4) * DW + 72 : DESK_X0 + 70;
-    const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})` : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
-    g += `<g class="of-st-insp${vr ? " of-busy" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
-      <g class="${vr ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: "stand", mood: vr ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: true })}</g>
+    const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
+    const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
+      : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""}`
+      : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
+      : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
+    g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+      <g class="${busy || fin ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: true })}</g>
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
       <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
@@ -1245,7 +1277,7 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -1274,8 +1306,9 @@ function officeUpdate() {
     else t = `ผ่านไป ${dur(Math.floor(ri.el))} · ยังประมาณเวลาที่เหลือไม่ได้`;
     setText("ofCE" + k, t);
     setText("ofCM" + k, estWhy(ri.est));
-    const quiet = L && now - L.changedAt > 180000;
-    setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${quiet ? ` · ⚠ log เงียบมา ${dur(Math.floor((now - L.changedAt) / 1000))} (นับตั้งแต่เปิดหน้านี้)` : ""}` : "");
+    const idleMs = r.log_idle_sec != null ? r.log_idle_sec * 1000 + (now - stateAt) : L ? now - L.changedAt : 0, quiet = (r.log_idle_sec != null || L) && idleMs > 180000;
+    const warn = quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}` : "";
+    setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${warn ? " · " + warn : ""}` : warn);
     const card = $("ofC" + k); if (card) card.classList.toggle("quiet", !!quiet || ri.severe);
     const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
     if (i >= 0) {

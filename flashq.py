@@ -25,6 +25,7 @@
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
   python flashq.py config schedule auto|fifo · config starve_min 120     โหมดจัดคิว · กันอดตาย (นาที)
   python flashq.py runnow <id> [--force]                                ให้งานที่รอคิวได้ช่องพิเศษทันที (คู่ขนาน)
+  python flashq.py review start <แผน> [<งาน>] | done <แผน> pass|fail [--note ...] | list   ป้ายให้หน้าออฟฟิศรู้ว่า Claude กำลังตรวจ (/flash-check)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
@@ -43,6 +44,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
+REVIEWS = HOME / "reviews"   # ป้าย "Claude กำลังตรวจ" ที่ /flash-check ตั้ง (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — ไม่ใช่งานในคิว
+REVIEW_TTL_MIN = 90          # ป้ายที่ค้างเกินนี้ถือว่าถูกทิ้ง (session ตาย/ลืม done)
 CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
 CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO)
 SCHEDULES = ("auto", "fifo")
@@ -1302,6 +1305,79 @@ def _secs(a: str, b: str = "") -> int | None:
         return None
 
 
+def log_idle_sec(j: dict) -> int | None:
+    """วินาทีนับจากที่ log รอบล่าสุดถูกเขียนครั้งสุดท้าย (ไม่มี/อ่านไม่ได้ = None) — ให้หน้าเว็บเตือน "log เงียบ" ได้แม่นแม้เพิ่งเปิดหน้า"""
+    logs = j.get("logs") or []
+    try:
+        return max(0, int(time.time() - os.path.getmtime(logs[-1]))) if logs else None
+    except OSError:
+        return None
+
+
+def _review_rows() -> list[dict]:
+    rows = []
+    for f in sorted(REVIEWS.glob("rv_*.json")):
+        r = read_json(f)
+        if r.get("id"):
+            r["age_sec"] = _secs(r.get("started", "")) or 0
+            r["done_sec"] = _secs(r["finished"]) if r.get("finished") else None
+            rows.append(r)
+    return rows
+
+
+def ui_reviews() -> tuple[list[dict], list[dict]]:
+    """(กำลังตรวจ · ผลตรวจที่เพิ่งจบ ≤10 นาที) — ป้ายที่เก่าเกิน TTL ไม่นับ"""
+    rows = _review_rows()
+    act = [r for r in rows if r.get("status") == "reviewing" and r["age_sec"] <= REVIEW_TTL_MIN * 60]
+    done = [r for r in rows if r.get("status") in ("pass", "fail") and r["done_sec"] is not None and r["done_sec"] <= 600]
+    return act, sorted(done, key=lambda r: r.get("finished", ""), reverse=True)[:10]
+
+
+def cmd_review(a) -> int:
+    """ป้ายสถานะผู้ตรวจ: start = เริ่มตรวจ · done = จบ (pass/fail) · list — ไม่รันอะไรเลย แค่ให้หน้าออฟฟิศแสดงผู้ตรวจ"""
+    REVIEWS.mkdir(parents=True, exist_ok=True)
+    key = (a.plan or "").replace("\\", "/").split("/")[-1]
+    if a.action == "list":
+        act, done = ui_reviews()
+        for r in act + done:
+            print(f"{r['id']:34} {r['status']:9} {r.get('plan_name', '')} {r.get('tasks', '')}")
+        return 0
+    if not key:
+        print("ต้องระบุแผน", file=sys.stderr)
+        return 1
+    if a.action == "start":
+        for f in REVIEWS.glob("rv_*.json"):  # ล้างป้ายเก่า > 2 วัน
+            try:
+                if time.time() - f.stat().st_mtime > 172800:
+                    f.unlink()
+            except OSError:
+                pass
+        proj = str(Path(a.project).resolve()) if a.project else str(Path.cwd())
+        rid = f"rv_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
+        for r in _review_rows():  # แผนเดียวกันเริ่มใหม่ = ทิ้งป้ายค้างเก่าที่ยังเป็น reviewing
+            if r.get("status") == "reviewing" and r.get("plan_name") == key and r.get("project") == proj:
+                (REVIEWS / f"{r['id']}.json").unlink(missing_ok=True)
+        write_json(REVIEWS / f"{rid}.json", {"id": rid, "project": proj, "project_name": Path(proj).name, "plan_name": key,
+                                              "tasks": a.tasks_or_result or "", "status": "reviewing", "started": now()})
+        print(f"REVIEW=START id={rid}")
+        return 0
+    if a.action == "done":
+        if a.tasks_or_result not in ("pass", "fail"):
+            print("done ต้องตามด้วย pass หรือ fail", file=sys.stderr)
+            return 1
+        cand = [r for r in _review_rows() if r.get("status") == "reviewing" and r.get("plan_name") == key]
+        if not cand:
+            print(f"ไม่พบป้ายที่กำลังตรวจของแผน {key} (ข้าม)", file=sys.stderr)
+            return 0
+        r = max(cand, key=lambda x: x.get("started", ""))
+        r.update(status=a.tasks_or_result, finished=now(), note=a.note or "")
+        r.pop("age_sec", None), r.pop("done_sec", None)
+        write_json(REVIEWS / f"{r['id']}.json", r)
+        print(f"REVIEW={a.tasks_or_result.upper()} id={r['id']}")
+        return 0
+    return 1
+
+
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
     held = held_slots()
@@ -1321,7 +1397,8 @@ def ui_state() -> dict:
             dead.append(row)
         if st == "running":
             h = slot_of.get(j["id"], {})
-            row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")))
+            row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
+                       log_idle_sec=log_idle_sec(j))
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
@@ -1346,7 +1423,7 @@ def ui_state() -> dict:
             "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
-            "stats": job_stats(history)}
+            "stats": job_stats(history), "reviews": ui_reviews()[0], "reviews_done": ui_reviews()[1]}
 
 
 def job_stats(history: list[dict]) -> dict:
@@ -1842,6 +1919,13 @@ def main() -> int:
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)
+    rv = sp.add_parser("review", help="ป้าย Claude กำลังตรวจ (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — start/done/list")
+    rv.add_argument("action", choices=["start", "done", "list"])
+    rv.add_argument("plan", nargs="?", default="")
+    rv.add_argument("tasks_or_result", nargs="?", default="", help="start: งาน (T-01..) · done: pass|fail")
+    rv.add_argument("--project", default="")
+    rv.add_argument("--note", default="")
+    rv.set_defaults(fn=cmd_review)
     rn = sp.add_parser("runnow", help="ให้งานที่รอคิวได้ช่องพิเศษทันที (รันคู่ขนาน)")
     rn.add_argument("id")
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")

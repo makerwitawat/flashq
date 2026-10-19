@@ -183,14 +183,14 @@ class FlashqTest(unittest.TestCase):
 
     def http(self, url, data=None, headers=None):
         req = urllib.request.Request(url, data=data, headers=headers or {}, method="POST" if data is not None else "GET")
-        for attempt in range(3):  # Windows: เซิร์ฟเวอร์ทดสอบรีเซ็ตคอนเนกชันเป็นบางครั้ง → ลองซ้ำ
+        for attempt in range(4):  # Windows loopback: คำขอหน้าใหญ่ค้าง/รีเซ็ตเป็นระยะ ~5-9% (http.server มาตรฐานก็เป็น) → timeout สั้น + ลองซ้ำ
             try:
-                with urllib.request.urlopen(req, timeout=10) as r:
+                with urllib.request.urlopen(req, timeout=5) as r:
                     return r.status, r.read().decode("utf-8")
             except urllib.error.HTTPError as e:
                 return e.code, e.read().decode("utf-8")
-            except (ConnectionResetError, urllib.error.URLError):
-                if attempt == 2:
+            except (ConnectionResetError, TimeoutError, urllib.error.URLError):
+                if attempt == 3:
                     raise
                 time.sleep(0.5)
 
@@ -209,6 +209,35 @@ class FlashqTest(unittest.TestCase):
             f.write_text(script, encoding="utf-8")
             r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_review_markers_and_log_idle(self):
+        """review: start/done ทำป้ายผู้ตรวจที่ /api/state เห็น (reviews → reviews_done) · งานที่รันมี log_idle_sec"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        r = self.run_q("review", "start", "docs/plans/PLAN_X_FLASH.md", "T-01..T-02")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("REVIEW=START", r.stdout)
+        old_home = flashq.HOME
+        try:
+            flashq.HOME = self.home
+            flashq.REVIEWS = self.home / "reviews"
+            act, done = flashq.ui_reviews()
+            self.assertEqual([(x["plan_name"], x["tasks"]) for x in act], [("PLAN_X_FLASH.md", "T-01..T-02")])
+            self.assertEqual(done, [])
+            r = self.run_q("review", "done", "PLAN_X_FLASH.md", "pass")
+            self.assertIn("REVIEW=PASS", r.stdout)
+            act, done = flashq.ui_reviews()
+            self.assertEqual((act, [x["status"] for x in done]), ([], ["pass"]))
+            self.assertEqual(self.run_q("review", "done", "PLAN_X_FLASH.md", "fail").returncode, 0)  # ไม่มีป้ายค้าง = ข้ามเฉย ๆ
+            self.assertNotEqual(self.run_q("review", "done", "PLAN_X_FLASH.md", "maybe").returncode, 0)
+            log = self.home / "idle.jsonl"
+            log.write_text("x", encoding="utf-8")
+            self.assertLess(flashq.log_idle_sec({"logs": [str(log)]}), 5)
+            self.assertIsNone(flashq.log_idle_sec({"logs": [str(self.home / "none.jsonl")]}))
+            self.assertIsNone(flashq.log_idle_sec({}))
+        finally:
+            flashq.HOME = old_home
+            flashq.REVIEWS = old_home / "reviews"
 
     def test_ui_state_and_cancel(self):
         """ui: /api/state เป็น JSON · POST ไม่มี token = 403 · token ถูก = ยกเลิกงานที่รอคิวได้"""

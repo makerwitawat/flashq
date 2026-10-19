@@ -16,6 +16,10 @@ description: >-
 - `BUSY` / `QUEUE_TIMEOUT` → มีงานอื่นในคิวกลาง ห้ามรันซ้อน บอก user (`python {{FLASHQ}}/flashq.py`)
 - `FAIL` / `TIMEOUT` → อ่าน §4 ของแผน + ท้าย log (path ในบรรทัด `START … log=` · `python {{FLASHQ}}/flashq.py log <job>`) แล้วตรวจงานที่ทำเสร็จตามปกติ
 
+## 0.5 บอกหน้าออฟฟิศว่ากำลังตรวจ (ไม่บังคับ · ล้มเหลวให้ข้ามได้ ห้ามหยุดงานตรวจเพราะข้อนี้)
+- เริ่มตรวจ: `python {{FLASHQ}}/flashq.py review start <แผน> <T-xx...>` → ผู้ตรวจในหน้าออฟฟิศจะยืนประจำ "Claude กำลังตรวจ"
+- ใช้ชื่อไฟล์แผน/ข้อความ ASCII เท่านั้น (ห้ามใส่ภาษาไทยใน argument — เทอร์มินัลบน Windows อาจเพี้ยน)
+
 ## 1. รวบรวม
 - อ่าน §0 + งานที่ระบุ + §4 (Grep → Read เฉพาะช่วง) → งานที่ผล ✅/🟡 แต่ช่อง "ตรวจ Claude" ว่าง
 - ที่ checkout หลัก: `git log --oneline --no-merges <remote>/<main_branch>..<main_branch>` เทียบกับ hash ใน §4 · commit ที่ไม่ใช่ของแผนนี้ → แจ้ง user ห้ามแตะ
@@ -35,6 +39,7 @@ description: >-
 - **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → จบแล้ว `/flash-check` ซ้ำ · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
 - ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user
 - สรุปให้ user: ผ่าน/ไม่ผ่านกี่งาน · รอบแก้ที่ส่งไปแล้ว
+- ปิดป้ายผู้ตรวจ: `python {{FLASHQ}}/flashq.py review done <แผน> pass` (ผ่านทั้งชุด) หรือ `... fail` (มี ❌/T-xxR) — ต้องเรียกก่อนจบ session ทุกครั้ง ไม่งั้นป้ายค้างจน 90 นาทีแล้วหายเอง
 
 ## 5. 1 แผน = 1 session
 - จบแผนแล้ว **ห้ามต่อเรื่องใหม่เองใน session นี้** · มีคิวงานที่ user สั่งไว้ → ถาม user: เปิด session ใหม่ด้วย `/flash-plan <เรื่องถัดไป>` (แนะนำ) / ต่อที่นี่ / หยุดก่อน

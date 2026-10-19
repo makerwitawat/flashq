@@ -64,6 +64,17 @@ python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --ti
 - สถิติและเวลาประมาณแยกตามชนิดงาน (work/verify/test) — งานตรวจสั้นกว่ามาก จึงไม่ปนค่าเฉลี่ยของงานทำจริง (`stats.by_kind`)
 - หน้าเว็บ: ฟอร์มส่งงานมีโหมด "ตรวจ" · ออฟฟิศการ์ตูนแสดงผู้ตรวจใส่แว่น ถือแว่นขยาย ป้าย 🔍
 
+### ป้ายผู้ตรวจ `/flash-check` (review)
+```
+python flashq.py review start docs\plans\PLAN_X.md T-01..T-03 [--project <ชื่อ>]
+python flashq.py review done  PLAN_X.md pass|fail [--note "..."]
+python flashq.py review list
+```
+- `/flash-check` ให้ Claude เป็นผู้ตรวจเอง (ไม่ใช่ `flashq verify` ที่รัน agent ของ opencode) จึงทำเป็นป้ายเบา ๆ: เริ่มตรวจ = `review start` · ตรวจเสร็จ = `review done` — หน้าออฟฟิศแสดง "Claude กำลังตรวจ" ที่ผู้ตรวจประจำ
+- ผ่านชูมือ · ไม่ผ่านหน้าเสีย 10 นาที + แจ้งเตือน/เสียง (ปุ่ม 🔊) · ป้ายค้างเกิน 90 นาทีถือว่าหมดอายุ (ไม่แสดง)
+- คำเตือน "log เงียบ" ใช้เวลาแก้ไขไฟล์ log จากเซิร์ฟเวอร์ (ไม่ต้องเปิดหน้าไว้ก่อน) · มือถือ: ฉากออฟฟิศเลื่อนแนวนอนได้
+- เปลี่ยน `flashq.py` ต้องรีสตาร์ท `flashq ui` · เปลี่ยน `claude/commands/*.md` ต้องรัน `flashq install` ใหม่
+
 ### หน้าเว็บ dashboard
 ```
 python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
