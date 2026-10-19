@@ -15,6 +15,8 @@
 ใช้:
   python flashq.py run docs\\PLAN_X.md T-01..T-03 [--project <dir>]   ส่งงาน (รอคิวเอง)
   python flashq.py run --message "ตอบแค่คำว่า PONG"                   ทดสอบการเชื่อมต่อ
+  python flashq.py verify docs\\PLAN_X.md T-01 [--agent flash-verifier] [--model M]   ส่งผู้ตรวจ (อ่านอย่างเดียว · ไม่ชนงานอื่น)
+  python flashq.py run ... --agent <ชื่อ> --title <ชื่อ> --readonly   เลือก agent/ชื่อ session/งานอ่านอย่างเดียวเอง
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
@@ -603,6 +605,8 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     """เหตุที่งาน a รันพร้อม b ไม่ได้ ("" = ไม่ชน) · อนุรักษ์: ไม่แน่ใจ = ชน"""
     if _pnorm(a.get("project", "")) != _pnorm(b.get("project", "")):
         return ""
+    if a.get("readonly") or b.get("readonly"):  # งานอ่านอย่างเดียว (เช่น ผู้ตรวจ) ไม่แก้ไฟล์ → ไม่ชนใคร
+        return ""
     ia, ib = info(a), info(b)
     if not ia["parallel"]:
         return "แผนสั่งให้รอ (flashq-parallel: no)"
@@ -842,9 +846,18 @@ def cmd_run(a) -> int:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     jid = f"{ts}_{os.getpid()}"
-    title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
+    kind = a.kind or ("test" if a.message else "work")  # work = ลงมือตามแผน · verify = ผู้ตรวจ (อ่านอย่างเดียว) · test = --message
+    agent = a.agent or ("flash-verifier" if kind == "verify" else "")
+    prompt = (a.prompt or f"ตรวจแผน {plan} งาน {a.tasks} ตามหน้าที่ของคุณ แล้วรายงานผลสั้น ๆ") if kind == "verify" else ""
+    if a.title:
+        title = a.title
+    elif kind == "verify":
+        title = f"flash-verify {Path(plan).stem} {a.tasks}"
+    else:
+        title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
     model = a.model or configured_model()
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
+           "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind == "verify"),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION}
     save_job(job)
@@ -879,7 +892,12 @@ def cmd_run(a) -> int:
                 cmd += ["--attach", attach]
             if a.auto:
                 cmd += ["--auto"]
-            cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
+            if agent:
+                cmd += ["--agent", agent]
+            if kind == "verify":
+                cmd += ["--", prompt]
+            else:
+                cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
             res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt)
             if res["status"] == "NOSTART" and nostart_retry > 0:
                 nostart_retry -= 1
@@ -916,6 +934,10 @@ def cmd_run(a) -> int:
     return 0 if res["status"] == "OK" else 1
 
 
+def kind_tag(j: dict) -> str:
+    return "[ตรวจ] " if j.get("kind") == "verify" else ""
+
+
 def cmd_list(a) -> int:
     rows = jobs()
     if not a.all:
@@ -925,7 +947,7 @@ def cmd_list(a) -> int:
         return 0
     for j in rows:
         what = j.get("message") and "--message" or f"{j.get('plan')} {j.get('tasks')}"
-        print(f"{j['id']:24} {live_state(j):13} {Path(j.get('project', '')).name:18} {what}"
+        print(f"{j['id']:24} {live_state(j):13} {Path(j.get('project', '')).name:18} {kind_tag(j)}{what}"
               f"  [{j.get('created', '')}{' → ' + j['finished'] if j.get('finished') else ''}]")
     return 0
 
@@ -938,11 +960,11 @@ def cmd_status(a) -> int:
     for h in held:
         j = next((x for x in jobs() if x["id"] == h.get("id")), {})
         print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
-              + (f" · {Path(j.get('project', '')).name} {j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
+              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
         why = sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else "")
-        print(f"  {i}. {j['id']} {Path(j['project']).name} {j.get('plan') or '--message'} {j.get('tasks', '')}"
+        print(f"  {i}. {j['id']} {Path(j['project']).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}"
               + (f"\n       ↳ {why}" if why else ""))
     print(f"บัญชี flash-worker: {configured_model() or '(ยังไม่ตั้ง)'}")
     return 0
@@ -1253,7 +1275,7 @@ def ui_state() -> dict:
     for j in jobs():
         st = live_state(j)
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
-                                         "created", "started", "finished", "session", "result", "rc")}
+                                         "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
         row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
@@ -1293,10 +1315,10 @@ def ui_state() -> dict:
 
 def job_stats(history: list[dict]) -> dict:
     """สถิติจากงานที่จบแล้ว: ต่อโปรเจกต์ / ต่อบัญชี — จำนวน · ผ่าน · ไม่ผ่าน · เวลาเฉลี่ย (วินาที)"""
-    def group(key) -> list[dict]:
+    def group(key, only=None) -> list[dict]:
         acc: dict[str, dict] = {}
         for r in history:
-            if r["state"] in ("cancelled", "busy", "queue_timeout"):
+            if r["state"] in ("cancelled", "busy", "queue_timeout") or (only and not only(r)):
                 continue
             name = key(r) or "-"
             g = acc.setdefault(name, {"name": name, "n": 0, "ok": 0, "secs": []})
@@ -1310,7 +1332,13 @@ def job_stats(history: list[dict]) -> dict:
             g.update(fail=g["n"] - g["ok"], avg_sec=int(sum(secs) / len(secs)) if secs else None)
             out.append(g)
         return sorted(out, key=lambda g: -g["n"])
-    return {"by_project": group(lambda r: r["project_name"]), "by_model": group(lambda r: r["model"])}
+    def kind(r) -> str:
+        return r.get("kind") or ("test" if r.get("message") else "work")
+
+    def not_verify(r) -> bool:  # งานตรวจสั้นกว่ามาก → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
+        return kind(r) != "verify"
+    return {"by_project": group(lambda r: r["project_name"], not_verify), "by_model": group(lambda r: r["model"], not_verify),
+            "by_kind": group(kind)}
 
 
 # ---------- ส่งงาน/สั่งซ้ำ/ล้างประวัติ (ใช้จาก ui) ----------
@@ -1349,9 +1377,10 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         project = str(body.get("project") or "").strip().strip('"')
         if not project or not Path(project).is_absolute() or not Path(project).is_dir():
             return [], "โปรเจกต์ต้องเป็น path โฟลเดอร์แบบเต็มที่มีอยู่จริง"
-        argv = [sys.executable, str(REPO / "flashq.py"), "run"]
+        kind = "verify" if body.get("kind") == "verify" else ""
+        argv = [sys.executable, str(REPO / "flashq.py"), "verify" if kind else "run"]
         message = str(body.get("message") or "").strip()
-        if message:
+        if message and not kind:
             if len(message) > 2000:
                 return [], "ข้อความยาวเกิน 2000 ตัวอักษร"
             argv.append(f"--message={message}")  # รูป --x=ค่า กัน argparse ตีความข้อความที่ขึ้นต้นด้วย - เป็นตัวเลือก
@@ -1378,6 +1407,13 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         if attach not in ("live", "none"):
             return [], "attach ต้องเป็น live หรือ none"
         argv += ["--attach", attach]
+        agent = str(body.get("agent") or "").strip()
+        if agent:
+            if not re.fullmatch(r"[\w.-]{1,64}", agent):
+                return [], "ชื่อ agent ใช้ได้แค่ตัวอักษร ตัวเลข _ . -"
+            argv.append(f"--agent={agent}")
+        if body.get("readonly") and not kind:
+            argv.append("--readonly")
         if body.get("no_open"):
             argv.append("--no-open")
         if body.get("auto"):
@@ -1628,7 +1664,8 @@ def make_ui_server(port: int = 4097):
                 if live_state(j) in ("queued", "running"):
                     return self._send(409, {"ok": False, "message": "งานนี้ยังรอคิว/กำลังทำอยู่"})
                 spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
-                        "tasks": j.get("tasks", ""), "message": j.get("message", "")}
+                        "tasks": j.get("tasks", ""), "message": j.get("message", ""), "kind": j.get("kind", ""),
+                        "agent": j.get("agent", ""), "readonly": j.get("readonly", False)}
                 argv, err = build_run_argv(spec)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
@@ -1716,19 +1753,29 @@ def main() -> int:
     r = sp.add_parser("run", help="ส่งงานเข้าคิว")
     r.add_argument("plan", nargs="?")
     r.add_argument("tasks", nargs="?")
-    r.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
-    r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้น) = server 4096 ให้ desktop ดูสด · none = รันแยก · หรือ url")
-    r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
-    r.add_argument("--variant")
-    r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
-    r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
-    r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
-    r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
-    r.add_argument("--retry-nostart", type=int, default=1, help="NOSTART แล้วลองใหม่กี่ครั้ง")
-    r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
-    r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
-    r.set_defaults(fn=cmd_run)
+    r.set_defaults(kind="", prompt="")
+    vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
+    vf.add_argument("plan")
+    vf.add_argument("tasks")
+    vf.add_argument("--prompt", help="ข้อความสั่งผู้ตรวจ (ค่าเริ่มต้น = ตรวจแผน/งานนี้ตามหน้าที่)")
+    vf.set_defaults(kind="verify", message="")
+    for r in (r, vf):  # ตัวเลือกร่วมของ run/verify
+        r.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+        r.add_argument("--agent", default="", help="agent ของ opencode ที่ใช้ (verify ค่าเริ่มต้น flash-verifier)")
+        r.add_argument("--title", default="", help="ชื่อ session ใน opencode")
+        r.add_argument("--readonly", action="store_true", help="งานอ่านอย่างเดียว ไม่ชนงานอื่นในตัวจัดคิว (verify เปิดให้เสมอ)")
+        r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้น) = server 4096 ให้ desktop ดูสด · none = รันแยก · หรือ url")
+        r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
+        r.add_argument("--variant")
+        r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
+        r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
+        r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
+        r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
+        r.add_argument("--retry-nostart", type=int, default=1, help="NOSTART แล้วลองใหม่กี่ครั้ง")
+        r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
+        r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
+        r.set_defaults(fn=cmd_run)
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)
     li = sp.add_parser("list", help="รายการงาน")
     li.add_argument("--all", action="store_true")

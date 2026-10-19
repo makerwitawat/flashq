@@ -54,6 +54,16 @@ python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # 
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`
 
+### งานตรวจ (verify) — ผู้ตรวจอิสระ
+```
+python D:\MyCode\flashq\flashq.py verify docs\plans\PLAN_X.md T-01..T-03 [--agent flash-verifier] [--prompt "..."] [--title "..."]
+python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --title "..."     # ตัวเลือกเดียวกันใช้กับ run ได้
+```
+- ส่ง prompt ตรง ๆ ให้ `opencode run --agent` (ค่าเริ่มต้น agent = `flash-verifier`) แทน `/flash` — ใช้ตรวจผลงานแผนโดย agent ที่อ่านอย่างเดียว
+- งานตรวจเป็น `readonly` → **ไม่ชนไฟล์กับงานอื่น** รันคู่ขนานได้เสมอ (ถ้ามีช่องว่าง) · สั่งซ้ำจากหน้าเว็บ/`retry` คง kind/agent เดิม
+- สถิติและเวลาประมาณแยกตามชนิดงาน (work/verify/test) — งานตรวจสั้นกว่ามาก จึงไม่ปนค่าเฉลี่ยของงานทำจริง (`stats.by_kind`)
+- หน้าเว็บ: ฟอร์มส่งงานมีโหมด "ตรวจ" · ออฟฟิศการ์ตูนแสดงผู้ตรวจใส่แว่น ถือแว่นขยาย ป้าย 🔍
+
 ### หน้าเว็บ dashboard
 ```
 python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]

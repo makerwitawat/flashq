@@ -159,11 +159,16 @@ class FlashqTest(unittest.TestCase):
 
     def http(self, url, data=None, headers=None):
         req = urllib.request.Request(url, data=data, headers=headers or {}, method="POST" if data is not None else "GET")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.status, r.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            return e.code, e.read().decode("utf-8")
+        for attempt in range(3):  # Windows: เซิร์ฟเวอร์ทดสอบรีเซ็ตคอนเนกชันเป็นบางครั้ง → ลองซ้ำ
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, r.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode("utf-8")
+            except (ConnectionResetError, urllib.error.URLError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.5)
 
     def test_ui_office_tab_and_script_syntax(self):
         """ui: หน้าเว็บมีแท็บออฟฟิศ · สคริปต์ในหน้าไม่มี syntax error (ตรวจด้วย node ถ้ามี)"""
@@ -586,6 +591,82 @@ class FlashqTest(unittest.TestCase):
         p = self.run_q(*args, env={"FAKE_SLEEP": sleep}, wait=False)
         self.addCleanup(lambda: (p.kill(), p.wait(timeout=30)) if p.poll() is None else None)
         return p
+
+    def test_verify_runs_agent_readonly(self):
+        """verify: ส่ง --agent flash-verifier + prompt (ไม่ใช้ --command) · job kind=verify readonly · title/list บอกว่าตรวจ"""
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "flash-verifier")
+        self.assertNotIn("--command", argv)
+        self.assertIn("PLAN.md", argv[-1])
+        self.assertIn("T-01", argv[-1])
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertEqual((job["kind"], job["agent"], job["readonly"]), ("verify", "flash-verifier", True))
+        self.assertEqual(job["title"], "flash-verify PLAN T-01")
+        self.assertEqual(argv[argv.index("--title") + 1], "flash-verify PLAN T-01")
+        self.assertIn("[ตรวจ]", self.run_q("list", "--all").stdout)
+        # ตัวเลือกเอง: agent/title/prompt/model ระบุได้
+        self.args_out.unlink()
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--agent", "my-checker",
+                       "--title", "ตรวจ X", "--prompt", "ตรวจให้ที", "--model", "p9/m")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual((argv[argv.index("--agent") + 1], argv[argv.index("--title") + 1], argv[-1],
+                          argv[argv.index("--model") + 1]), ("my-checker", "ตรวจ X", "ตรวจให้ที", "p9/m"))
+
+    def test_run_agent_and_readonly_options(self):
+        r = self.run_q(*self.base(), "--agent", "x-agent", "--readonly")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "x-agent")
+        self.assertEqual(argv[argv.index("--command") + 1:], ["flash", "--", "PLAN.md", "T-01"])
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertEqual((job["kind"], job["readonly"]), ("work", True))
+
+    def test_verify_never_blocked_by_file_conflict(self):
+        """auto: งานทำจริงที่แตะ a.cpp กำลังรัน → verify ของ T-02 (ไฟล์ซ้อน) ก็เริ่มได้ทันที (อ่านอย่างเดียว ไม่ชน)"""
+        self.auto_plan()
+        self.assertEqual(self.run_q("config", "schedule", "auto").returncode, 0)
+        p1 = self.submit("PLAN.md", "T-01", sleep="8")
+        self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
+        p2 = self.run_q("verify", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "3"}, wait=False)
+        self.addCleanup(lambda: (p2.kill(), p2.wait(timeout=30)) if p2.poll() is None else None)
+        self.wait_for(lambda: self.by_key().get("T-02", {}).get("status") == "running", msg="verify ไม่เริ่มพร้อมกัน")
+        self.assertIsNone(p1.poll())  # งานแรกยังรันอยู่ = รันคู่ขนานจริง
+        self.assertIn("FLASH_RUN=OK", p2.communicate(timeout=60)[0])
+        self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
+
+    def test_ui_submit_and_retry_keep_verify_kind(self):
+        """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.env["FLASHQ_LIVE_URL"] = f"http://127.0.0.1:{s.getsockname()[1]}"
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        good = {"project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01", "kind": "verify", "agent": "my-checker",
+                "attach": "none", "no_open": True}
+        self.assertEqual(self.http(base + "/api/submit", json.dumps({**good, "agent": "bad agent;"}).encode(), hdr)[0], 400)
+        code, body = self.http(base + "/api/submit", json.dumps(good).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid = json.loads(body)["job"]
+        self.wait_job(jid)
+        code, body = self.http(base + "/api/retry", json.dumps({"id": jid, "attach": "none", "no_open": True}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid2 = json.loads(body)["job"]
+        self.wait_job(jid2)
+        job2 = json.loads((self.home / "jobs" / f"{jid2}.json").read_text(encoding="utf-8"))
+        self.assertEqual((job2["kind"], job2["agent"], job2["readonly"]), ("verify", "my-checker", True))
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(argv[argv.index("--agent") + 1], "my-checker")
+        self.assertNotIn("--command", argv)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertTrue(all(h["kind"] == "verify" for h in st["history"]))
+        self.assertEqual(st["stats"]["by_project"], [])  # งานตรวจไม่ปนสถิติงานทำจริง
+        self.assertEqual([(g["name"], g["n"]) for g in st["stats"]["by_kind"]], [("verify", 2)])
+        html = self.http(base + "/")[1]
+        for needle in ("agentField", "isVerify", "checker"):
+            self.assertIn(needle, html)
 
     def test_auto_skip_conflict_and_overlap_waits(self):
         """auto: งานที่ไฟล์ซ้อนต้องรอ (เหตุผลบอกไฟล์) · งานถัดไปที่ไม่ชนได้เริ่มก่อน (ข้ามงานที่ชน)"""

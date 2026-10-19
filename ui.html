@@ -342,6 +342,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
       <ul class="of-legend">
         <li>🧑‍💻 <b>นั่งโต๊ะ</b> = งานกำลังทำ (เลขช่องอยู่ที่โต๊ะ) · <b>โต๊ะว่าง</b> = ยังไม่มีงาน</li>
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
+        <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
         <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
@@ -370,6 +371,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
     <datalist id="projList"></datalist>
     <div class="row">
       <label><input type="radio" name="mode" value="plan" checked> ตามแผน (/flash)</label>
+      <label><input type="radio" name="mode" value="verify"> ตรวจ (ผู้ตรวจ · อ่านอย่างเดียว)</label>
       <label><input type="radio" name="mode" value="message"> ข้อความทดสอบ</label>
     </div>
     <div id="planFields" class="grid2">
@@ -378,6 +380,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
       <datalist id="planList"></datalist>
       <label class="field"><span>งาน</span><input id="fTasks" placeholder="T-01..T-03" autocomplete="off"></label>
     </div>
+    <label class="field" id="agentField" hidden><span>agent ผู้ตรวจ (ว่าง = flash-verifier)</span><input id="fAgent" placeholder="flash-verifier" autocomplete="off"></label>
     <label class="field" id="msgField" hidden><span>ข้อความ</span><textarea id="fMessage" rows="2">ตอบแค่คำว่า PONG</textarea></label>
     <div class="grid2">
       <label class="field"><span>สลับบัญชีเมื่อ QUOTA (ครั้ง)</span><input type="number" id="fSwitch" min="0" max="10" value="0"></label>
@@ -428,7 +431,9 @@ const dur = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h} ชม. ${m} นาที` : m ? `${m} นาที ${x} วิ` : `${x} วิ`;
 };
-const what = (j) => j.message ? `ข้อความ: ${j.message}` : `${j.plan || "-"} ${j.tasks || ""}`;
+const kindOf = (j) => j.kind || (j.message ? "test" : "work");
+const isVerify = (j) => kindOf(j) === "verify";
+const what = (j) => j.message ? `ข้อความ: ${j.message}` : `${isVerify(j) ? "🔍 ตรวจ " : ""}${j.plan || "-"} ${j.tasks || ""}`;
 let state = null, prevStates = null;
 let logJob = null, logOffset = 0, logAttempt = 0, logTimer = null, logLines = [], logDone = false, logSession = "";
 
@@ -525,7 +530,7 @@ function render() {
       <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b>
         ${r.slot ? `<span class="muted">· ช่อง ${r.slot}${r.extra ? " (พิเศษ)" : ""}</span>` : ""}</div>
       <div>โปรเจกต์</div><div>${esc(r.project_name)} <span class="muted mono">${esc(r.project)}</span></div>
-      <div>แผน</div><div class="mono">${esc(r.message ? "(ทดสอบ --message)" : r.plan)}</div>
+      <div>แผน</div><div class="mono">${esc(r.message ? "(ทดสอบ --message)" : r.plan)}${isVerify(r) ? ` <span class="badge s-other">🔍 ผู้ตรวจ${r.agent ? " · " + esc(r.agent) : ""}</span>` : ""}</div>
       <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}</div>
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
@@ -566,8 +571,11 @@ function render() {
   const statTable = (title, rows) => rows.length ? `<div class="table-wrap"><table class="stats"><tr><th>${title}</th><th>งาน</th><th>ผ่าน</th><th></th><th>เฉลี่ย</th></tr>
     ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
       <td>${pct}%</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
-  const st = s.stats || { by_project: [], by_model: [] };
-  $("stats").innerHTML = st.by_project.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
+  const st = s.stats || { by_project: [], by_model: [], by_kind: [] };
+  const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", test: "ทดสอบ" };
+  const kindRows = (st.by_kind || []).map((g) => ({ ...g, name: KIND_TH[g.name] || g.name }));
+  $("stats").innerHTML = st.by_project.length || kindRows.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
+      + (kindRows.length > 1 ? `<div style="height:0.6rem"></div>` + statTable("ชนิดงาน", kindRows) : "")
     : `<div class="empty">ยังไม่มีงานที่จบ</div>`;
 
   const pl = $("projList");
@@ -686,19 +694,21 @@ $("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffse
 const dlg = $("submitDlg");
 const prefs = Object.assign({ project: "", switch_on_quota: 0, timeout_min: 0, attach: "live", no_open: false, auto: false }, store.get("submit", {}));
 function mode() { return document.querySelector('input[name="mode"]:checked').value; }
+const planMode = () => mode() !== "message";
 function formBody() {
-  return { project: $("fProject").value.trim(), plan: mode() === "plan" ? $("fPlan").value.trim() : "", tasks: mode() === "plan" ? $("fTasks").value.trim() : "",
+  return { project: $("fProject").value.trim(), plan: planMode() ? $("fPlan").value.trim() : "", tasks: planMode() ? $("fTasks").value.trim() : "",
+    kind: mode() === "verify" ? "verify" : "", agent: mode() === "verify" ? $("fAgent").value.trim() : "",
     message: mode() === "message" ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
     attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked };
 }
 function runOpts(b) { return { switch_on_quota: b.switch_on_quota, timeout_min: b.timeout_min, attach: b.attach, no_open: b.no_open, auto: b.auto }; }
 function preview() {
   const b = formBody(), quote = (x) => /\s/.test(x) ? `"${x}"` : x;
-  const parts = ["flashq.py run", ...(b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
+  const parts = [b.kind ? "flashq.py verify" : "flashq.py run", ...(b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
     "--project", quote(b.project || "<โปรเจกต์>"), "--switch-on-quota", b.switch_on_quota, ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : []),
-    "--attach", b.attach, ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : [])];
+    "--attach", b.attach, ...(b.agent ? ["--agent", quote(b.agent)] : []), ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : [])];
   $("cmdPreview").textContent = parts.join(" ");
-  $("planFields").hidden = mode() !== "plan"; $("msgField").hidden = mode() !== "message";
+  $("planFields").hidden = !planMode(); $("msgField").hidden = mode() !== "message"; $("agentField").hidden = mode() !== "verify";
 }
 let planTimer = null, planFor = null;
 async function loadPlans() {
@@ -890,7 +900,7 @@ let prevRun = new Set(), ofSig = "", ologBusy = false;
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
 const pad2 = (n) => String(n).padStart(2, "0");
 const hueOf = (str) => { let h = 7; for (const c of String(str || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-const shortWhat = (j) => j.message ? `ข้อความ: ${trunc(j.message, 40)}` : `${String(j.plan || "-").split(/[\/]/).pop()} ${j.tasks || ""}`;
+const shortWhat = (j) => j.message ? `ข้อความ: ${trunc(j.message, 40)}` : `${isVerify(j) ? "🔍 ตรวจ " : ""}${String(j.plan || "-").split(/[\/]/).pop()} ${j.tasks || ""}`;
 const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 function approx(s) {
   if (s == null || !isFinite(s)) return "-";
@@ -929,14 +939,14 @@ function parseTasks(s) {
 /* --- ประมาณการเวลา: จากประวัติงานที่จบ OK (ค่ากลาง · ต่อ 1 T-xx × จำนวนงาน) --- */
 function estimate(j) {
   const hist = (state?.history || []).filter((h) => h.state === "ok" && h.duration_sec >= 5);
-  const isMsg = !!j.message;
+  const isMsg = !!j.message, k = kindOf(j);
   const n = Math.max(1, parseTasks(j.tasks).length);
-  const same = hist.filter((h) => h.project === j.project && !!h.message === isMsg && (isMsg ? h.message === j.message : (h.plan === j.plan && h.tasks === j.tasks)));
+  const same = hist.filter((h) => h.project === j.project && kindOf(h) === k && (isMsg ? h.message === j.message : (h.plan === j.plan && h.tasks === j.tasks)));
   if (same.length) return { sec: median(same.map((h) => h.duration_sec)), n: same.length, scope: "same" };
   const per = (h) => h.duration_sec / Math.max(1, parseTasks(h.tasks).length);
-  const proj = hist.filter((h) => h.project === j.project && !!h.message === isMsg);
+  const proj = hist.filter((h) => h.project === j.project && kindOf(h) === k);
   if (proj.length) return { sec: median(proj.map(per)) * n, n: proj.length, scope: "project" };
-  const all = hist.filter((h) => !!h.message === isMsg);
+  const all = hist.filter((h) => kindOf(h) === k);
   if (all.length) return { sec: median(all.map(per)) * n, n: all.length, scope: "all" };
   return null;
 }
@@ -1022,7 +1032,7 @@ function officeTrack() {
   for (const id of prevRun) {
     if (cur.has(id)) continue;
     const h = (state.history || []).find((x) => x.id === id), d = deskOf.get(id);
-    if (h && d && FINAL.includes(h.state)) cele.push({ desk: d.i, state: h.state, id, h: d.h, until: Date.now() + 20000 });
+    if (h && d && FINAL.includes(h.state)) cele.push({ desk: d.i, state: h.state, id, h: d.h, v: d.v, until: Date.now() + 20000 });
   }
   prevRun = cur;
 }
@@ -1030,7 +1040,7 @@ function officeTrack() {
 /* --- ตัวละคร (SVG) --- */
 const SKINS = ["#ffd9b8", "#f2c299", "#d9a272", "#fbe0c8"], HAIRS = ["#3b2a20", "#222a38", "#8a4b2a", "#c9a14a"];
 function hashN(s) { let h = 3; for (const c of String(s)) h = (h * 33 + c.charCodeAt(0)) >>> 0; return h; }
-function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false }) {
+function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false, checker = false }) {
   const color = `hsl(${hue} 55% 50%)`, skin = SKINS[hashN(seed) % 4], hair = HAIRS[(hashN(seed) >> 3) % 4];
   const arm = (x1, y1, x2, y2, c) => `<g class="${c}"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="8" stroke-linecap="round"/><circle cx="${x2}" cy="${y2}" r="4" fill="${skin}"/></g>`;
   const cup = `<g><rect x="19" y="-58" width="9" height="9" rx="2" fill="#fff" stroke="#7a5a3a"/><path d="M28 -56 q4 1 0 5" stroke="#7a5a3a" fill="none"/><g class="of-steam"><path d="M22 -62 q-2 -3 0 -6 M26 -62 q-2 -3 0 -6" stroke="#9aa5b5" fill="none" stroke-linecap="round"/></g></g>`;
@@ -1048,10 +1058,12 @@ function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false }) {
   const extra = (mood === "sad" ? `<ellipse cx="-8" cy="-55" rx="1.4" ry="2.2" fill="#6bb6ff"/>` : "")
     + (pose === "sleep" ? `<g class="of-zz"><text x="14" y="-70" font-size="11" fill="currentColor" class="of-tm">z</text><text x="21" y="-78" font-size="9" class="of-tm">z</text></g>` : "")
     + (sign ? `<g><rect x="12" y="-56" width="26" height="18" rx="3" fill="#fff" stroke="#9aa5b5"/><text x="25" y="-43" text-anchor="middle" font-size="11">⏸</text></g>` : "");
+  const glasses = checker && mood !== "sleep" ? `<g fill="none" stroke="#1f2937" stroke-width="1.5"><circle cx="-5" cy="-61" r="4.8"/><circle cx="5" cy="-61" r="4.8"/><path d="M-0.2 -61 h0.4"/></g>` : "";
+  const lens = checker && pose !== "cheer" ? `<g><circle cx="24" cy="-34" r="6" fill="#bfe3ff" fill-opacity=".55" stroke="#374151" stroke-width="2"/><path d="M28.5 -29.5 l7 7" stroke="#374151" stroke-width="3" stroke-linecap="round"/></g>` : "";
   const tilt = pose === "sleep" ? ` transform="rotate(8 0 -62)"` : "";
   return `<g transform="translate(${x},${y}) scale(${s})"><g class="of-body">${legs}<rect x="-15" y="-48" width="30" height="32" rx="9" fill="${color}"/>${arms}
     <g${tilt}><circle cx="0" cy="-62" r="14" fill="${skin}"/><path d="M-14.5,-63 A14.5,14.5 0 0 1 14.5,-63 Q6,-69 -2,-66 Q-9,-64 -14.5,-63Z" fill="${hair}"/>
-    ${eyes}<circle cx="-9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/><circle cx="9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/>${mouths[mood] || mouths.smile}${extra}</g></g></g>`;
+    ${eyes}<circle cx="-9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/><circle cx="9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/>${mouths[mood] || mouths.smile}${glasses}${extra}</g>${lens}</g></g>`;
 }
 
 /* --- ฉาก --- */
@@ -1066,7 +1078,7 @@ function officeModel() {
   const runs = state.running_list || [];
   const N = Math.min(12, Math.max(1, state.slots?.max || 1, runs.length, ...runs.map((r) => r.slot | 0)));
   const desks = assignDesks(runs, N);
-  desks.forEach((r, i) => { if (r) deskOf.set(r.id, { i, h: hueOf(r.project_name) }); });
+  desks.forEach((r, i) => { if (r) deskOf.set(r.id, { i, h: hueOf(r.project_name), v: isVerify(r) }); });
   const now = Date.now();
   for (let k = cele.length - 1; k >= 0; k--) if (cele[k].until <= now) cele.splice(k, 1);
   const celeAt = {};
@@ -1082,14 +1094,14 @@ function deskSVG(i, cx, cy, r, c) {
   let who = "", bubble = "", label = "", stCls = "";
   if (r) {
     stCls = "of-st-work";
-    who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py });
+    who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: isVerify(r) });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
-    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${esc(trunc(r.project_name, 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>`;
+    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? "🔍 " : ""}${esc(trunc(r.project_name, isVerify(r) ? 11 : 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>`;
   } else if (c) {
     const k = CELE[c.state];
     stCls = k.cls;
-    who = person({ seed: c.id, hue: c.h, pose: k.pose, mood: k.mood, x: px, y: py });
+    who = person({ seed: c.id, hue: c.h, pose: k.pose, mood: k.mood, x: px, y: py, checker: !!c.v });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" x="${px}" y="${cy + 37}" text-anchor="middle">${k.icon} ${esc(k.text)}</text></g>`;
     label = `<text class="of-tm" x="${cx + 16}" y="${cy + 162}">เพิ่งจบ · พักแป๊บ</text>`;
@@ -1131,7 +1143,7 @@ function sceneSVG(m) {
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
     g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${shortWhat(j)}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
-      ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash })}
+      ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash, checker: isVerify(j) })}
       <rect class="of-badge" x="${150 - 15}" y="${y - 70}" width="30" height="15" rx="7.5"/><text class="of-badget" x="150" y="${y - 59}" text-anchor="middle">#${j.position}</text></g>`;
   });
   if (m.queue.length > SHOW) g += `<text class="of-tb" x="150" y="${150 + SHOW * 70 - 14}" text-anchor="middle">+${m.queue.length - SHOW} งานรออยู่</text>`;
@@ -1146,7 +1158,7 @@ function sceneSVG(m) {
 
 /* --- การ์ดงาน / คิว / เพิ่งจบ --- */
 function runCardHTML(r, k) {
-  const plan = r.message ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop();
+  const plan = (isVerify(r) ? "🔍 ตรวจ " : "") + (r.message ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
@@ -1196,7 +1208,7 @@ function officeUpdate() {
     const bar = $("ofCB" + k);
     if (bar) { bar.className = "of-bar" + (cls ? " " + cls : ""); bar.firstElementChild.style.width = ri.pct == null ? "" : ri.pct.toFixed(1) + "%"; ri.pct == null ? bar.removeAttribute("aria-valuenow") : bar.setAttribute("aria-valuenow", Math.round(ri.pct)); }
     setText("ofCP" + k, ri.pct == null ? "ประมาณไม่ได้" : Math.round(ri.pct) + "%" + (ri.pct >= 95 ? "+" : ""));
-    const stepTxt = r.message ? "ข้อความทดสอบ" : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
+    const stepTxt = r.message ? "ข้อความทดสอบ" : isVerify(r) ? "ผู้ตรวจกำลังตรวจ " + (r.tasks || "") : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
     setText("ofCS" + k, stepTxt + (L && L.mention && !ri.doneN && ri.n > 1 ? ` (log พูดถึง ${L.mention} ล่าสุด)` : ""));
     const act = trunc(activity(L), 90);
     setText("ofCT" + k, act);
