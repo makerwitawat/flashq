@@ -35,6 +35,8 @@ if mode in ("failbalance", "failquota"):  # สรุปท้ายของ wo
     txt = "ปรับสมดุล balance ของเกมแล้ว สถานะ: FAIL" if mode == "failbalance" else "FAIL: quota"
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": txt}}), flush=True)
     sys.exit(1)
+if mode == "agentmissing":  # agent ไม่อยู่ในรายชื่อ (เช่น live server จำรายชื่อเก่า)
+    print("agent \"x\" not found. Falling back to default agent", file=sys.stderr, flush=True)
 if mode == "subagent":  # opencode เตือนทาง stderr แล้วตกไปรัน agent เริ่มต้น (ยังจบด้วย exit 0)
     print("agent \"x\" is a subagent, not a primary agent. Falling back to default agent", file=sys.stderr, flush=True)
 if mode == "fail":
