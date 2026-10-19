@@ -218,6 +218,8 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 @keyframes of-wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 @keyframes of-zz { 0% { opacity: 0; transform: translate(0, 0); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(8px, -14px); } }
 @keyframes of-code { to { stroke-dashoffset: -24; } }
+@keyframes of-patrol { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(340px); } }
+.of-patrol { animation: of-patrol 18s ease-in-out infinite; }
 @keyframes of-slide { from { left: -35%; } to { left: 100%; } }
 body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-paused .of-bar i { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .of-scene *, .of-bar i { animation: none !important; } }
@@ -344,6 +346,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
         <li>🧑‍💻 <b>นั่งโต๊ะ</b> = งานกำลังทำ (เลขช่องอยู่ที่โต๊ะ) · <b>โต๊ะว่าง</b> = ยังไม่มีงาน</li>
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
+        <li>🚶 <b>ผู้ตรวจประจำออฟฟิศ</b> (แถบม่วงใต้โต๊ะ) = ว่างจะเดินลาดตระเวนรองานตรวจ · มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
         <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
@@ -1154,7 +1157,7 @@ function deskSVG(i, cx, cy, r, c) {
 
 function sceneSVG(m) {
   const cols = Math.min(4, m.N), rows = Math.ceil(m.N / 4);
-  const H = Math.max(530, DESK_Y0 + rows * DH + 24);
+  const stripY = DESK_Y0 + rows * DH, H = Math.max(530, stripY + 100);
   const areaW = SCENE_W - DESK_X0 - 10, ox = DESK_X0 + Math.max(0, (areaW - cols * DW) / 2);
   const total = m.runs.length;
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
@@ -1167,6 +1170,14 @@ function sceneSVG(m) {
     <text class="of-tm" x="${SCENE_W - 16}" y="48" text-anchor="end">flashq office</text>
     <rect class="of-carpet" x="96" y="86" width="108" height="${H - 108}" rx="14"/>`;
   m.desks.forEach((r, i) => { g += deskSVG(i, ox + (i % 4) * DW, DESK_Y0 + Math.floor(i / 4) * DH, r, m.celeAt[i]); });
+  {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = เดินลาดตระเวนในแถบใต้โต๊ะ · มีงานตรวจรันอยู่ = ยืนประจำ บอกช่องที่ตรวจ
+    const vd = m.desks.map((r, i) => (r && isVerify(r) ? i + 1 : 0)).filter(Boolean);
+    const sy = stripY + 8, py = sy + 78;
+    g += `<g class="of-st-insp"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+      <g class="${vd.length ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: "stand", mood: "smile", x: DESK_X0 + 70, y: py, s: 0.9, checker: true })}</g>
+      <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
+      <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${vd.length ? "กำลังตรวจที่ช่อง " + vd.join(", ") : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ"}</text></g>`;
+  }
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
