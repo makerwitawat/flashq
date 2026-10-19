@@ -55,7 +55,7 @@ SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 START_LIMIT_SEC = 180
-SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent", re.I)
+SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
 DEFAULTS = {
     "main_branch": "master",          # branch ที่ opencode ต้องอยู่ + ที่แผนต้องถูก push ไป
@@ -827,7 +827,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
         status = "FAIL"
     if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
         status = "FAIL"
-        errors.append("agent ที่ระบุเป็น subagent (opencode ตกไปใช้ agent เริ่มต้น) — ตั้ง mode: all หรือ primary ใน agent นั้น")
+        errors.append("agent ที่ระบุใช้ไม่ได้ (เป็น subagent หรือหาไม่เจอ → opencode ตกไปใช้ agent เริ่มต้นที่แก้ไฟล์ได้) — ตั้ง mode: all/primary ติดตั้ง agent ให้ครบ หรือใช้ --attach none")
     # ตรวจโควตาจาก error/stderr จริงเท่านั้น — ไม่กวาดข้อความสรุปของ worker (คำว่า balance/quota ในเนื้องานเกมทำให้สลับบัญชีเกินจำเป็น)
     # worker รายงานโควตาเองด้วยบรรทัด "FAIL: quota" (flash.md)
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:

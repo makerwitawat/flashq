@@ -708,6 +708,9 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
         self.assertIn("subagent", r.stdout)
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_MODE": "agentmissing"})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
 
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
