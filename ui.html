@@ -233,6 +233,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
   <span class="sp"></span>
   <button class="primary" id="newJobBtn" title="ส่งงานใหม่เข้าคิว (N)">＋ ส่งงานใหม่</button>
   <button id="notifyBtn" title="แจ้งเตือนเมื่องานจบ">🔕 แจ้งเตือน: ปิด</button>
+  <button id="soundBtn" title="เล่นเสียงเมื่องานจบ/ล้มเหลว">🔇 เสียง: ปิด</button>
   <span class="group" title="ขนาดตัวอักษร/กรอบ (ปุ่ม + - 0 หรือ Ctrl+วงล้อเมาส์)">
     <button id="zoomOut">A−</button><button id="zoomReset">100%</button><button id="zoomIn">A+</button>
   </span>
@@ -584,6 +585,32 @@ $("notifyBtn").onclick = async () => {
   }
   notifyOn = !notifyOn; store.set("notify", notifyOn); notifyLabel();
 };
+/* เสียงเมื่องานจบ: OK = สองโน้ตขึ้น · ล้มเหลว = สองโน้ตลง · QUOTA = โน้ตเดียวต่ำ */
+let soundOn = store.get("sound", false), audioCtx = null;
+function soundLabel() { $("soundBtn").textContent = soundOn ? "🔊 เสียง: เปิด" : "🔇 เสียง: ปิด"; }
+function beep(notes) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    let t = audioCtx.currentTime + 0.02;
+    for (const [f, d] of notes) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + d + 0.02); t += d;
+    }
+  } catch (e) {}
+}
+function playFinish(st) {
+  if (!soundOn) return;
+  if (st === "OK") beep([[660, 0.14], [880, 0.22]]);
+  else if (st === "QUOTA") beep([[440, 0.3]]);
+  else beep([[440, 0.16], [300, 0.3]]);
+}
+$("soundBtn").onclick = () => {
+  soundOn = !soundOn; store.set("sound", soundOn); soundLabel();
+  if (soundOn) beep([[660, 0.1], [880, 0.14]]);
+};
 function checkFinished() {
   const now = {};
   (state.running_list || []).forEach((j) => { now[j.id] = "running"; });
@@ -594,6 +621,7 @@ function checkFinished() {
       const was = prevStates[j.id];
       if ((was === "running" || was === "queued") && FINAL.includes(j.state)) {
         toast(`งานจบ: ${STATUS[j.state][0]} · ${j.project_name} · ${what(j)} (${dur(j.duration_sec)})`);
+        playFinish(j.state);
         if (notifyOn && "Notification" in window && Notification.permission === "granted") {
           try { new Notification(`flashq: ${STATUS[j.state][0]}`, { body: `${j.project_name} · ${what(j)}`, tag: j.id }); } catch (e) {}
         }
@@ -1269,7 +1297,7 @@ document.addEventListener("visibilitychange", () => document.body.classList.togg
 setInterval(() => { if (view === "office" && !document.hidden) officeUpdate(); }, 1000);
 
 setView(view);
-applyTheme(); notifyLabel(); applyZoom();
+applyTheme(); notifyLabel(); soundLabel(); applyZoom();
 refresh();
 setInterval(refresh, 3000);
 </script>
