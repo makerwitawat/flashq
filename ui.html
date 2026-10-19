@@ -192,6 +192,13 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .of-desk { fill: color-mix(in srgb, #c9955a 70%, var(--panel)); }
 .of-deskf { fill: color-mix(in srgb, #8a5d2e 65%, var(--panel)); }
 .of-chair { fill: color-mix(in srgb, var(--muted) 55%, var(--panel)); }
+.of-plank { fill: none; stroke: color-mix(in srgb, var(--text) 7%, transparent); stroke-width: 1; }
+.of-base { fill: color-mix(in srgb, var(--accent) 32%, var(--panel)); }
+.of-sky { fill: color-mix(in srgb, #9fd3ff 62%, var(--panel)); }
+.of-frame { fill: none; stroke: color-mix(in srgb, #8a5d2e 70%, var(--panel)); stroke-width: 3; }
+.of-curt { fill: color-mix(in srgb, #e57373 55%, var(--panel)); }
+.of-wb { fill: color-mix(in srgb, #fff 82%, var(--panel)); stroke: var(--line); }
+.of-shadow { fill: #000; opacity: .09; }
 .of-mon { fill: #2a3342; }
 .of-scr { fill: #0f1620; }
 .of-scr.on { fill: #14384a; }
@@ -355,6 +362,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
         <li>🚶 <b>ผู้ตรวจประจำออฟฟิศ</b> (แถบม่วงใต้โต๊ะ) = ว่างจะเดินลาดตระเวนรองานตรวจ · มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ</li>
+        <li>🏢 <b>ห้องทำงาน</b> = พื้นไม้ ผนัง หน้าต่าง+ม่าน ชั้นหนังสือ ไวท์บอร์ด รูปภาพ ตู้น้ำ ต้นไม้ · โต๊ะมีคีย์บอร์ด เมาส์ แก้วกาแฟ เอกสาร ไฟสถานะจอ เก้าอี้มีล้อ (ตกแต่งอย่างเดียว ไม่มีผลกับสถานะงาน)</li>
         <li>👔 <b>แต่งตัวต่างจากคนงาน</b> = ผู้ตรวจใส่เสื้อกาวน์ขาว+เนคไท+แว่น · 🕵️ ผู้สืบ (flash-investigator) ใส่โค้ทเบจ+หมวกนักสืบ · ทั้งคู่ถือแว่นขยาย</li>
         <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
@@ -1181,17 +1189,41 @@ function deskSVG(i, cx, cy, r, c) {
   const click = r ? ` data-oflog="${esc(r.id)}" tabindex="0" role="button" aria-label="${esc("ดู log ช่อง " + (i + 1) + " " + r.project_name)}"` : "";
   const ring = r && isVerify(r) ? `<rect class="of-ring" x="${cx - 2}" y="${cy + 14}" width="192" height="${DH - 18}" rx="12"/>` : "";
   return `<g class="${stCls}"${click}>${ring}
-    <rect class="of-chair" x="${px - 25}" y="${cy + 92}" width="50" height="52" rx="12"/>
+    <ellipse class="of-shadow" cx="${cx + 94}" cy="${cy + 152}" rx="88" ry="6"/>
+    <rect class="of-chair" x="${px - 25}" y="${cy + 92}" width="50" height="52" rx="12"/><rect class="of-chair" x="${px - 28}" y="${cy + 84}" width="56" height="14" rx="7" style="filter:brightness(.88)"/>
+    <path d="M${px - 20} ${cy + 148}h40M${px} ${cy + 140}v8" stroke="#6b7482" stroke-width="3" stroke-linecap="round"/><circle cx="${px - 20}" cy="${cy + 150}" r="3" fill="#4a5568"/><circle cx="${px + 20}" cy="${cy + 150}" r="3" fill="#4a5568"/>
     ${who}
-    <rect class="of-desk" x="${cx + 4}" y="${cy + 108}" width="182" height="14" rx="5"/>
+    <rect class="of-desk" x="${cx + 4}" y="${cy + 108}" width="182" height="14" rx="5"/><rect x="${cx + 8}" y="${cy + 109}" width="174" height="3" rx="1.5" fill="#fff" opacity=".28"/>
     <rect class="of-deskf" x="${cx + 12}" y="${cy + 122}" width="166" height="16" rx="3"/>
-    <text class="of-tm" x="${cx + 92}" y="${cy + 134}" text-anchor="middle" style="fill:#fff;opacity:.85">ช่อง ${i + 1}</text>
+    <text class="of-tm" x="${cx + 92}" y="${cy + 134}" text-anchor="middle" style="fill:#fff;opacity:.85">ช่อง ${i + 1}</text><rect x="${cx + 28}" y="${cy + 127}" width="14" height="3" rx="1.5" fill="#fff" opacity=".35"/><rect x="${cx + 148}" y="${cy + 127}" width="14" height="3" rx="1.5" fill="#fff" opacity=".35"/>
     <rect class="of-mon" x="${cx + 124}" y="${cy + 66}" width="54" height="38" rx="4"/><rect class="of-scr${r ? " on" : ""}" x="${cx + 128}" y="${cy + 70}" width="46" height="28" rx="2"/>
     ${r ? `<line class="of-code" x1="${cx + 132}" y1="${cy + 77}" x2="${cx + 166}" y2="${cy + 77}"/><line class="of-code" x1="${cx + 132}" y1="${cy + 84}" x2="${cx + 160}" y2="${cy + 84}"/><line class="of-code" x1="${cx + 132}" y1="${cy + 91}" x2="${cx + 168}" y2="${cy + 91}"/>` : ""}
     <rect class="of-mon" x="${cx + 146}" y="${cy + 104}" width="10" height="5"/>
-    <rect x="${cx + 44}" y="${cy + 103}" width="40" height="6" rx="2" fill="#4a5568"/>
+    <rect x="${cx + 44}" y="${cy + 103}" width="40" height="6" rx="2" fill="#4a5568"/><path d="M${cx + 47} ${cy + 106}h34" stroke="#a0aec0" stroke-width="2" stroke-dasharray="2 2"/><ellipse cx="${cx + 96}" cy="${cy + 106}" rx="4" ry="3" fill="#4a5568"/>
+    <rect x="${cx + 102}" y="${cy + 101}" width="16" height="7" rx="1" fill="#fff" stroke="#9aa5b5" stroke-width=".8"/><path d="M${cx + 104} ${cy + 104}h10" stroke="#9aa5b5" stroke-width=".8"/>
+    <rect x="${cx + 28}" y="${cy + 99}" width="9" height="9" rx="2" fill="#fff" stroke="#9aa5b5"/><path d="M${cx + 37} ${cy + 101}q4 1 0 5" stroke="#9aa5b5" fill="none"/>
+    <circle cx="${cx + 151}" cy="${cy + 100}" r="1.3" fill="${r ? "#34d399" : "#6b7280"}"/>
     <g><rect x="${cx + 12}" y="${cy + 98}" width="12" height="10" rx="2" fill="#a0653a"/><circle cx="${cx + 18}" cy="${cy + 93}" r="7" fill="#46a35e"/><circle cx="${cx + 13}" cy="${cy + 96}" r="4.5" fill="#5cba74"/></g>
     ${bubble}${bar}${label}</g>`;
+}
+
+function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง ไม่เกี่ยวกับสถานะ) — ผนัง หน้าต่าง ชั้นหนังสือ ไวท์บอร์ด ภาพ ตู้น้ำ ต้นไม้ พื้นไม้
+  let planks = "";
+  for (let y = 98; y < H; y += 42) planks += `M0 ${y}H${SCENE_W}`;
+  const win = (x) => `<rect class="of-sky" x="${x}" y="10" width="60" height="38" rx="3"/><circle cx="${x + 46}" cy="22" r="5" fill="#ffd966" opacity=".9"/><path d="M${x + 8} 36q4-6 10-2q4-5 10 0q5 0 6 5H${x + 6}z" fill="#fff" opacity=".85"/><path class="of-frame" style="stroke-width:2" d="M${x} 29H${x + 60}M${x + 30} 10V48"/><rect class="of-frame" x="${x}" y="10" width="60" height="38" rx="3"/><rect class="of-deskf" x="${x - 3}" y="48" width="66" height="4" rx="1.5"/>`;
+  const BK = ["#e57373", "#64b5f6", "#81c784", "#ffd54f", "#ba68c8", "#4db6ac", "#ff8a65", "#90a4ae"];
+  const books = (x, base, n) => Array.from({ length: n }, (_, i) => `<rect x="${x + i * 8}" y="${base - 14 - (i % 3) * 3}" width="7" height="${14 + (i % 3) * 3}" rx="1" fill="${BK[i % 8]}"/>`).join("");
+  const art = (x, c) => `<rect class="of-wb" x="${x}" y="12" width="32" height="28" rx="2"/><path d="M${x + 3} 37l9-12l6 7l5-4l6 9z" fill="${c}" opacity=".8"/><circle cx="${x + 24}" cy="20" r="3" fill="#ffd966"/><rect class="of-frame" style="stroke-width:2" x="${x}" y="12" width="32" height="28" rx="2"/>`;
+  return `<path class="of-plank" d="${planks}"/><rect class="of-base" y="52" width="${SCENE_W}" height="6"/>
+    ${win(300)}${win(380)}${win(460)}
+    <path class="of-curt" d="M292 8h16q-3 20 3 42h-19z"/><path class="of-curt" d="M528 8h-16q3 20-3 42h19z"/>
+    <rect class="of-deskf" x="14" y="4" width="76" height="54" rx="3"/><rect class="of-wb" x="18" y="8" width="68" height="46" rx="2" style="opacity:.45"/>
+    ${books(20, 28, 8)}${books(20, 52, 8)}<rect class="of-deskf" x="16" y="29" width="72" height="3"/><rect class="of-deskf" x="16" y="53" width="72" height="3"/>
+    <rect class="of-wb" x="590" y="8" width="130" height="42" rx="3"/><rect class="of-frame" style="stroke-width:2" x="590" y="8" width="130" height="42" rx="3"/>
+    <path d="M600 20h50M600 30h36M600 40h44" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" opacity=".7"/><rect x="660" y="22" width="8" height="8" fill="#fde68a"/><rect x="674" y="22" width="8" height="8" fill="#fca5a5"/><rect x="688" y="22" width="8" height="8" fill="#a7f3d0"/><text class="of-tm" x="708" y="44" text-anchor="end" style="font-size:9px">คิว→ทำ→ตรวจ</text>
+    ${art(745, "#6ab04c")}${art(790, "#4b7bec")}
+    <g><rect class="of-wb" x="30" y="122" width="30" height="46" rx="4"/><rect x="33" y="98" width="24" height="28" rx="9" fill="#9fd3ff" opacity=".75" stroke="#7fb8e0"/><circle cx="45" cy="146" r="2.6" fill="#1d4ed8"/><rect class="of-deskf" x="28" y="168" width="34" height="5" rx="2"/></g>
+    <g><path d="M36 328h38l-5 26h-28z" fill="#a0653a"/><circle cx="55" cy="312" r="15" fill="#3f9a57"/><circle cx="42" cy="320" r="11" fill="#58b36e"/><circle cx="68" cy="320" r="11" fill="#4aa862"/></g>`;
 }
 
 function sceneSVG(m) {
@@ -1202,15 +1234,15 @@ function sceneSVG(m) {
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
     <rect class="of-floor" width="${SCENE_W}" height="${H}"/><rect class="of-wall" width="${SCENE_W}" height="58"/>
-    <rect class="of-win" x="300" y="10" width="60" height="38" rx="4"/><rect class="of-win" x="380" y="10" width="60" height="38" rx="4"/><rect class="of-win" x="460" y="10" width="60" height="38" rx="4"/>
-    <rect class="of-door" x="112" y="6" width="76" height="52" rx="6"/><circle cx="178" cy="34" r="3" fill="#f6d365"/>
+    ${decorSVG(H)}
+    <rect class="of-door" x="112" y="6" width="76" height="52" rx="6"/><path class="of-frame" style="stroke-width:1.2" d="M120 14h28v38h-28zM152 14h28v38h-28z"/><circle cx="178" cy="34" r="3" fill="#f6d365"/>
     <text class="of-tb" x="150" y="76" text-anchor="middle" style="font-size:12px">ประตู · คิวรอ</text>
     <text class="of-tb" x="${SCENE_W - 16}" y="30" text-anchor="end" id="ofClock" style="font-size:15px"></text>
     <text class="of-tm" x="${SCENE_W - 16}" y="48" text-anchor="end">flashq office</text>
     <rect class="of-carpet" x="96" y="86" width="108" height="${H - 108}" rx="14"/>`;
   m.desks.forEach((r, i) => { g += deskSVG(i, ox + (i % 4) * DW, DESK_Y0 + Math.floor(i / 4) * DH, r, m.celeAt[i]); });
   {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = เดินลาดตระเวนในแถบใต้โต๊ะ · มีงานตรวจรันอยู่ = ยืนประจำ บอกช่องที่ตรวจ
-    const vi = m.desks.map((r, i) => (r && isVerify(r) ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
+    const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
     const rv = m.reviews[0], fin = m.reviewFin;
     const sy = stripY + 8, py = sy + 78, colX = vi.length ? ox + (vi[0] % 4) * DW + 72 : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
