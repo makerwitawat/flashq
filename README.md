@@ -31,6 +31,16 @@ python D:\MyCode\flashq\flashq.py install
 ```
 แล้วรีโหลด opencode desktop · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ)
 
+## โปรเจกต์ใหม่ (ครั้งเดียวต่อโปรเจกต์)
+```
+cd <โฟลเดอร์โปรเจกต์>
+python D:\MyCode\flashq\flashq.py init --install --commit       # ครบในคำสั่งเดียว
+```
+**ง่ายสุด:** พิมพ์ `/flash-init` ใน Claude Code ที่โปรเจกต์นั้น (หรือสั่ง `/flash-plan` ได้เลย — ถ้าไม่มี `.flash.json` จะรัน init ให้เอง) · ตัวเลือก: `--install` ติดตั้งคำสั่ง global ที่ขาด · `--commit` commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้าง) + push ถ้าอยู่ branch หลัก · `--force` ทับด้วยค่าที่ตรวจเจอ
+- ตรวจ `remote` + branch หลัก (`main`/`master`/อื่น) จาก git เอง แล้วเขียน `.flash.json` · เพิ่ม `.tmp/` ใน `.gitignore` · คัดลอกแม่แบบแผนไป `docs/plans/` · เช็ก `opencode` + คำสั่ง global (`--install` = ติดตั้งที่ขาดให้) · ไม่มี remote = ตั้ง `require_plan_in_remote: false`
+- ไม่ทับค่าที่ตั้งไว้ใน `.flash.json` (`--force` = ทับด้วยค่าที่ตรวจเจอ) · รันซ้ำได้ · **ไม่ commit/push ให้** — ท้ายผลลัพธ์บอกขั้นถัดไป
+- ไม่รัน `init` ก็ได้: ถ้า `.flash.json` ไม่ได้ตั้ง `main_branch`/`remote` ตอน `run` จะตรวจจาก git เอง (remote HEAD → `origin/main`/`origin/master` ที่มีจริง) · ตั้งเองใน `.flash.json` ชนะเสมอ
+
 ## ใช้
 ```
 python D:\MyCode\flashq\flashq.py run docs\plans\PLAN_X.md T-01..T-03     # ที่โฟลเดอร์โปรเจกต์ (หรือ --project <dir>)
@@ -43,6 +53,16 @@ python D:\MyCode\flashq\flashq.py config schedule auto|fifo                # จ
 python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # รันงานที่รอคิวทันที (ช่องพิเศษ)
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`
+
+### งานตรวจ (verify) — ผู้ตรวจอิสระ
+```
+python D:\MyCode\flashq\flashq.py verify docs\plans\PLAN_X.md T-01..T-03 [--agent flash-verifier] [--prompt "..."] [--title "..."]
+python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --title "..."     # ตัวเลือกเดียวกันใช้กับ run ได้
+```
+- ส่ง prompt ตรง ๆ ให้ `opencode run --agent` (ค่าเริ่มต้น agent = `flash-verifier`) แทน `/flash` — ใช้ตรวจผลงานแผนโดย agent ที่อ่านอย่างเดียว
+- งานตรวจเป็น `readonly` → **ไม่ชนไฟล์กับงานอื่น** รันคู่ขนานได้เสมอ (ถ้ามีช่องว่าง) · สั่งซ้ำจากหน้าเว็บ/`retry` คง kind/agent เดิม
+- สถิติและเวลาประมาณแยกตามชนิดงาน (work/verify/test) — งานตรวจสั้นกว่ามาก จึงไม่ปนค่าเฉลี่ยของงานทำจริง (`stats.by_kind`)
+- หน้าเว็บ: ฟอร์มส่งงานมีโหมด "ตรวจ" · ออฟฟิศการ์ตูนแสดงผู้ตรวจใส่แว่น ถือแว่นขยาย ป้าย 🔍
 
 ### หน้าเว็บ dashboard
 ```
@@ -74,7 +94,7 @@ python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
 
 ผลลัพธ์: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|BUSY|QUEUE_TIMEOUT` + `job=<id>` · exit 0 = OK · 2 = BUSY · 3 = รอคิวเกินเวลา · อื่น ๆ = 1
 
-## `.flash.json` (ทุกช่องไม่บังคับ)
+## `.flash.json` (ทุกช่องไม่บังคับ · `main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git · `flashq init` สร้างให้)
 ```json
 {
   "main_branch": "master",

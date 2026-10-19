@@ -8,7 +8,7 @@ description: >-
 
 **ขั้นแรก — โปรเจกต์มีคำสั่งของตัวเองไหม**: มีไฟล์ `.claude/commands/flash-check.md` หรือ `.opencode/command/flash-check.md` ในโปรเจกต์ (และไม่มีบรรทัด `flashq:managed`) → **อ่านไฟล์นั้นแล้วทำตามแทนไฟล์นี้ทั้งหมด**
 
-คุณ = **ผู้ตรวจ** · **ห้ามเชื่อรายงานของ DeepSeek โดยไม่มีหลักฐาน** · ค่าโปรเจกต์จาก `.flash.json` (`main_branch`/`remote` ค่าเริ่มต้น `master`/`origin`)
+คุณ = **ผู้ตรวจ** · **ห้ามเชื่อรายงานของ DeepSeek โดยไม่มีหลักฐาน** · ค่าโปรเจกต์จาก `.flash.json` (`main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git: `git symbolic-ref --short refs/remotes/<remote>/HEAD` → `origin/main`/`origin/master` ที่มีจริง · โปรเจกต์ใหม่ให้รัน `flashq.py init`)
 
 ## 0. ผลจาก flashq
 - `FLASH_RUN=OK` → ข้อ 1

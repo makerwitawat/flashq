@@ -10,7 +10,7 @@ description: (opencode) ส่งงานให้ DeepSeek Flash (flash-worker
 ## 0. เช็คก่อน
 - ไม่มี subagent `flash-worker` → หยุด บอก "ใช้ได้ใน opencode เท่านั้น"
 - `$ARGUMENTS` ว่าง → ถาม user ว่างานอะไร (question tool)
-- อ่าน `.flash.json` ที่รากโปรเจกต์ (ถ้ามี): `main_branch` (ค่าเริ่มต้น `master`) · `remote` (`origin`) · `rules` (กติกาเพิ่มของโปรเจกต์ — ทำตาม)
+- อ่าน `.flash.json` ที่รากโปรเจกต์ (ถ้ามี): `main_branch` (ไม่ตั้ง = ตรวจจาก `git symbolic-ref --short refs/remotes/<remote>/HEAD` หรือ `origin/main`/`origin/master` ที่มีจริง) · `remote` (`origin`) · `rules` (กติกาเพิ่มของโปรเจกต์ — ทำตาม)
 - **`$ARGUMENTS` มี path แผน `.md` + เลขงาน (เช่น `T-01..T-05`) → โหมดแผน** ไม่งั้นโหมดงานเล็ก
 
 ## โหมดแผน (Claude วางแผน+ตรวจให้แล้ว — ห้ามคิดใหม่ ห้ามแก้เนื้องาน)

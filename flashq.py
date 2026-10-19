@@ -15,9 +15,12 @@
 ใช้:
   python flashq.py run docs\\PLAN_X.md T-01..T-03 [--project <dir>]   ส่งงาน (รอคิวเอง)
   python flashq.py run --message "ตอบแค่คำว่า PONG"                   ทดสอบการเชื่อมต่อ
+  python flashq.py verify docs\\PLAN_X.md T-01 [--agent flash-verifier] [--model M]   ส่งผู้ตรวจ (อ่านอย่างเดียว · ไม่ชนงานอื่น)
+  python flashq.py run ... --agent <ชื่อ> --title <ชื่อ> --readonly   เลือก agent/ชื่อ session/งานอ่านอย่างเดียวเอง
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
   python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
+  python flashq.py init [--project <dir>] [--force] [--install] [--commit]       ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
   python flashq.py config schedule auto|fifo · config starve_min 120     โหมดจัดคิว · กันอดตาย (นาที)
@@ -139,9 +142,43 @@ def project_root(start: Path) -> tuple[Path, bool]:
     return Path(r.stdout.strip()).parent, True
 
 
+def _git(root: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def detect_remote(root: Path) -> str:
+    """origin ถ้ามี · ไม่มี origin แต่มี remote เดียว = remote นั้น · ไม่ใช่ git/ไม่มี remote = origin"""
+    remotes = _git(root, "remote").split()
+    if not remotes or "origin" in remotes:
+        return "origin"
+    return remotes[0] if len(remotes) == 1 else "origin"
+
+
+def detect_main_branch(root: Path, remote: str = "origin") -> str:
+    """branch หลักของ repo: remote HEAD → <remote>/main|master ที่มีจริง → branch ปัจจุบัน (checkout หลัก) → master"""
+    head = _git(root, "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD")
+    if head.startswith(remote + "/"):
+        return head[len(remote) + 1:]
+    for name in ("main", "master"):
+        if _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{remote}/{name}"):
+            return name
+    for name in ("main", "master"):  # ยังไม่มี remote → ดู branch ในเครื่อง
+        if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
+            return name
+    return _git(root, "branch", "--show-current") or DEFAULTS["main_branch"]
+
+
 def project_cfg(root: Path) -> dict:
+    """DEFAULTS < ตรวจอัตโนมัติ (remote/main_branch เมื่อ .flash.json ไม่ได้ตั้ง) < .flash.json"""
     cfg = dict(DEFAULTS)
-    cfg.update(read_json(root / ".flash.json"))
+    own = read_json(root / ".flash.json")
+    if (root / ".git").exists():
+        if "remote" not in own:
+            cfg["remote"] = detect_remote(root)
+        if "main_branch" not in own:
+            cfg["main_branch"] = detect_main_branch(root, own.get("remote") or cfg["remote"])
+    cfg.update(own)
     return cfg
 
 
@@ -568,6 +605,8 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     """เหตุที่งาน a รันพร้อม b ไม่ได้ ("" = ไม่ชน) · อนุรักษ์: ไม่แน่ใจ = ชน"""
     if _pnorm(a.get("project", "")) != _pnorm(b.get("project", "")):
         return ""
+    if a.get("readonly") or b.get("readonly"):  # งานอ่านอย่างเดียว (เช่น ผู้ตรวจ) ไม่แก้ไฟล์ → ไม่ชนใคร
+        return ""
     ia, ib = info(a), info(b)
     if not ia["parallel"]:
         return "แผนสั่งให้รอ (flashq-parallel: no)"
@@ -799,6 +838,14 @@ def cmd_run(a) -> int:
             if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{plan}"],
                               capture_output=True).returncode != 0:
                 print(f"FLASH_RUN=FAIL ไม่พบแผนใน {ref}: {plan} (push แผนก่อน)")
+                have = [b for b in ("main", "master")
+                        if _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{cfg['remote']}/{b}")]
+                if have and cfg["main_branch"] not in have:
+                    print(f"หมายเหตุ: repo นี้มี {cfg['remote']}/{' , '.join(have)} · ถ้า branch หลักไม่ใช่ "
+                          f"{cfg['main_branch']} ให้ตั้ง main_branch ใน .flash.json (หรือรัน `flashq init`)")
+                elif not _git(root, "remote"):
+                    print("หมายเหตุ: repo นี้ยังไม่มี remote · ตั้ง \"require_plan_in_remote\": false ใน .flash.json "
+                          "ถ้าไม่ใช้ remote (หรือรัน `flashq init`)")
                 return 1
         elif not (root / plan).exists():
             print(f"FLASH_RUN=FAIL ไม่พบไฟล์แผน: {root / plan}")
@@ -818,9 +865,18 @@ def cmd_run(a) -> int:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     jid = f"{ts}_{os.getpid()}"
-    title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
+    kind = a.kind or ("test" if a.message else "work")  # work = ลงมือตามแผน · verify = ผู้ตรวจ (อ่านอย่างเดียว) · test = --message
+    agent = a.agent or ("flash-verifier" if kind == "verify" else "")
+    prompt = (a.prompt or f"ตรวจแผน {plan} งาน {a.tasks} ตามหน้าที่ของคุณ แล้วรายงานผลสั้น ๆ") if kind == "verify" else ""
+    if a.title:
+        title = a.title
+    elif kind == "verify":
+        title = f"flash-verify {Path(plan).stem} {a.tasks}"
+    else:
+        title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
     model = a.model or configured_model()
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
+           "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind == "verify"),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION}
     save_job(job)
@@ -855,7 +911,12 @@ def cmd_run(a) -> int:
                 cmd += ["--attach", attach]
             if a.auto:
                 cmd += ["--auto"]
-            cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
+            if agent:
+                cmd += ["--agent", agent]
+            if kind == "verify":
+                cmd += ["--", prompt]
+            else:
+                cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
             res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt)
             if res["status"] == "NOSTART" and nostart_retry > 0:
                 nostart_retry -= 1
@@ -892,6 +953,10 @@ def cmd_run(a) -> int:
     return 0 if res["status"] == "OK" else 1
 
 
+def kind_tag(j: dict) -> str:
+    return "[ตรวจ] " if j.get("kind") == "verify" else ""
+
+
 def cmd_list(a) -> int:
     rows = jobs()
     if not a.all:
@@ -901,7 +966,7 @@ def cmd_list(a) -> int:
         return 0
     for j in rows:
         what = j.get("message") and "--message" or f"{j.get('plan')} {j.get('tasks')}"
-        print(f"{j['id']:24} {live_state(j):13} {Path(j.get('project', '')).name:18} {what}"
+        print(f"{j['id']:24} {live_state(j):13} {Path(j.get('project', '')).name:18} {kind_tag(j)}{what}"
               f"  [{j.get('created', '')}{' → ' + j['finished'] if j.get('finished') else ''}]")
     return 0
 
@@ -914,11 +979,11 @@ def cmd_status(a) -> int:
     for h in held:
         j = next((x for x in jobs() if x["id"] == h.get("id")), {})
         print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
-              + (f" · {Path(j.get('project', '')).name} {j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
+              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
         why = sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else "")
-        print(f"  {i}. {j['id']} {Path(j['project']).name} {j.get('plan') or '--message'} {j.get('tasks', '')}"
+        print(f"  {i}. {j['id']} {Path(j['project']).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}"
               + (f"\n       ↳ {why}" if why else ""))
     print(f"บัญชี flash-worker: {configured_model() or '(ยังไม่ตั้ง)'}")
     return 0
@@ -1098,6 +1163,117 @@ def cmd_install(a) -> int:
     return rc
 
 
+def cmd_init(a) -> int:
+    """ตั้งค่าโปรเจกต์ใหม่ให้ใช้ flashq ได้ในคำสั่งเดียว: ตรวจ remote/branch หลัก → .flash.json · .gitignore · แม่แบบแผน
+    · เช็ก opencode + คำสั่ง global · ไม่ commit/push ให้ (แจ้งขั้นถัดไปแทน)"""
+    start = Path(a.project or os.getcwd())
+    root, is_git = project_root(start)
+    if not root.is_dir():
+        print(f"ไม่พบโฟลเดอร์โปรเจกต์: {root}")
+        return 1
+    print(f"โปรเจกต์: {root}" + ("" if is_git else "  (ไม่ใช่ git repo)"))
+    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+    todo: list[str] = []
+
+    # 1) .flash.json — ไม่ทับค่าที่ผู้ใช้ตั้งไว้ (--force = ทับเฉพาะช่องที่ตรวจเจอ)
+    path = root / ".flash.json"
+    own = read_json(path)
+    found: dict = {}
+    if is_git:
+        remote = detect_remote(root)
+        has_remote = bool(_git(root, "remote"))
+        found = {"main_branch": detect_main_branch(root, remote), "remote": remote}
+        if not has_remote:
+            found["require_plan_in_remote"] = False
+            todo.append("repo นี้ยังไม่มี remote → ตั้ง require_plan_in_remote=false ไว้ก่อน "
+                        "(เพิ่ม remote แล้วลบช่องนี้ออกเพื่อให้แผนต้อง push ก่อนส่ง)")
+    else:
+        found = {"require_plan_in_remote": False}
+    found["plan_dir"] = own.get("plan_dir") or "docs/plans"
+    new = dict(own)
+    for k, v in found.items():
+        if k not in new or a.force:
+            new[k] = v
+    if new != own or not path.exists():
+        write_json(path, new)
+        print(f"{'สร้าง' if not own else 'อัปเดต'}  .flash.json: " + json.dumps(new, ensure_ascii=False))
+        todo.append("commit + push .flash.json เข้า branch หลัก")
+    else:
+        print(f"เหมือนเดิม  .flash.json: {json.dumps(own, ensure_ascii=False)}")
+
+    # 2) .gitignore — .tmp/ (ไฟล์ชั่วคราวของ agent)
+    gi = root / ".gitignore"
+    lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    if not any(l.strip().rstrip("/") in (".tmp", "/.tmp") for l in lines):
+        gi.write_text("\n".join(lines + [".tmp/"]) + "\n", encoding="utf-8")
+        print("เพิ่ม       .gitignore: .tmp/")
+        todo.append("commit .gitignore")
+
+    # 3) แม่แบบแผน
+    tpl_src = REPO / "templates" / "FLASH_PLAN_TEMPLATE.md"
+    tpl_dst = root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md"
+    if tpl_src.exists() and not tpl_dst.exists():
+        tpl_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tpl_src, tpl_dst)
+        print(f"คัดลอก     {tpl_dst.relative_to(root).as_posix()} (แม่แบบแผน — ตั้งชื่อแผนจริงเป็น PLAN_FLASH_<เรื่อง>.md)")
+        todo.append("commit แม่แบบแผน")
+
+    # 4) เครื่องมือ: opencode + คำสั่ง global
+    if opencode_cmd():
+        print("พบ         opencode ใน PATH")
+    else:
+        print("ไม่พบ      opencode ใน PATH — ติดตั้ง opencode ก่อนส่งงาน")
+        todo.append("ติดตั้ง opencode ให้อยู่ใน PATH")
+    need = [p for p in (OC_CONFIG.parent / "command" / "flash.md", OC_CONFIG.parent / "agent" / "flash-worker.md",
+                        claude_home / "commands" / "flash-plan.md", claude_home / "commands" / "flash-check.md")
+            if not p.exists()]
+    proj_own = [p for p in (root / ".opencode" / "command" / "flash.md", root / ".opencode" / "agent" / "flash-worker.md")
+                if p.exists()]
+    if need and a.install:
+        print("ติดตั้งคำสั่ง global ที่ขาด ...")
+        cmd_install(argparse.Namespace(force=False))
+    elif need:
+        print("ยังไม่ได้ติดตั้งคำสั่ง global: " + ", ".join(p.name for p in need))
+        todo.append(f"python {REPO / 'flashq.py'} install  (แล้วรีโหลด opencode desktop)")
+    else:
+        print("พบ         คำสั่ง /flash /flash-plan /flash-check + agent flash-worker (global)")
+    if proj_own:
+        print("หมายเหตุ    โปรเจกต์มี flash.md/flash-worker.md ของตัวเอง → opencode ใช้ของโปรเจกต์ก่อน")
+
+    # 5) บัญชีโมเดล
+    if not configured_model():
+        todo.append(f"ตั้ง agent.flash-worker.model ใน {OC_CONFIG} (หรือส่ง --model ตอน run)")
+
+    # 6) --commit: commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้างอยู่) · push เมื่ออยู่ branch หลักและมี remote
+    if a.commit and is_git:
+        mine = [p for p in (".flash.json", ".gitignore", (root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md").relative_to(root).as_posix())
+                if (root / p).exists()]
+        dirty = _git(root, "status", "--porcelain", "--", *mine)
+        if dirty:
+            subprocess.run(["git", "-C", str(root), "add", "--", *mine], check=False)
+            r = subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
+                                "--", *mine], capture_output=True, text=True)
+            print("commit     " + ("สำเร็จ" if r.returncode == 0 else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+            todo = [t for t in todo if not t.startswith("commit")]
+        else:
+            print("commit     ไม่มีอะไรต้อง commit")
+        branch, remote = _git(root, "branch", "--show-current"), new.get("remote", "origin")
+        if _git(root, "remote") and branch == new["main_branch"]:
+            r = subprocess.run(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"],
+                               capture_output=True, text=True)
+            print("push       " + (f"{remote}/{new['main_branch']} สำเร็จ" if r.returncode == 0
+                                     else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+        elif _git(root, "remote"):
+            todo.append(f"อยู่ branch '{branch}' ไม่ใช่ {new['main_branch']} → merge เข้า {new['main_branch']} แล้ว push เอง")
+
+    print("\nพร้อมใช้ · ทดสอบการเชื่อมต่อ: " + f"python {REPO / 'flashq.py'} run --message \"ตอบแค่คำว่า PONG\" --project \"{root}\"")
+    if todo:
+        print("ขั้นต่อไป:")
+        for i, t in enumerate(todo, 1):
+            print(f"  {i}. {t}")
+    return 0
+
+
 # ---------- หน้าเว็บ dashboard (ui) ----------
 def _secs(a: str, b: str = "") -> int | None:
     """จำนวนวินาทีจาก a ถึง b (ว่าง = ตอนนี้)"""
@@ -1118,7 +1294,7 @@ def ui_state() -> dict:
     for j in jobs():
         st = live_state(j)
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
-                                         "created", "started", "finished", "session", "result", "rc")}
+                                         "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
         row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
@@ -1158,10 +1334,10 @@ def ui_state() -> dict:
 
 def job_stats(history: list[dict]) -> dict:
     """สถิติจากงานที่จบแล้ว: ต่อโปรเจกต์ / ต่อบัญชี — จำนวน · ผ่าน · ไม่ผ่าน · เวลาเฉลี่ย (วินาที)"""
-    def group(key) -> list[dict]:
+    def group(key, only=None) -> list[dict]:
         acc: dict[str, dict] = {}
         for r in history:
-            if r["state"] in ("cancelled", "busy", "queue_timeout"):
+            if r["state"] in ("cancelled", "busy", "queue_timeout") or (only and not only(r)):
                 continue
             name = key(r) or "-"
             g = acc.setdefault(name, {"name": name, "n": 0, "ok": 0, "secs": []})
@@ -1175,7 +1351,13 @@ def job_stats(history: list[dict]) -> dict:
             g.update(fail=g["n"] - g["ok"], avg_sec=int(sum(secs) / len(secs)) if secs else None)
             out.append(g)
         return sorted(out, key=lambda g: -g["n"])
-    return {"by_project": group(lambda r: r["project_name"]), "by_model": group(lambda r: r["model"])}
+    def kind(r) -> str:
+        return r.get("kind") or ("test" if r.get("message") else "work")
+
+    def not_verify(r) -> bool:  # งานตรวจสั้นกว่ามาก → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
+        return kind(r) != "verify"
+    return {"by_project": group(lambda r: r["project_name"], not_verify), "by_model": group(lambda r: r["model"], not_verify),
+            "by_kind": group(kind)}
 
 
 # ---------- ส่งงาน/สั่งซ้ำ/ล้างประวัติ (ใช้จาก ui) ----------
@@ -1214,9 +1396,10 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         project = str(body.get("project") or "").strip().strip('"')
         if not project or not Path(project).is_absolute() or not Path(project).is_dir():
             return [], "โปรเจกต์ต้องเป็น path โฟลเดอร์แบบเต็มที่มีอยู่จริง"
-        argv = [sys.executable, str(REPO / "flashq.py"), "run"]
+        kind = "verify" if body.get("kind") == "verify" else ""
+        argv = [sys.executable, str(REPO / "flashq.py"), "verify" if kind else "run"]
         message = str(body.get("message") or "").strip()
-        if message:
+        if message and not kind:
             if len(message) > 2000:
                 return [], "ข้อความยาวเกิน 2000 ตัวอักษร"
             argv.append(f"--message={message}")  # รูป --x=ค่า กัน argparse ตีความข้อความที่ขึ้นต้นด้วย - เป็นตัวเลือก
@@ -1243,6 +1426,13 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         if attach not in ("live", "none"):
             return [], "attach ต้องเป็น live หรือ none"
         argv += ["--attach", attach]
+        agent = str(body.get("agent") or "").strip()
+        if agent:
+            if not re.fullmatch(r"[\w.-]{1,64}", agent):
+                return [], "ชื่อ agent ใช้ได้แค่ตัวอักษร ตัวเลข _ . -"
+            argv.append(f"--agent={agent}")
+        if body.get("readonly") and not kind:
+            argv.append("--readonly")
         if body.get("no_open"):
             argv.append("--no-open")
         if body.get("auto"):
@@ -1493,7 +1683,8 @@ def make_ui_server(port: int = 4097):
                 if live_state(j) in ("queued", "running"):
                     return self._send(409, {"ok": False, "message": "งานนี้ยังรอคิว/กำลังทำอยู่"})
                 spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
-                        "tasks": j.get("tasks", ""), "message": j.get("message", "")}
+                        "tasks": j.get("tasks", ""), "message": j.get("message", ""), "kind": j.get("kind", ""),
+                        "agent": j.get("agent", ""), "readonly": j.get("readonly", False)}
                 argv, err = build_run_argv(spec)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
@@ -1581,19 +1772,29 @@ def main() -> int:
     r = sp.add_parser("run", help="ส่งงานเข้าคิว")
     r.add_argument("plan", nargs="?")
     r.add_argument("tasks", nargs="?")
-    r.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
-    r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้น) = server 4096 ให้ desktop ดูสด · none = รันแยก · หรือ url")
-    r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
-    r.add_argument("--variant")
-    r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
-    r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
-    r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
-    r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
-    r.add_argument("--retry-nostart", type=int, default=1, help="NOSTART แล้วลองใหม่กี่ครั้ง")
-    r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
-    r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
-    r.set_defaults(fn=cmd_run)
+    r.set_defaults(kind="", prompt="")
+    vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
+    vf.add_argument("plan")
+    vf.add_argument("tasks")
+    vf.add_argument("--prompt", help="ข้อความสั่งผู้ตรวจ (ค่าเริ่มต้น = ตรวจแผน/งานนี้ตามหน้าที่)")
+    vf.set_defaults(kind="verify", message="")
+    for r in (r, vf):  # ตัวเลือกร่วมของ run/verify
+        r.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+        r.add_argument("--agent", default="", help="agent ของ opencode ที่ใช้ (verify ค่าเริ่มต้น flash-verifier)")
+        r.add_argument("--title", default="", help="ชื่อ session ใน opencode")
+        r.add_argument("--readonly", action="store_true", help="งานอ่านอย่างเดียว ไม่ชนงานอื่นในตัวจัดคิว (verify เปิดให้เสมอ)")
+        r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้น) = server 4096 ให้ desktop ดูสด · none = รันแยก · หรือ url")
+        r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
+        r.add_argument("--variant")
+        r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
+        r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
+        r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
+        r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
+        r.add_argument("--retry-nostart", type=int, default=1, help="NOSTART แล้วลองใหม่กี่ครั้ง")
+        r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
+        r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
+        r.set_defaults(fn=cmd_run)
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)
     li = sp.add_parser("list", help="รายการงาน")
     li.add_argument("--all", action="store_true")
@@ -1610,6 +1811,12 @@ def main() -> int:
     ins = sp.add_parser("install", help="ติดตั้ง /flash + flash-worker แบบ global")
     ins.add_argument("--force", action="store_true")
     ins.set_defaults(fn=cmd_install)
+    ini = sp.add_parser("init", help="ตั้งค่าโปรเจกต์ใหม่ (.flash.json ตรวจ branch หลักเอง · .gitignore · แม่แบบแผน)")
+    ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")
+    ini.add_argument("--force", action="store_true", help="ทับช่องใน .flash.json ด้วยค่าที่ตรวจเจอ")
+    ini.add_argument("--install", action="store_true", help="ติดตั้งคำสั่ง global ที่ขาดให้ด้วย (เหมือน install)")
+    ini.add_argument("--commit", action="store_true", help="commit เฉพาะไฟล์ที่ init แตะ + push (ถ้าอยู่ branch หลัก)")
+    ini.set_defaults(fn=cmd_init)
     pr = sp.add_parser("prune", help="ลบงานที่จบแล้ว + log ที่เก่ากว่า N วัน")
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
