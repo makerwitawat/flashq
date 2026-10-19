@@ -355,6 +355,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
         <li>🚶 <b>ผู้ตรวจประจำออฟฟิศ</b> (แถบม่วงใต้โต๊ะ) = ว่างจะเดินลาดตระเวนรองานตรวจ · มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ</li>
+        <li>👔 <b>แต่งตัวต่างจากคนงาน</b> = ผู้ตรวจใส่เสื้อกาวน์ขาว+เนคไท+แว่น · 🕵️ ผู้สืบ (flash-investigator) ใส่โค้ทเบจ+หมวกนักสืบ · ทั้งคู่ถือแว่นขยาย</li>
         <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
@@ -447,6 +448,7 @@ const dur = (s) => {
 const kindOf = (j) => j.kind || (j.message ? "test" : "work");
 const isSleuth = (j) => /investigator/i.test(j.agent || "");  // ผู้สืบ (flash-investigator · อ่านอย่างเดียว) — แสดงเป็นตัวละครแว่นเหมือนผู้ตรวจ
 const isVerify = (j) => kindOf(j) === "verify" || isSleuth(j);
+const roleOf = (j) => (isSleuth(j) ? "sleuth" : isVerify(j) ? "check" : "");  // รูปลักษณ์ตัวละคร: ผู้ตรวจ = เสื้อกาวน์ขาว+เนคไท · ผู้สืบ = โค้ทเบจ+หมวกนักสืบ
 const roleTag = (j) => (isSleuth(j) ? "🕵️ สืบ " : "🔍 ตรวจ ");
 const what = (j) => j.message && !isSleuth(j) ? `ข้อความ: ${j.message}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 60) : (j.plan || "-") + " " + (j.tasks || "")}`;
 let state = null, prevStates = null;
@@ -1102,7 +1104,8 @@ function officeTrack() {
 const SKINS = ["#ffd9b8", "#f2c299", "#d9a272", "#fbe0c8"], HAIRS = ["#3b2a20", "#222a38", "#8a4b2a", "#c9a14a"];
 function hashN(s) { let h = 3; for (const c of String(s)) h = (h * 33 + c.charCodeAt(0)) >>> 0; return h; }
 function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false, checker = false }) {
-  const color = `hsl(${hue} 55% 50%)`, skin = SKINS[hashN(seed) % 4], hair = HAIRS[(hashN(seed) >> 3) % 4];
+  const role = checker === true ? "check" : checker || "";
+  const color = role === "check" ? "#eef2f8" : role === "sleuth" ? "#b08d63" : `hsl(${hue} 55% 50%)`, skin = SKINS[hashN(seed) % 4], hair = HAIRS[(hashN(seed) >> 3) % 4];
   const arm = (x1, y1, x2, y2, c) => `<g class="${c}"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="8" stroke-linecap="round"/><circle cx="${x2}" cy="${y2}" r="4" fill="${skin}"/></g>`;
   const cup = `<g><rect x="19" y="-58" width="9" height="9" rx="2" fill="#fff" stroke="#7a5a3a"/><path d="M28 -56 q4 1 0 5" stroke="#7a5a3a" fill="none"/><g class="of-steam"><path d="M22 -62 q-2 -3 0 -6 M26 -62 q-2 -3 0 -6" stroke="#9aa5b5" fill="none" stroke-linecap="round"/></g></g>`;
   let arms;
@@ -1119,12 +1122,15 @@ function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false, chec
   const extra = (mood === "sad" ? `<ellipse cx="-8" cy="-55" rx="1.4" ry="2.2" fill="#6bb6ff"/>` : "")
     + (pose === "sleep" ? `<g class="of-zz"><text x="14" y="-70" font-size="11" fill="currentColor" class="of-tm">z</text><text x="21" y="-78" font-size="9" class="of-tm">z</text></g>` : "")
     + (sign ? `<g><rect x="12" y="-56" width="26" height="18" rx="3" fill="#fff" stroke="#9aa5b5"/><text x="25" y="-43" text-anchor="middle" font-size="11">⏸</text></g>` : "");
-  const glasses = checker && mood !== "sleep" ? `<g fill="none" stroke="#1f2937" stroke-width="1.5"><circle cx="-5" cy="-61" r="4.8"/><circle cx="5" cy="-61" r="4.8"/><path d="M-0.2 -61 h0.4"/></g>` : "";
-  const lens = checker && pose !== "cheer" ? `<g class="of-lens"><circle cx="24" cy="-34" r="6" fill="#bfe3ff" fill-opacity=".55" stroke="#374151" stroke-width="2"/><path d="M28.5 -29.5 l7 7" stroke="#374151" stroke-width="3" stroke-linecap="round"/></g>` : "";
+  const glasses = role === "check" && mood !== "sleep" ? `<g fill="none" stroke="#1f2937" stroke-width="1.5"><circle cx="-5" cy="-61" r="4.8"/><circle cx="5" cy="-61" r="4.8"/><path d="M-0.2 -61 h0.4"/></g>` : "";
+  const lens = role && pose !== "cheer" ? `<g class="of-lens"><circle cx="24" cy="-34" r="6" fill="#bfe3ff" fill-opacity=".55" stroke="#374151" stroke-width="2"/><path d="M28.5 -29.5 l7 7" stroke="#374151" stroke-width="3" stroke-linecap="round"/></g>` : "";
+  const outfit = role === "check" ? `<path d="M-15 -42 Q-15 -48 -6 -48 L0 -42 L6 -48 Q15 -48 15 -42" fill="none" stroke="#b6c0cf" stroke-width="1.6"/><path d="M0 -44 l-3.6 4 2.6 12 1 1 1 -1 2.6 -12z" fill="#1d4ed8"/><rect x="7" y="-38" width="7" height="9" rx="1.5" fill="#fff" stroke="#9aa5b5" stroke-width="1"/><path d="M9 -38 v-3 M12 -38 v-3" stroke="#e11d48" stroke-width="1.4"/>`
+    : role === "sleuth" ? `<path d="M-15 -44 L0 -24 L15 -44" fill="none" stroke="#6b4a2b" stroke-width="2.2"/><rect x="-15" y="-31" width="30" height="4.5" fill="#6b4a2b"/><rect x="-2" y="-32" width="4" height="6.5" rx="1" fill="#e7c15a"/><circle cx="-7" cy="-37" r="1.4" fill="#6b4a2b"/><circle cx="-7" cy="-33" r="1.4" fill="#6b4a2b"/>` : "";
+  const hat = role === "sleuth" ? `<ellipse cx="0" cy="-73" rx="20" ry="4.2" fill="#5c4033"/><path d="M-11.5 -74 Q-12 -90 0 -90 Q12 -90 11.5 -74Z" fill="#7a5a3a"/><rect x="-11.7" y="-79.5" width="23.4" height="4" fill="#2b2118"/>` : "";
   const tilt = pose === "sleep" ? ` transform="rotate(8 0 -62)"` : "";
-  return `<g transform="translate(${x},${y}) scale(${s})"><g class="of-body">${legs}<rect x="-15" y="-48" width="30" height="32" rx="9" fill="${color}"/>${arms}
+  return `<g transform="translate(${x},${y}) scale(${s})"><g class="of-body">${legs}<rect x="-15" y="-48" width="30" height="32" rx="9" fill="${color}"${role === "check" ? ' stroke="#b6c0cf" stroke-width="1.2"' : ""}/>${outfit}${arms}
     <g${tilt}><circle cx="0" cy="-62" r="14" fill="${skin}"/><path d="M-14.5,-63 A14.5,14.5 0 0 1 14.5,-63 Q6,-69 -2,-66 Q-9,-64 -14.5,-63Z" fill="${hair}"/>
-    ${eyes}<circle cx="-9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/><circle cx="9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/>${mouths[mood] || mouths.smile}${glasses}${extra}</g>${lens}</g></g>`;
+    ${eyes}<circle cx="-9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/><circle cx="9" cy="-56" r="2.6" fill="#ff9aa8" opacity=".55"/>${mouths[mood] || mouths.smile}${glasses}${extra}${hat}</g>${lens}</g></g>`;
 }
 
 /* --- ฉาก --- */
@@ -1139,7 +1145,7 @@ function officeModel() {
   const runs = state.running_list || [];
   const N = Math.min(12, Math.max(1, state.slots?.max || 1, runs.length, ...runs.map((r) => r.slot | 0)));
   const desks = assignDesks(runs, N);
-  desks.forEach((r, i) => { if (r) deskOf.set(r.id, { i, h: hueOf(r.project_name), v: isVerify(r) }); });
+  desks.forEach((r, i) => { if (r) deskOf.set(r.id, { i, h: hueOf(r.project_name), v: roleOf(r) }); });
   const now = Date.now();
   for (let k = cele.length - 1; k >= 0; k--) if (cele[k].until <= now) cele.splice(k, 1);
   const celeAt = {};
@@ -1157,14 +1163,14 @@ function deskSVG(i, cx, cy, r, c) {
   let who = "", bubble = "", label = "", stCls = "";
   if (r) {
     stCls = "of-st-work";
-    who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: isVerify(r) });
+    who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: roleOf(r) });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
     label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 11 : 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 177}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 17))}<title>${esc(modelText(r))}</title></text>` : ""}`;
   } else if (c) {
     const k = CELE[c.state];
     stCls = k.cls;
-    who = person({ seed: c.id, hue: c.h, pose: k.pose, mood: k.mood, x: px, y: py, checker: !!c.v });
+    who = person({ seed: c.id, hue: c.h, pose: k.pose, mood: k.mood, x: px, y: py, checker: c.v });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" x="${px}" y="${cy + 37}" text-anchor="middle">${k.icon} ${esc(k.text)}</text></g>`;
     label = `<text class="of-tm" x="${cx + 16}" y="${cy + 162}">เพิ่งจบ · พักแป๊บ</text>`;
@@ -1213,7 +1219,7 @@ function sceneSVG(m) {
       : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
       : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
-      <g class="${busy || fin ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: true })}</g>
+      <g class="${busy || fin ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" })}</g>
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
       <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
@@ -1221,7 +1227,7 @@ function sceneSVG(m) {
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
     g += `<g class="of-st-wait" data-oflog="${esc(j.id)}" tabindex="0" role="button" aria-label="${esc("ดู log คิวที่ " + j.position + " " + j.project_name)}"><title>${esc(`#${j.position} ${j.project_name} · ${shortWhat(j)}${modelText(j) ? "\n🤖 " + modelText(j) : ""}${j.wait_reason ? "\n" + j.wait_reason : ""}`)}</title>
-      ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash, checker: isVerify(j) })}
+      ${person({ seed: j.id, hue: hueOf(j.project_name), pose: "stand", mood: clash ? "flat" : "smile", x: 150, y, s: 0.72, sign: clash, checker: roleOf(j) })}
       <rect class="of-badge" x="${150 - 15}" y="${y - 70}" width="30" height="15" rx="7.5"/><text class="of-badget" x="150" y="${y - 59}" text-anchor="middle">#${j.position}</text></g>`;
   });
   if (m.queue.length > SHOW) g += `<text class="of-tb" x="150" y="${150 + SHOW * 70 - 14}" text-anchor="middle">+${m.queue.length - SHOW} งานรออยู่</text>`;
