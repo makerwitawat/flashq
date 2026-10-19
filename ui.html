@@ -1196,6 +1196,15 @@ function sceneSVG(m) {
 }
 
 /* --- การ์ดงาน / คิว / เพิ่งจบ --- */
+/* โมเดล/เจ้า ของงาน: "provider/model" → "model · provider (บัญชี)" · ว่าง = ใช้ค่าเริ่มต้นของ config */
+function modelText(j) {
+  const raw = (j && j.model) || state.current_model || "";
+  if (!raw) return "";
+  const [prov, ...rest] = raw.split("/"), name = rest.length ? rest.join("/") : raw;
+  const acc = (state.accounts || []).find((a) => a.model === raw);
+  return `${name}${rest.length ? " · " + prov : ""}${acc && acc.short ? " (" + acc.short + ")" : ""}${j && j.model ? "" : " · ค่าเริ่มต้น"}`;
+}
+function modelChip(j) { const t = modelText(j); return t ? `<div class="of-line muted" title="โมเดล · เจ้า (บัญชี)">🤖 ${esc(t)}</div>` : ""; }
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? "🔍 ตรวจ " : "") + (r.message ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card" id="ofC${k}">
@@ -1205,6 +1214,7 @@ function runCardHTML(r, k) {
     <div class="of-line"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
     <div class="of-line">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
     <div class="of-line">⏱ <span id="ofCE${k}"></span></div>
+    ${modelChip(r)}
     <div class="of-line muted" id="ofCM${k}"></div>
     <div class="of-line muted" id="ofCA${k}"></div></article>`;
 }
@@ -1212,7 +1222,7 @@ function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
   return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>คาดการณ์</th></tr>
     ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
-      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span></div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
+      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span>${modelText(j) ? " · 🤖 " + esc(modelText(j)) : ""}</div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
       <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b><div class="row" style="margin-top:0.3rem">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="บังคับให้เริ่มทันทีในช่องพิเศษ (ตรวจไฟล์ซ้อนก่อน)">รันเลย</button>`}<button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></div></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
@@ -1220,7 +1230,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span></td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
@@ -1229,7 +1239,7 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => r.id)]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
