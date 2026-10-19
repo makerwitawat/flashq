@@ -1174,7 +1174,7 @@ function deskSVG(i, cx, cy, r, c) {
     who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: roleOf(r) });
     bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
-    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 11 : 13))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 177}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 17))}<title>${esc(modelText(r))}</title></text>` : ""}`;
+    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 8 : 10))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 162}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 10))}<title>${esc(modelText(r))}</title></text>` : ""}`;
   } else if (c) {
     const k = CELE[c.state];
     stCls = k.cls;
