@@ -1336,6 +1336,7 @@ def ui_reviews() -> tuple[list[dict], list[dict]]:
 def cmd_review(a) -> int:
     """ป้ายสถานะผู้ตรวจ: start = เริ่มตรวจ · done = จบ (pass/fail) · list — ไม่รันอะไรเลย แค่ให้หน้าออฟฟิศแสดงผู้ตรวจ"""
     REVIEWS.mkdir(parents=True, exist_ok=True)
+    a.tasks_or_result = " ".join(a.tasks_or_result) if isinstance(a.tasks_or_result, list) else (a.tasks_or_result or "")
     key = (a.plan or "").replace("\\", "/").split("/")[-1]
     if a.action == "list":
         act, done = ui_reviews()
@@ -1922,7 +1923,7 @@ def main() -> int:
     rv = sp.add_parser("review", help="ป้าย Claude กำลังตรวจ (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — start/done/list")
     rv.add_argument("action", choices=["start", "done", "list"])
     rv.add_argument("plan", nargs="?", default="")
-    rv.add_argument("tasks_or_result", nargs="?", default="", help="start: งาน (T-01..) · done: pass|fail")
+    rv.add_argument("tasks_or_result", nargs="*", help="start: งาน (T-01..T-12 หรือ T-01 T-02 ... หลายตัวได้ ใส่เครื่องหมายคำพูดหรือไม่ก็ได้) · done: pass|fail")
     rv.add_argument("--project", default="")
     rv.add_argument("--note", default="")
     rv.set_defaults(fn=cmd_review)

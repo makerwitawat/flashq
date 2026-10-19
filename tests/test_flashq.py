@@ -210,6 +210,14 @@ class FlashqTest(unittest.TestCase):
             r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_review_start_accepts_many_task_args(self):
+        """review start รับงานหลายตัวได้ทั้งแบบแยกอาร์กิวเมนต์ (T-01 T-12) และแบบเครื่องหมายคำพูด (เหมือน verify)"""
+        for args, want in ((("T-01", "T-12"), "T-01 T-12"), (("T-01 T-02",), "T-01 T-02"), ((), "")):
+            r = self.run_q("review", "start", "docs/plans/PLAN_X_FLASH.md", *args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rows = [json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "reviews").glob("rv_*.json")]
+            self.assertEqual([x["tasks"] for x in rows], [want])  # แผนเดียวกันเริ่มใหม่ = ทับป้ายเก่า
+
     def test_review_markers_and_log_idle(self):
         """review: start/done ทำป้ายผู้ตรวจที่ /api/state เห็น (reviews → reviews_done) · งานที่รันมี log_idle_sec"""
         sys.path.insert(0, str(REPO))
