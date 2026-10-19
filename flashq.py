@@ -166,7 +166,10 @@ def detect_main_branch(root: Path, remote: str = "origin") -> str:
     for name in ("main", "master"):  # ยังไม่มี remote → ดู branch ในเครื่อง
         if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
             return name
-    return _git(root, "branch", "--show-current") or DEFAULTS["main_branch"]
+    cur = _git(root, "branch", "--show-current")
+    if cur and not (_git(root, "rev-parse", "--verify", "-q", "HEAD") or cur in ("main", "master")):
+        cur = ""  # repo ว่าง (ยังไม่มี commit) และไม่ใช่ชื่อ branch หลักทั่วไป → ไม่เดาว่าเป็น branch หลัก
+    return cur or DEFAULTS["main_branch"]
 
 
 def project_cfg(root: Path) -> dict:
