@@ -659,7 +659,7 @@ function render() {
     : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
 
   $("deadBox").hidden = !s.dead.length;
-  $("dead").innerHTML = s.dead.map((j) => `<div class="dead-item">
+  setHTML("dead", s.dead.map((j) => `<div class="dead-item">
     <div><b>${esc(j.project_name)}</b> <span class="mono">${esc(what(j))}</span>
       <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
     ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนสั่งซ้ำ</div>` : ""}
@@ -667,55 +667,60 @@ function render() {
       <button data-log="${esc(j.id)}">ดู log</button>${actBtns(j, { retry: false, short: false })}
       ${j.rerun ? `<button data-copy="${esc(j.rerun)}">คัดลอกคำสั่ง CLI</button>` : ""}
       <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
-    </div></div>`).join("");
+    </div></div>`).join(""));
 
   const sl = s.slots || { used: runs.length, max: 1 };
   $("slotInfo").textContent = `(ใช้ช่อง ${sl.used}/${sl.max}${sl.used > sl.max ? " · มีช่องพิเศษ" : ""})`;
   if (document.activeElement !== $("maxPar")) $("maxPar").value = String(sl.max);
   if (document.activeElement !== $("schedMode")) $("schedMode").value = s.schedule || "fifo";
-  $("running").innerHTML = runs.length ? runs.map((r) => `<div class="run-item">
+  setHTML("running", runs.length ? runs.map((r, i) => `<div class="run-item">
     <div class="kv">
-      <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b>${dur(r.elapsed_sec)}</b>
+      <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b id="rnT${i}"></b>
         ${r.slot ? `<span class="muted">· ช่อง ${r.slot}${r.extra ? " (พิเศษ)" : ""}</span>` : ""}</div>
       <div>โปรเจกต์</div><div>${esc(r.project_name)} <span class="muted mono">${esc(r.project)}</span></div>
       <div>แผน</div><div class="mono">${esc(r.message ? "(ทดสอบ --message)" : r.plan)}${isVerify(r) ? ` <span class="badge s-other">${isSleuth(r) ? "🕵️ ผู้สืบ" : "🔍 ผู้ตรวจ"}${r.agent ? " · " + esc(r.agent) : ""}</span>` : ""}</div>
       <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}</div>
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
-      ${runLiveHTML(r)}
+      <div id="rnL${i}" style="display:contents"></div>
     </div>
     <div class="row" style="margin-top:0.5rem"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${actBtns(r, { retry: false, short: false })}
       ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : ""}
       <span class="sp"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div></div>`).join("")
-    : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ${s.queued.length ? "" : " · กด <b>＋ ส่งงานใหม่</b> เพื่อรันคิว"}</div>`;
+    : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ${s.queued.length ? "" : " · กด <b>＋ ส่งงานใหม่</b> เพื่อรันคิว"}</div>`);
+  // เวลา/ความเคลื่อนไหวเปลี่ยนทุกรอบ → เติมแยก ไม่ให้การ์ดทั้งใบ (และปุ่มหยุด/ดู log) ถูกสร้างใหม่ทุก 3 วิ
+  runs.forEach((r, i) => { setText("rnT" + i, dur(r.elapsed_sec)); setHTML("rnL" + i, runLiveHTML(r)); });
 
   $("qcount").textContent = s.queued.length ? `(${s.queued.length} งาน)` : "";
-  $("queued").innerHTML = s.queued.length ? `<div class="table-wrap"><table>
+  setHTML("queued", s.queued.length ? `<div class="table-wrap"><table>
     <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
     ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td><td class="nw">${dur(j.wait_sec)}</td>
       <td class="act">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="ให้งานนี้ได้ช่องเพิ่มทันที รันพร้อมงานที่กำลังทำ (ตรวจไฟล์ซ้อนก่อน)">รันเลย (คู่ขนาน)</button>`}
         <button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
-    </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`;
+    </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`);
 
   const sel = $("projFilter"), cur = sel.value || store.get("proj", "");
-  sel.innerHTML = `<option value="">ทุกโปรเจกต์</option>` + s.projects.map((p) => `<option${p === cur ? " selected" : ""}>${esc(p)}</option>`).join("");
+  if (document.activeElement !== sel) {  // กำลังเปิดเลือกอยู่ = ไม่สร้างใหม่ (dropdown จะปิดเอง)
+    setHTML(sel, `<option value="">ทุกโปรเจกต์</option>` + s.projects.map((p) => `<option${p === cur ? " selected" : ""}>${esc(p)}</option>`).join(""));
+    if (sel.value !== cur && s.projects.includes(cur)) sel.value = cur;
+  }
   const q = $("histSearch").value.trim().toLowerCase(), stf = $("stateFilter").value;
   const hist = s.history.filter((j) => (!sel.value || j.project_name === sel.value) && (!stf || j.state === stf)
     && (!q || `${j.id} ${j.plan} ${j.tasks} ${j.message} ${j.model}`.toLowerCase().includes(q)));
   $("hcount").textContent = `(${hist.length}${hist.length !== s.history_total ? " / " + s.history_total : ""})`;
-  $("history").innerHTML = hist.length ? `<table>
+  setHTML("history", hist.length ? `<table>
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j)}</td></tr>`).join("")}
-    </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`;
+    </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
 
   $("curModel").textContent = s.current_model || "(ยังไม่ตั้ง)";
-  $("accounts").innerHTML = s.accounts.map((a) => `<div class="acc${a.model === s.current_model ? " cur" : ""}">
+  setHTML("accounts", s.accounts.map((a) => `<div class="acc${a.model === s.current_model ? " cur" : ""}">
     <b>${a.model === s.current_model ? "● " : ""}${esc(a.short)}</b><span class="m">${esc(a.model)}${a.available ? "" : " (ไม่มีใน provider!)"}</span>
-    <button data-switch="${esc(a.short)}" ${a.model === s.current_model || !a.available ? "disabled" : ""}>ใช้</button></div>`).join("") || `<div class="empty">ไม่มีรายการบัญชี</div>`;
+    <button data-switch="${esc(a.short)}" ${a.model === s.current_model || !a.available ? "disabled" : ""}>ใช้</button></div>`).join("") || `<div class="empty">ไม่มีรายการบัญชี</div>`);
 
   const statTable = (title, rows) => rows.length ? `<div class="table-wrap"><table class="stats"><tr><th>${title}</th><th>งาน</th><th>ผ่าน</th><th></th><th>เฉลี่ย</th></tr>
     ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
@@ -723,13 +728,13 @@ function render() {
   const st = s.stats || { by_project: [], by_model: [], by_kind: [] };
   const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", investigate: "🕵️ สืบ", test: "ทดสอบ" };
   const kindRows = (st.by_kind || []).map((g) => ({ ...g, name: KIND_TH[g.name] || g.name }));
-  $("stats").innerHTML = st.by_project.length || kindRows.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
+  setHTML("stats", st.by_project.length || kindRows.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
       + (kindRows.length > 1 ? `<div style="height:0.6rem"></div>` + statTable("ชนิดงาน", kindRows) : "")
-    : `<div class="empty">ยังไม่มีงานที่จบ</div>`;
+    : `<div class="empty">ยังไม่มีงานที่จบ</div>`);
 
   const pl = $("projList");
   const opts = s.project_paths.map((p) => `<option value="${esc(p)}">`).join("");
-  if (pl.innerHTML !== opts) pl.innerHTML = opts;
+  setHTML(pl, opts);
 }
 
 /* ---------- แจ้งเตือนเมื่องานจบ ---------- */
@@ -887,7 +892,7 @@ function renderGoals() {
   const cnt = gs.length ? `${gs.length} เรื่อง · กำลังวน ${gs.filter((g) => g.verdict === "CONTINUE" || g.verdict === "START").length}` : "";
   for (const [box, el, c] of [["goalBox", "goals", "gcount"], ["ofGoalBox", "ofGoals", "ofGcount"]]) {
     $(box).hidden = !gs.length;
-    if ($(el).innerHTML !== html) $(el).innerHTML = html;
+    setHTML(el, html);
     setText(c, cnt);
   }
 }
@@ -1542,6 +1547,24 @@ function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง
     <g><path d="M36 328h38l-5 26h-28z" fill="#a0653a"/><circle cx="55" cy="312" r="15" fill="#3f9a57"/><circle cx="42" cy="320" r="11" fill="#58b36e"/><circle cx="68" cy="320" r="11" fill="#4aa862"/></g>`;
 }
 
+// ข้อความป้ายผู้ตรวจ/ยามในฉาก — มีเวลาที่เดินทุกวิ จึงแยกออกมาให้ officeUpdate อัปเดตด้วย setText แทนการวาดฉากใหม่ (อนิเมชันตัวละครเริ่มใหม่ = กระตุก)
+function inspText(m) {
+  const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
+  const rv = m.reviews[0], fin = m.reviewFin;
+  return vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
+    : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
+      + (rv.age_sec > 1800 ? ` · ⚠ นานผิดปกติ — session ที่ตรวจอาจปิดไปแล้ว (ป้ายหายเองเมื่อครบ ${state.review_ttl_min ?? 90} นาที)` : "")
+    : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
+    : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
+}
+function guardSceneText(m) {
+  const w = m.watched[0], sw = w && w.shell_watch, k = m.kill, di = w ? m.desks.indexOf(w) : -1;
+  const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
+  return caught ? `🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`
+    : alert ? `${guardText(sw)} · ${trunc(sw.cmd, 24)} (ช่อง ${di + 1})`
+    : sw ? `เฝ้าคำสั่ง ${trunc(sw.cmd, 34)} (ช่อง ${di + 1}) · โปรเซสยังขยับ`
+    : "ว่าง · เดินตรวจ shell รอบออฟฟิศ";
+}
 function sceneSVG(m) {
   // จัดโต๊ะ: ≤5 ช่อง = แถวเดียว · มากกว่านั้นแบ่งแถวให้เท่ากัน (≤5 ต่อแถว) · กว้างเกินพื้นที่ = ย่อโต๊ะทั้งชุด (ไม่ล้นขอบ/ไม่เหลือแถวโหรงเหรง)
   const areaW = SCENE_W - DESK_X0 - 10, rows = Math.max(1, Math.ceil(m.N / 5)), cols = Math.max(1, Math.ceil(m.N / rows));
@@ -1565,30 +1588,23 @@ function sceneSVG(m) {
     const rv = m.reviews[0], fin = m.reviewFin;
     const sy = stripY + 8, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
-    const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
-      : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
-        + (rv.age_sec > 1800 ? ` · ⚠ นานผิดปกติ — session ที่ตรวจอาจปิดไปแล้ว (ป้ายหายเองเมื่อครบ ${state.review_ttl_min ?? 90} นาที)` : "")
-      : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
-      : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
+    const txt = inspText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ไม่ต้องวาดฉากใหม่)
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
       <g class="${busy || fin ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" })}</g>
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
-      <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
+      <text class="of-tm" id="ofInspT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
   {  // ยามเฝ้า shell: ว่าง = เดินส่องไฟฉาย · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
     const sy = stripY + 102, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
     const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? deskPX(di) : DESK_X0 + 70;
     const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
-    const txt = caught ? `🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`
-      : alert ? `${guardText(sw)} · ${trunc(sw.cmd, 24)} (ช่อง ${di + 1})`
-      : sw ? `เฝ้าคำสั่ง ${trunc(sw.cmd, 34)} (ช่อง ${di + 1}) · โปรเซสยังขยับ`
-      : "ว่าง · เดินตรวจ shell รอบออฟฟิศ";
+    const txt = guardSceneText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
       <rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
       <g class="${sw || caught ? "" : "of-patrol of-patrol2"}">${person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" })}</g>
       ${alert ? `<text x="${(sw ? colX : DESK_X0 + 70) + 22}" y="${sy + 18}" font-size="16" class="of-blinkt">❗</text>` : ""}
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🛡 ยามเฝ้า shell</text>
-      <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
+      <text class="of-tm" id="ofGuardT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
   if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 196);
   const SHOW = 5;
@@ -1711,11 +1727,31 @@ function recentHTML() {
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
 function setText(id, t) { const e = $(id); if (e && e.textContent !== t) e.textContent = t; }
+// เขียน HTML เฉพาะเมื่อเปลี่ยนจริง — เทียบกับสตริงครั้งก่อน (innerHTML ที่อ่านกลับถูกเบราว์เซอร์แปลงรูป จึงไม่เคยเท่ากัน)
+// สร้างใหม่ทุก 3 วิ = ปุ่มที่กดค้างหลุด · hover/ข้อความที่เลือกหาย · dropdown ปิดเอง
+// โครงเหมือนเดิม (แค่ข้อความ/attribute เปลี่ยน เช่น "x นาทีที่แล้ว" · ความกว้างแถบ) = แก้เฉพาะจุดนั้น → ปุ่ม/hover/details เป็นตัวเดิม
+const sameShape = (a, b) => a.nodeName === b.nodeName && a.childNodes.length === b.childNodes.length
+  && [...a.childNodes].every((c, i) => sameShape(c, b.childNodes[i]));
+function patchDOM(a, b) {
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  for (const at of b.attributes) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  a.childNodes.forEach((c, i) => patchDOM(c, b.childNodes[i]));
+}
+function setHTML(id, h) {
+  const e = typeof id === "string" ? $(id) : id;
+  if (!e || e._h === h) return;
+  const t = document.createElement(e.namespaceURI === "http://www.w3.org/2000/svg" ? "div" : e.tagName);
+  t.innerHTML = h;
+  if (e._h != null && sameShape(e, t)) e.childNodes.forEach((c, i) => patchDOM(c, t.childNodes[i]));  // เฉพาะลูก — attribute ของกล่องเองไม่แตะ
+  else e.innerHTML = h;
+  e._h = h;
+}
 function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => [r.id, Math.floor((r.age_sec || 0) / 60)]), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -1726,6 +1762,7 @@ function officeUpdate() {
   }
   const now = Date.now();
   setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
+  setText("ofInspT", inspText(m)); setText("ofGuardT", guardSceneText(m));
   /* งานที่กำลังทำ */
   const infos = m.runs.map(runInfo);
   m.runs.forEach((r, k) => {
