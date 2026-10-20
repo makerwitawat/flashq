@@ -1171,6 +1171,32 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("พังซ้ำเรื่องเดิม", g["rounds"][-1]["stop"][0])
         self.assertNotIn("results", g["rounds"][0])  # รอบเก่าเก็บแค่ผลย่อ
 
+    def test_goal_scope_counts_only_flash_windows(self):
+        """ไม่ STOP ผิด: เทสต์เกณฑ์ commit หลัง check · ไฟล์ขยะไม่ track ที่มีมาก่อน · มีงาน Flash ของเป้าหมาย = นับเฉพาะที่แก้ระหว่างงานรัน"""
+        py = f'"{sys.executable}"'
+        self.goal_repo(f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\ngoal-files: src/*\ngoal-locked: tests/*\n")
+        junk = self.proj / "junk.bin"
+        junk.write_text("x", encoding="utf-8")
+        os.utime(junk, (time.time() - 3600, time.time() - 3600))  # มีมาก่อนเริ่มเป้าหมาย
+        self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        (self.proj / "tests" / "acc2.py").write_text("print(1)\n", encoding="utf-8")  # เจ้าของเพิ่มเทสต์เกณฑ์หลัง check
+        subprocess.run(["git", "-C", str(self.proj), "add", "tests/acc2.py"], check=True)
+        subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "goal tests"], check=True)
+        time.sleep(3)
+        proj = json.loads(next((self.home / "goals").glob("*.json")).read_text(encoding="utf-8"))["project"]
+        t0 = time.strftime("%Y-%m-%d %H:%M:%S")
+        (self.home / "jobs").mkdir(exist_ok=True)
+        (self.home / "jobs" / "J1.json").write_text(json.dumps({"id": "J1", "project": proj, "plan": "docs/plans/PLAN_FLASH_x_R1.md",
+                                                                "status": "running", "created": t0, "started": t0}), encoding="utf-8")
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=DONE", r.stdout, r.stdout)
+        (self.proj / "other.py").write_text("x\n", encoding="utf-8")  # ระหว่างงาน Flash รัน = นอกขอบเขต
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("แก้ไฟล์นอกขอบเขต goal-files: other.py", r.stdout, r.stdout)
+        self.assertNotIn("junk.bin", r.stdout)
+        self.assertNotIn("ไฟล์ล็อก", r.stdout)
+
     def test_cancel_does_not_kill_reused_child_pid(self):
         """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
         mod = self.load_mod("flashq_cancel")

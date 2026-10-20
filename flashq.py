@@ -2538,11 +2538,46 @@ def _glob_hit(path: str, globs: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, g) or (g.endswith("/") and path.startswith(g)) or path.startswith(g.rstrip("/") + "/") for g in globs)
 
 
-def goal_changed_files(root: Path, base: str) -> list[str]:
-    """ไฟล์ที่เปลี่ยนตั้งแต่ base (commit แล้ว + ค้างใน working tree + ไฟล์ใหม่ที่ยังไม่ track)"""
-    out = set(_git(root, "diff", "--name-only", base).splitlines()) if base else set()
-    out |= set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
-    return sorted(p.strip() for p in out if p.strip())
+def _ts(s: str) -> float:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def goal_job_windows(root: Path, stem: str) -> list[tuple[float, float]]:
+    """ช่วงเวลาที่งาน Flash ของเป้าหมายนี้รัน (แผน PLAN_FLASH_<เรื่อง>_R<n>.md ในโปรเจกต์เดียวกัน)"""
+    proj, topic, out = os.path.normcase(str(root)), goal_topic(stem), []
+    for j in jobs():
+        plan = j.get("plan") or ""
+        if (re.search(r"_R\d+\.md$", plan, re.I) and goal_topic(plan) == topic
+                and os.path.normcase(j.get("project", "")) == proj and j.get("started")):
+            out.append((_ts(j["started"]), _ts(j.get("finished", "")) or time.time()))
+    return out
+
+
+def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]]) -> list[str]:
+    """ไฟล์ที่ถูกแก้ระหว่างวนเป้าหมาย — นับเฉพาะ commit (ไม่รวม merge) ที่เกิดระหว่างงาน Flash ของเป้าหมายนี้รัน
+    + ไฟล์ค้าง/ยังไม่ track ที่แก้ระหว่างงาน Flash รัน · ไม่มีประวัติงาน = ทุก commit หลัง base + ไฟล์ค้างที่แก้หลังเริ่มเป้าหมาย
+    (กัน STOP ผิด: เทสต์เกณฑ์ที่เจ้าของ commit หลัง check · ไฟล์ขยะที่ไม่ track มาก่อน · commit ของ session อื่นในโปรเจกต์เดียวกัน)"""
+    out = set()
+    if base:
+        t = None
+        for line in _git(root, "log", "--no-merges", "--format=@@%ct", "--name-only", f"{base}..HEAD").splitlines():
+            if line.startswith("@@"):
+                t = int(line[2:] or 0)
+            elif line.strip() and t is not None and (not windows or any(a - 2 <= t <= b + 5 for a, b in windows)):
+                out.add(line.strip())
+    dirty = set(_git(root, "diff", "--name-only", "HEAD").splitlines()) | set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    for f in dirty:
+        f = f.strip()
+        try:
+            m = (root / f).stat().st_mtime if f else 0
+            if f and (any(a - 2 <= m <= b + 5 for a, b in windows) if windows else m >= _ts(started)):
+                out.add(f)
+        except OSError:
+            out.add(f)  # ถูกลบ = นับว่าแก้
+    return sorted(out)
 
 
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
@@ -2617,9 +2652,9 @@ def cmd_goal(a) -> int:
         if not ok:
             fail.append(i["id"])
             print("   " + "\n   ".join(out.strip().splitlines()[-8:]))
-    changed = goal_changed_files(root, st["base"]) if is_git else []
+    changed = goal_changed_files(root, st["base"], st["started"], goal_job_windows(root, goal.stem)) if is_git else []
     cfg = project_cfg(root)
-    free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"]
+    free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"] + g["locked"]
     out_scope = [f for f in changed if not _glob_hit(f, g["files"] + free)]
     locked = [f for f in changed if g["locked"] and _glob_hit(f, g["locked"])]
     if locked:
