@@ -544,11 +544,23 @@ const dur = (s) => {
 };
 // ยามเฝ้า shell: สงสัยอะไร · รออีกเท่าไรถึงจะฆ่า (จบเองก่อน = ปล่อยไป)
 const guardText = (sw) => {
-  const left = sw.kill_in != null ? Math.max(0, Math.round(sw.kill_in - (sw.at ? (Date.now() - new Date(sw.at.replace(" ", "T")).getTime()) / 1000 : 0))) : null;
-  const wait = left != null ? ` — ถ้ายังไม่จบอีก ~${dur(left)} จะฆ่า (จบเองก่อน = ปล่อยไป)` : "";
+  // เวลาฆ่าเป็นนาฬิกา (ไม่ใช่นับถอยหลัง) — ฉากออฟฟิศวาดใหม่ไม่ทุกวินาที ตัวเลขนับถอยหลังจะค้างไม่ตรงกับการ์ด
+  const at = sw.at ? new Date(sw.at.replace(" ", "T")).getTime() : Date.now();
+  const kat = at + (sw.kill_in || 0) * 1000;
+  const wait = sw.kill_in == null ? "" : kat > Date.now() ? ` — ถ้ายังไม่จบภายใน ${new Date(kat).toLocaleTimeString("en-GB")} จะฆ่า (จบเองก่อน = ปล่อยไป)`
+    : " — ครบเวลาแล้ว ยามจะยืนยันอีกครั้งก่อนฆ่า";
   return sw.state === "suspect" ? `⚠ สงสัย: ${sw.note}${wait}`
     : sw.state === "quiet" ? `⚠ คำสั่งนิ่ง ${dur(sw.quiet_sec)}: ${sw.note || ""}${wait}`
     : sw.state === "killed" ? `ฆ่าคำสั่งค้างแล้ว (${sw.note || ""})` : "คำสั่งยังทำงาน (CPU/I/O ขยับ)";
+};
+// แดชบอร์ด: ความเคลื่อนไหวล่าสุดของงาน (log หลัก · ผู้ช่วยย่อย · ยามเฝ้า shell) — ข้อมูลเดียวกับการ์ดในออฟฟิศ
+const runLiveHTML = (r) => {
+  const rows = [], sub = r.agent_act && r.agent_act.subs && r.agent_act.subs[0], sw = r.shell_watch;
+  if (r.log_idle_sec != null) rows.push(`log หลักขยับ ${ago(r.log_idle_sec)} ที่แล้ว`);
+  if (sub && sub.ago_sec != null) rows.push(`🧑‍💻 ผู้ช่วยย่อย${sub.title ? " «" + trunc(sub.title, 40) + "»" : ""} ขยับ ${dur(sub.ago_sec)} ที่แล้ว${sub.doing ? " → " + trunc(sub.doing, 60) : ""}`);
+  if (sw && sw.state !== "none") rows.push(`🛡 ${guardText(sw)}`);
+  if (r.shell_kills || r.shell_released) rows.push(`🛡 ฆ่าคำสั่งค้าง ${r.shell_kills || 0} ครั้ง · สงสัยแต่จบเองทัน ปล่อยไป ${r.shell_released || 0} ครั้ง`);
+  return rows.length ? `<div>ความเคลื่อนไหว</div><div>${rows.map(esc).join("<br>")}</div>` : "";
 };
 const ago = (s) => (s == null ? "-" : s < 60 ? "ไม่ถึง 1 นาที" : dur(s).replace(/ \d+ วิ$/, ""));
 const roundTag = (j) => (j.goal ? `<span class="rtag goal" title="รอบหนึ่งของเป้าหมาย «${esc(j.goal.title || "")}» (/flash-goal)">🚩 รอบ ${j.goal.round}/${j.goal.rounds_max}</span>`
@@ -659,6 +671,7 @@ function render() {
       <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}</div>
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
+      ${runLiveHTML(r)}
     </div>
     <div class="row" style="margin-top:0.5rem"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${actBtns(r, { retry: false, short: false })}
       ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : ""}
@@ -1521,6 +1534,7 @@ function sceneSVG(m) {
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
       : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
+        + (rv.age_sec > 1800 ? ` · ⚠ นานผิดปกติ — session ที่ตรวจอาจปิดไปแล้ว (ป้ายหายเองเมื่อครบ ${state.review_ttl_min ?? 90} นาที)` : "")
       : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
       : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
@@ -1656,8 +1670,6 @@ function officeUpdate() {
     setText("ofCP" + k, ri.pct == null ? "ประมาณไม่ได้" : Math.round(ri.pct) + "%" + (ri.pct >= 95 ? "+" : ""));
     const stepTxt = isSleuth(r) ? "ผู้สืบกำลังสืบต้นตอ" : r.message ? "ข้อความทดสอบ" : isVerify(r) ? "ผู้ตรวจกำลังตรวจ " + (r.tasks || "") : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
     setText("ofCS" + k, stepTxt + (L && L.mention && !ri.doneN && ri.n > 1 ? ` (log พูดถึง ${L.mention} ล่าสุด)` : ""));
-    const act = trunc(activity(L), 90);
-    setText("ofCT" + k, act);
     let t;
     if (ri.el == null) t = "ยังไม่ทราบเวลาเริ่ม";
     else if (ri.rem != null) t = `ผ่านไป ${dur(Math.floor(ri.el))} · เหลือ ${approx(ri.rem)} (เสร็จราว ${clockAt(ri.rem)})`;
@@ -1669,9 +1681,12 @@ function officeUpdate() {
     // log หลักเงียบได้เพราะงานส่งต่อให้ผู้ช่วยย่อย (subagent) — ตัวคุมงานถามเซิร์ฟเวอร์แล้วว่าใครขยับล่าสุด
     const aa = r.agent_act, aIdle = aa && aa.idle_sec != null ? aa.idle_sec + (now - stateAt) / 1000 : null, sub = aa && aa.subs && aa.subs[0];
     const quiet = logQuiet && !(aIdle != null && aIdle < 180);
-    const subTxt = logQuiet && sub && sub.ago_sec != null ? `🧑‍💻 ผู้ช่วยย่อย${sub.title ? " «" + trunc(sub.title, 40) + "»" : ""} ขยับ ${dur(Math.floor(sub.ago_sec + (now - stateAt) / 1000))} ที่แล้ว${sub.doing ? " · " + trunc(sub.doing, 60) : ""}` : "";
+    const subTxt = logQuiet && sub && sub.ago_sec != null ? `🧑‍💻 ผู้ช่วยย่อย${sub.title ? " «" + trunc(sub.title, 40) + "»" : ""} ขยับ ${dur(Math.floor(sub.ago_sec + (now - stateAt) / 1000))} ที่แล้ว` : "";  // สิ่งที่ทำอยู่แสดงในบรรทัด 🛠
     const warn = logQuiet ? (quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}`
       : `log หลักเงียบ ${dur(Math.floor(idleMs / 1000))} (ปกติ — งานอยู่ที่ผู้ช่วยย่อย)`) + (subTxt ? " · " + subTxt : "") : "";
+    // บรรทัด 🛠: log หลักเงียบแต่ผู้ช่วยย่อยยังขยับ → แสดงสิ่งที่ผู้ช่วยย่อยทำ (ไม่ใช่คำสั่งเก่าล่าสุดของ session หลัก)
+    const act = trunc(logQuiet && !quiet && sub && sub.doing ? "ผู้ช่วยย่อย → " + sub.doing : activity(L), 90);
+    setText("ofCT" + k, act);
     setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${warn ? " · " + warn : ""}` : warn);
     const sw = r.shell_watch;
     setText("ofCG" + k, (sw && sw.state !== "none" ? `🛡 ยามเฝ้า: ${guardText(sw)} · ${trunc(sw.cmd, 50)} (${sw.pids} โปรเซส)` : "")

@@ -262,6 +262,10 @@ class FlashqTest(unittest.TestCase):
             self.assertLess(flashq.log_idle_sec({"logs": [str(log)]}), 5)
             self.assertIsNone(flashq.log_idle_sec({"logs": [str(self.home / "none.jsonl")]}))
             self.assertIsNone(flashq.log_idle_sec({}))
+            # ป้ายยามเก่า (ตัวคุมงานหยุดเฝ้าแล้ว) ไม่แสดง · ใหม่แสดง
+            self.assertIsNone(flashq._fresh_shell_watch({"shell_watch": {"state": "killed", "at": "2020-01-01 00:00:00"}}))
+            self.assertIsNone(flashq._fresh_shell_watch({}))
+            self.assertEqual(flashq._fresh_shell_watch({"shell_watch": {"state": "suspect", "at": flashq.now()}})["state"], "suspect")
         finally:
             flashq.HOME = old_home
             flashq.REVIEWS = old_home / "reviews"

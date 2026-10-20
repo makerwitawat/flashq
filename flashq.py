@@ -1871,6 +1871,13 @@ def log_idle_sec(j: dict) -> int | None:
         return None
 
 
+def _fresh_shell_watch(j: dict) -> dict | None:
+    """ป้ายยามเฝ้า shell ล่าสุด · เก่ากว่า 180 วิ (ยามเฝ้าทุก 30 วิ) = ตัวคุมงานหยุดเฝ้าแล้ว → ไม่แสดง (กันป้ายค้าง)"""
+    sw = j.get("shell_watch")
+    age = _secs(sw.get("at", "")) if sw else None
+    return sw if age is not None and age <= 180 else None
+
+
 def _agent_act_row(a: dict | None) -> dict | None:
     """ความเคลื่อนไหวของ session + ผู้ช่วยย่อยที่ตัวคุมงานถามจากเซิร์ฟเวอร์ล่าสุด → อายุเป็นวินาที (ข้อมูลเก่าเกิน 5 นาที = ไม่ใช้)"""
     if not a or time.time() - a.get("at", 0) > 300:
@@ -1966,7 +1973,8 @@ def ui_state() -> dict:
         if st == "running":
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
-                       log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j), shell_watch=j.get("shell_watch"),
+                       log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j),
+                       shell_watch=_fresh_shell_watch(j),
                        shell_kills=len(j.get("shell_kills") or []), shell_released=len(j.get("shell_released") or []),
                        agent_act=_agent_act_row(j.get("agent_act")))
             running.append(row)
@@ -1998,6 +2006,7 @@ def ui_state() -> dict:
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
+            "review_ttl_min": REVIEW_TTL_MIN,
             "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
             "goals": goals}
 
