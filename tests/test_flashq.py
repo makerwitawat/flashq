@@ -1196,6 +1196,10 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")
         self.assertIn("GOAL=DONE คนตรวจผ่าน 1/1", r.stdout, r.stdout)
         self.assertEqual(mod.ui_goals([])[0]["verdict"], "DONE")
+        self.assertEqual(mod.goal_ui_action(g["id"], "archive", {})[0], 200)  # ✖ เก็บ = หายจากแผง/เสาธง
+        self.assertEqual(mod.ui_goals([]), [])
+        self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")  # สั่งเรื่องนี้ใหม่ = กลับมาเอง
+        self.assertEqual(len(mod.ui_goals([])), 1)
         (mod.GOALS_DIR / f"{g['id']}.busy.json").write_text(json.dumps({"what": "verify", "pid": os.getpid(), "at": "x"}), encoding="utf-8")
         gs = mod.ui_goals([])
         self.assertEqual((len(gs), gs[0]["busy"]["what"]), (1, "verify"))  # ไฟล์ busy ไม่นับเป็นเป้าหมาย · pid ยังอยู่ = กำลังทำ

@@ -2558,7 +2558,7 @@ def ui_goals(running: list[dict]) -> list[dict]:
         if f.name.endswith(".busy.json"):
             continue
         gl = read_json(f)
-        if not gl.get("id"):
+        if not gl.get("id") or gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง)
             continue
         last = (gl.get("rounds") or [None])[-1]
         verdict = last["verdict"] if last else "START"
@@ -2703,7 +2703,7 @@ def open_link(url: str) -> None:
 
 def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์)
-    claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป)
+    claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป) · archive (✖ เก็บการ์ดที่จบแล้ว)
     path ทุกตัวมาจากสำเนาสถานะใน ~/.flashq/goals เท่านั้น ไม่รับ path จากหน้าเว็บ"""
     if not re.fullmatch(r"[0-9a-f]{12}", gid or ""):
         return 400, {"ok": False, "message": "id ไม่ถูกต้อง"}
@@ -2730,8 +2730,15 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
                            + (["--pass"] if body.get("ok") else ["--fail", str(body.get("reason") or "")]),
                            cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+    if action == "archive":
+        last = (gl.get("rounds") or [{}])[-1]
+        if last.get("verdict") not in ("DONE", "STOP"):
+            return 409, {"ok": False, "message": "เก็บได้เฉพาะเป้าหมายที่ผ่านแล้วหรือหยุดแล้ว"}
+        gl["archived"] = now()
+        write_json(GOALS_DIR / f"{gid}.json", gl)
+        return 200, {"ok": True, "message": "เก็บแล้ว — ไฟล์ GOAL และประวัติยังอยู่ครบ · สั่ง goal check/verify เรื่องนี้ใหม่ = กลับมาแสดงเอง"}
     if action == "session":
-        host = (gl.get("owner") or {}).get("host") or ""
+        host =(gl.get("owner") or {}).get("host") or ""
         url = claude_app_link("continue", {"session": host}) if re.fullmatch(r"local_[A-Za-z0-9-]{1,64}", host) else ""
         if not url:
             return 404, {"ok": False, "message": "ไม่มี session ของแอป Claude desktop ให้เปิด (สั่งจาก CLI หรือเครื่องไม่มีแอป) → ใช้ปุ่มให้ Claude ทำต่อ"}

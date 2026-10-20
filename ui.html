@@ -246,6 +246,9 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .goal-card.v-DONE { border-left-color: var(--ok); } .goal-card.v-STOP { border-left-color: var(--fail); }
 .goal-card.v-DONE_NEEDS_USER { border-left-color: var(--quota); } .goal-card.v-CONTINUE, .goal-card.v-START { border-left-color: var(--accent); }
 .goal-h { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; }
+summary.goal-h { cursor: pointer; list-style: none; } summary.goal-h::-webkit-details-marker { display: none; }
+summary.goal-h::before { content: "▸"; color: var(--muted, #888); } details[open] > summary.goal-h::before { content: "▾"; }
+summary.goal-h button { margin-left: auto; }
 .goal-st { font-weight: 700; padding: 0 0.5rem; border-radius: 1rem; font-size: 0.82rem; color: #fff; background: var(--accent); white-space: nowrap; }
 .goal-st.v-DONE { background: var(--ok); } .goal-st.v-STOP { background: var(--fail); } .goal-st.v-DONE_NEEDS_USER { background: var(--quota); }
 .goal-bar { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: 0.45rem; align-items: center; font-size: 0.88rem; margin-top: 0.3rem; }
@@ -764,11 +767,20 @@ function goalHTML(g) {
       <button data-gact="verify" data-gid="${esc(g.id)}"${dis} title="รัน goal verify ใหม่ (รันเกณฑ์ทุกข้อ · นับเป็นรอบใหม่)">🔄 ตรวจใหม่</button>
       <button data-gact="claude" data-gid="${esc(g.id)}"${dis || (g.verdict === "DONE" ? " disabled" : "")} title="เปิด session ใหม่ในแอป Claude (แท็บ Code) พิมพ์ /flash-goal รอไว้ · ไม่มีแอป → หน้าต่าง CLI">🤖 ให้ Claude ทำต่อ</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="goal">📄 ไฟล์เป้าหมาย</button>
-      <button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button></div></div>`;
+      <button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button>
+      ${g.verdict === "STOP" ? `<button data-gact="archive" data-gid="${esc(g.id)}"${dis} title="เอาออกจากแผงและเสาธง (ไฟล์ GOAL/ประวัติยังอยู่ · ตรวจเรื่องนี้ใหม่ = กลับมาเอง)">✖ เก็บ</button>` : ""}</div></div>`;
   const chips = n ? `<div class="goal-rounds">${g.rounds.map((r, k) => `<span title="${esc(r.at)}">รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}</span>`).join("")}</div>` : "";
+  const head = `<span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
+      <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span>`;
+  if (g.verdict === "DONE") {  // ผ่านแล้ว = ย่อเหลือบรรทัดเดียว (กดเพื่อกางดู) + ✖ เก็บ
+    const key = g.id + ":card";
+    return `<article class="goal-card v-DONE"><details data-gkey="${esc(key)}"${goalOpen.has(key) ? " open" : ""}><summary class="goal-h">${head}
+      <span class="muted">· ${n} รอบ · ผ่าน ${g.passed}/${g.machine}${human.length ? ` + คนตรวจ ${human.length}` : ""}${last ? ` · ${esc(last.at)}` : ""}</span>
+      <button data-gact="archive" data-gid="${esc(g.id)}" title="เอาออกจากแผงและเสาธง (ไฟล์ GOAL/ประวัติยังอยู่)">✖ เก็บ</button></summary>
+      ${acts}<ul class="goal-items">${items}</ul>${own}${chips}</details></article>`;
+  }
   return `<article class="goal-card v-${esc(g.verdict)}">
-    <div class="goal-h"><span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
-      <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span></div>
+    <div class="goal-h">${head}</div>
     <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
@@ -1621,10 +1633,11 @@ $("goals").addEventListener("click", (e) => { const t = e.target.closest("button
 /* ปุ่มบนการ์ดเป้าหมาย (ทั้งแดชบอร์ดและออฟฟิศ) */
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-gact]"); if (!b || b.disabled) return;
-  e.stopPropagation();
+  e.stopPropagation(); e.preventDefault();  // ปุ่มใน <summary> ไม่ให้พับ/กางการ์ด
   const d = b.dataset, body = { id: d.gid, action: d.gact };
   if (d.gact === "verify" && !confirm("ตรวจใหม่: รันเกณฑ์ทุกข้อของเป้าหมายนี้ (นับเป็นรอบใหม่ · ใช้เวลาหลายนาที) ?")) return;
   if (d.gact === "claude" && !confirm("เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ ?\n(กด Enter ในแอปเพื่อเริ่ม · ใช้โควตา Claude · ไม่มีแอป → เปิดหน้าต่าง CLI แทน)")) return;
+  if (d.gact === "archive" && !confirm("เก็บการ์ดเป้าหมายนี้ออกจากแผงและเสาธง ?\n(ไฟล์ GOAL และประวัติยังอยู่ · สั่งตรวจเรื่องนี้ใหม่ = กลับมาแสดงเอง)")) return;
   if (d.gact === "open") body.what = d.what;
   if (d.gact === "human") {
     body.item = d.item; body.ok = !!d.ok;
