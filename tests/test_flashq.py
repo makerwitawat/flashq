@@ -720,6 +720,23 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
 
+    def test_agent_model_from_frontmatter_and_json_wins(self):
+        """ไม่ตั้งใน opencode.json → ใช้ model: ในหัวไฟล์ agent (แม่แบบ IRIS) · ตั้งทั้งสองที่ → opencode.json ชนะ"""
+        agent_dir = self.oc_cfg.parent / "agent"
+        agent_dir.mkdir(exist_ok=True)
+        (agent_dir / "fm-checker.md").write_text(chr(10).join(["---", "mode: all", "model: p7/from-file", "---", "ตรวจ", ""]), encoding="utf-8")
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--agent", "fm-checker")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--model") + 1], "p7/from-file")
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        cfg["agent"]["fm-checker"] = {"model": "p8/from-json"}
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        self.args_out.unlink()
+        self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--agent", "fm-checker")
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--model") + 1], "p8/from-json")
+
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
         with socket.socket() as s:

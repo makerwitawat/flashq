@@ -1,6 +1,7 @@
 ---
 description: Use ก่อนเขียนแผน flash เมื่อยังไม่รู้ต้นตอบั๊ก — ผู้สืบ (DeepSeek) อ่านอย่างเดียว ไล่หาต้นตอพร้อมหลักฐาน file:line ไม่แก้ไฟล์. Triggers: สืบต้นตอ, flash-investigator
 mode: all
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: deny
@@ -17,7 +18,7 @@ permission:
 
 <!-- flashq:managed — ติดตั้งโดย `flashq.py install` (ต้นฉบับ {{FLASHQ}}/opencode/agent/) · โปรเจกต์ที่มี .opencode/agent/flash-investigator.md ของตัวเองจะใช้ของโปรเจกต์ -->
 
-> **`mode: all` ห้ามแก้เป็น subagent** (เหตุผลเดียวกับ flash-verifier) · โมเดล: ตั้งที่ `~/.config/opencode/opencode.json` → `agent.flash-investigator.model` (flashq ใช้ค่านั้นเอง · ไม่ตั้ง = โมเดลเริ่มต้นของ opencode) หรือส่ง `--model` · **ควร `--attach none`** (live server จำรายชื่อ agent ตอนเปิด → อาจไม่เห็น agent ใหม่ → flashq ขึ้น FAIL เมื่อ opencode แจ้ง `not found`/`Falling back`) · เรียก: `flashq.py run --agent flash-investigator --readonly --attach none --message "<บรีฟ>" --auto`
+> **`mode: all` ห้ามแก้เป็น subagent** (เหตุผลเดียวกับ flash-verifier) · โมเดล: ตั้งที่ `model:` ในหัวไฟล์นี้ (แม่แบบจาก IRIS ใช้ opencode-go/deepseek-v4.1-flash · ปรับตามผู้ให้บริการของคุณ) · `agent.flash-investigator.model` ใน `~/.config/opencode/opencode.json` ชนะถ้ามี · หรือส่ง `--model` · **ควร `--attach none`** (live server จำรายชื่อ agent ตอนเปิด → อาจไม่เห็น agent ใหม่ → flashq ขึ้น FAIL เมื่อ opencode แจ้ง `not found`/`Falling back`) · เรียก: `flashq.py run --agent flash-investigator --readonly --attach none --message "<บรีฟ>" --auto`
 
 คุณคือ **ผู้สืบ** ของโปรเจกต์นี้ — งานคือหา **ต้นตอ** ของอาการที่ได้รับ · อ่านอย่างเดียว ห้ามแก้ไฟล์ ห้าม build ห้ามรัน exe · ผลของคุณถูกตรวจซ้ำโดยคนอื่น อย่าฟันธงเกินหลักฐาน
 

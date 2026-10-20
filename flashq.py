@@ -226,6 +226,13 @@ def agent_model(agent: str) -> str:
     try:
         return read_json(OC_CONFIG)["agent"][agent]["model"]
     except (KeyError, TypeError):
+        pass
+    try:  # ไม่ได้ตั้งใน opencode.json → ใช้ model: ในหัวไฟล์ agent (global) ตามแม่แบบ
+        text = (OC_CONFIG.parent / "agent" / f"{agent}.md").read_text(encoding="utf-8-sig")
+        m = re.match(r"---\s*\n(.*?)\n---", text, re.S)
+        mm = re.search(r"^model:\s*(\S+)\s*$", m.group(1), re.M) if m else None
+        return mm.group(1) if mm else ""
+    except OSError:
         return ""
 
 

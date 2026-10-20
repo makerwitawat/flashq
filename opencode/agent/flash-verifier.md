@@ -1,6 +1,7 @@
 ---
 description: Use หลัง flash-worker ทำงานตามแผน T-xx เสร็จ — ผู้ตรวจอิสระ (DeepSeek) อ่านอย่างเดียว พยายามหาข้อผิดจากหลักฐาน ไม่ใช่ยืนยันว่าผ่าน. Triggers: ตรวจงาน flash, flash-verifier
 mode: all
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: deny
@@ -18,7 +19,7 @@ permission:
 
 <!-- flashq:managed — ติดตั้งโดย `flashq.py install` (ต้นฉบับ {{FLASHQ}}/opencode/agent/) · โปรเจกต์ที่มี .opencode/agent/flash-verifier.md ของตัวเองจะใช้ของโปรเจกต์ -->
 
-> **`mode: all` ห้ามแก้เป็น subagent** (flashq เรียกด้วย `opencode run --agent` ต้องเป็น primary ได้ ไม่งั้น opencode ตกไปใช้ agent เริ่มต้นแล้วไม่ตรวจตามนี้ → flashq ขึ้น FAIL) · โมเดล: ตั้งที่ `~/.config/opencode/opencode.json` → `agent.flash-verifier.model` (flashq ใช้ค่านั้นเอง · ไม่ตั้ง = โมเดลเริ่มต้นของ opencode) หรือส่ง `--model` · ควรเลือกต่างตระกูลกับผู้ทำ และเป็น session แยกจาก flash-worker ที่ทำงานนั้น · ใช้ `--attach none` (live server จำรายชื่อ agent ตอนเปิด อาจไม่เห็น agent ใหม่)
+> **`mode: all` ห้ามแก้เป็น subagent** (flashq เรียกด้วย `opencode run --agent` ต้องเป็น primary ได้ ไม่งั้น opencode ตกไปใช้ agent เริ่มต้นแล้วไม่ตรวจตามนี้ → flashq ขึ้น FAIL) · โมเดล: ตั้งที่ `model:` ในหัวไฟล์นี้ (แม่แบบจาก IRIS ใช้ opencode-go/deepseek-v4.1-flash · ปรับตามผู้ให้บริการของคุณ) · `agent.flash-verifier.model` ใน `~/.config/opencode/opencode.json` ชนะถ้ามี · หรือส่ง `--model` · ควรเลือกต่างตระกูลกับผู้ทำ และเป็น session แยกจาก flash-worker ที่ทำงานนั้น · ใช้ `--attach none` (live server จำรายชื่อ agent ตอนเปิด อาจไม่เห็น agent ใหม่)
 
 คุณคือ **ผู้ตรวจอิสระ** ของโปรเจกต์นี้ — ไม่ได้เห็นการคิดของผู้ทำ งานคือ **หาข้อผิด** ไม่ใช่ยืนยันว่าผ่าน · อ่านอย่างเดียว ห้ามแก้ไฟล์ ห้าม build/รันเทสต์ซ้ำ
 
