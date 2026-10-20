@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -871,11 +872,17 @@ class FlashqTest(unittest.TestCase):
                 {"type": "tool", "tool": "task", "state": {"status": "running", "input": {"description": "T-04"}, "time": {"start": now_ms - 600000}}}]}],
             "/session/ses_c/message": [{"info": {"time": {"created": now_ms - 300000}}, "parts": [
                 {"type": "tool", "tool": "bash", "state": {"status": "running", "input": {"command": "blender --hang"}, "time": {"start": now_ms - 300000}}}]}],
+            "/session/ses_c/children": [{"id": "ses_g", "time": {"updated": now_ms - 900000}}],  # subagent ซ้อน subagent
+            "/session/ses_g/message": [{"info": {"time": {"created": now_ms - 900000}}, "parts": [
+                {"type": "tool", "tool": "grep", "state": {"status": "running", "input": {"pattern": "x"}, "time": {"start": now_ms - 900000}}}]}],
         }
+        queries = []
 
         class Hh(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                body = json.dumps(routes.get(self.path, [])).encode()
+                path, _, query = self.path.partition("?")
+                queries.append(query)
+                body = json.dumps(routes.get(path, [])).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -889,13 +896,124 @@ class FlashqTest(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("flashq_mod", FLASHQ)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            act = mod.server_activity(f"http://127.0.0.1:{srv.server_address[1]}", "ses_p")
+            act = mod.server_activity(f"http://127.0.0.1:{srv.server_address[1]}", "ses_p", "D:/งาน/proj")
         finally:
             srv.shutdown()
         self.assertIsNotNone(act)
         self.assertLess(time.time() - act["updated"], 10)  # ลูกขยับ 5 วิก่อน
-        self.assertEqual({r["tool"] for r in act["running"]}, {"task", "bash"})
+        self.assertEqual({r["tool"] for r in act["running"]}, {"task", "bash", "grep"})
+        # server เปิดที่ ~/.flashq → ทุกคำขอต้องบอกโฟลเดอร์โปรเจกต์ ไม่งั้นหา session ไม่เจอ
+        self.assertTrue(queries and all(q == urllib.parse.urlencode({"directory": "D:/งาน/proj"}) for q in queries), queries)
         self.assertIsNone(mod.server_activity("http://127.0.0.1:1", "ses_p"))
+
+    def fake_live_server(self, mode: dict):
+        """server opencode ปลอม: /config · children/message (ขยับล่าสุดตาม mode["active"]) · บันทึกคำขอ (รวม POST abort)"""
+        import http.server
+        import threading
+        hits = []
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def _ok(self, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                hits.append(("GET", self.path))
+                path = self.path.partition("?")[0]
+                if path.endswith("/children"):
+                    return self._ok([])
+                if path.endswith("/message"):
+                    t = int(time.time() * 1000) if mode["active"] else 1000
+                    return self._ok([{"info": {"time": {"created": t}}, "parts": []}])
+                return self._ok({})
+
+            def do_POST(self):
+                hits.append(("POST", self.path))
+                self._ok(True)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return f"http://127.0.0.1:{srv.server_address[1]}", hits
+
+    def test_live_stall_spares_active_subagent_and_aborts_real_stall(self):
+        """--attach live: log เงียบแต่ server บอกว่า subagent ยังขยับ = ไม่ฆ่า (ถามสดก่อนตัดสินทุกครั้ง)
+        ค้างจริง = ฆ่า + POST abort session บน server (ไม่งั้นรอบลองใหม่แก้ไฟล์ซ้อนกับ session เก่า) · ทุกคำขอส่ง directory"""
+        (self.proj / ".flash.json").write_text(json.dumps({"stall_min": 0.1, "stall_floor_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
+        mode = {"active": True}
+        url, hits = self.fake_live_server(mode)
+        env = {"FLASHQ_LIVE_URL": url, "FAKE_SLEEP": "25"}
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)  # เกณฑ์ค้าง ~3-6 วิ แต่ server ขยับตลอด → รอจนจบ
+        asks = [p for m, p in hits if m == "GET" and "/session/" in p]
+        self.assertGreater(len(asks), 3)
+        want = urllib.parse.urlencode({"directory": str(self.proj.resolve())})
+        self.assertTrue(all(p.endswith("?" + want) for p in asks), asks[:3])
+        mode["active"] = False
+        hits.clear()
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env={**env, "FAKE_SLEEP": "60"})
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        self.assertIn("รอโมเดล", r.stdout)
+        aborts = [p for m, p in hits if m == "POST"]
+        self.assertEqual(len(aborts), 2, hits)  # รอบแรก + รอบลองใหม่
+        self.assertTrue(all(re.match(r"/session/ses_fake\d+/abort\?directory=", p) for p in aborts), aborts)
+        self.assertIn("หยุด session", r.stdout)
+
+    def load_mod(self, name):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_cancel_does_not_kill_reused_child_pid(self):
+        """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
+        mod = self.load_mod("flashq_cancel")
+        mod.JOBS = self.tmp / "jobs"
+        mod.JOBS.mkdir()
+        mod.HOME, mod.RUN_NOW, mod.LOCK = self.tmp, self.tmp / "run_now", self.tmp / "running.lock"
+        owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self.addCleanup(lambda: [(p.kill(), p.wait(timeout=30)) for p in (owner, other)])
+        j = {"id": "J9", "status": "running", "pid": owner.pid, "pid_start": mod.proc_start(owner.pid),
+             "child_pid": other.pid, "child_pid_start": 12345, "created": "2099-01-01 00:00:00"}
+        ok, _ = mod.cancel_job(j)
+        self.assertTrue(ok)
+        owner.wait(timeout=30)
+        time.sleep(0.5)
+        self.assertIsNone(other.poll())  # ยังมีชีวิต
+
+    def test_switch_account_empty_list_and_file_lock(self):
+        mod = self.load_mod("flashq_switch")
+        mod.OC_CONFIG = self.oc_cfg
+        import contextlib
+        import io
+        mod.accounts = lambda: ("flash-worker", [])
+        with contextlib.redirect_stdout(io.StringIO()):  # console ของเทสต์เป็น cp874 พิมพ์ → ไม่ได้
+            self.assertEqual(mod.switch_account("next"), "")  # เดิม ZeroDivisionError
+            mod.accounts = lambda: ("flash-worker", [["cc", "commandcode/deepseek/deepseek-v4.1-flash"]])
+            self.assertEqual(mod.switch_account("next"), "commandcode/deepseek/deepseek-v4.1-flash")
+        self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"],
+                         "commandcode/deepseek/deepseek-v4.1-flash")
+        self.assertEqual([p.name for p in self.tmp.glob("opencode.json.*.tmp")], [])
+        lk = self.tmp / "x.lock"
+        with mod.file_lock(lk) as got:
+            self.assertTrue(got)
+            t0 = time.time()
+            with mod.file_lock(lk, wait_sec=0.5) as got2:  # ถือล็อกอยู่ → รอแล้วทำต่อแบบไม่ล็อก
+                self.assertFalse(got2)
+            self.assertGreaterEqual(time.time() - t0, 0.4)
+            self.assertTrue(lk.exists())  # ตัวที่ไม่ได้ล็อกต้องไม่ลบล็อกของคนอื่น
+        self.assertFalse(lk.exists())
+        lk.touch()
+        os.utime(lk, (time.time() - 3600, time.time() - 3600))  # ล็อกเก่าที่ process ตายทิ้งไว้
+        with mod.file_lock(lk, wait_sec=2) as got:
+            self.assertTrue(got)
 
     def test_why_diagnoses_hung_tool_model_wait_and_plan_progress(self):
         """flashq why: แยก tool ค้าง (มีคำสั่งเปิดโปรเซสเบื้องหลัง) / รอโมเดล / ปกติ / ไม่รู้ และนับ T-xx ที่ติ๊ก [x] ในแผน"""
@@ -904,9 +1022,10 @@ class FlashqTest(unittest.TestCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         plan = self.proj / "plan.md"
-        plan.write_text("- [x] **T-01** a\n- [ ] **T-02** b\n  - [x] **T-02a** sub\n- [X] **T-03** c\n", encoding="utf-8")
+        plan.write_text("- [x] **T-01** a\n- [ ] **T-02** b\n  - [x] **T-02a** sub\n- [X] **T-03** c\n"
+                        "* [x] T-04 ไม่มีตัวหนา\n- [x]**T-05**\n- [x] T-066x มีตัวอักษรท้าย\n- [x] งานทั่วไป T-07\n", encoding="utf-8")
         j = {"id": "J1", "project": str(self.proj), "plan": "plan.md", "attach": "http://x", "session": "ses_p"}
-        self.assertEqual(mod.plan_done_tasks(j), ["T-01", "T-02a", "T-03"])
+        self.assertEqual(mod.plan_done_tasks(j), ["T-01", "T-02a", "T-03", "T-04", "T-05", "T-066x"])
         now = time.time()
         mod.live_state = lambda _j: "running"
         mod.log_idle_sec = lambda _j: 1200

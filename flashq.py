@@ -30,6 +30,7 @@
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
 import argparse
+import contextlib
 import ctypes
 import json
 import os
@@ -37,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -121,9 +123,33 @@ def kill_tree(pid: int) -> None:
 
 
 def write_json(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}_{threading.get_ident()}.tmp")  # + thread: หน้า ui เขียนไฟล์เดียวกันพร้อมกันได้หลาย thread
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def file_lock(path: Path, wait_sec: float = 15, stale_sec: float = 60):
+    """ล็อกข้าม process แบบไฟล์ O_EXCL · รอได้ wait_sec (เกิน = ทำต่อแบบไม่ล็อก ดีกว่าค้าง) · ไฟล์เก่าเกิน stale_sec = ล็อกที่ process ตายทิ้งไว้"""
+    t0, got = time.time(), False
+    while time.time() - t0 < wait_sec:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            got = True
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale_sec:
+                    path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.2)
+    try:
+        yield got
+    finally:
+        if got:
+            path.unlink(missing_ok=True)
 
 
 def read_json(path: Path) -> dict:
@@ -881,23 +907,30 @@ def open_in_desktop(sid: str, server: str) -> None:
     print((r.stdout.strip() or f"DESKTOP_OPEN=FAIL rc={r.returncode}"), flush=True)
 
 
-def server_activity(server: str, sid: str) -> dict | None:
-    """ถามเซิร์ฟเวอร์ opencode (เมื่อ attach) ว่า session นี้ + session ลูก (subagent ที่ /flash ส่งไปทำ T-xx) ขยับล่าสุดเมื่อไร และมี tool ไหนกำลังรันอยู่
-    log ของ parent เงียบได้ทั้งที่ subagent กำลังทำงาน → ใช้ตัดสินว่า "ค้างจริง" + บอกสาเหตุ (tool ค้าง vs รอโมเดล) · ถามไม่ได้ = None (ใช้ log อย่างเดียว)"""
+def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
+    """ถามเซิร์ฟเวอร์ opencode (เมื่อ attach) ว่า session นี้ + session ลูกหลาน (subagent ที่ /flash ส่งไปทำ T-xx) ขยับล่าสุดเมื่อไร และมี tool ไหนกำลังรันอยู่
+    log ของ parent เงียบได้ทั้งที่ subagent กำลังทำงาน → ใช้ตัดสินว่า "ค้างจริง" + บอกสาเหตุ (tool ค้าง vs รอโมเดล) · ถามไม่ได้ = None (ใช้ log อย่างเดียว)
+    directory = โฟลเดอร์โปรเจกต์ของ session (server เปิดที่ ~/.flashq · ไม่ส่ง = server หา session ของโปรเจกต์อื่นไม่เจอ)"""
+    import urllib.parse
     import urllib.request
+    qs = ("?" + urllib.parse.urlencode({"directory": directory})) if directory else ""
 
     def get(path):
-        return json.loads(urllib.request.urlopen(server.rstrip("/") + path, timeout=8).read())
+        return json.loads(urllib.request.urlopen(server.rstrip("/") + path + qs, timeout=8).read())
     try:
         updated, running, ids = 0, [], [sid]
-        try:
-            for c in get(f"/session/{sid}/children"):
-                ids.append(c["id"])
-                updated = max(updated, (c.get("time") or {}).get("updated", 0))
-        except Exception:
-            pass
+        k = 0
+        while k < len(ids) and len(ids) < 30:  # ไล่ลูกหลาน (subagent ซ้อน subagent) · จำกัดจำนวนกันวน
+            try:
+                for c in get(f"/session/{urllib.parse.quote(ids[k])}/children"):
+                    if c.get("id") and c["id"] not in ids:
+                        ids.append(c["id"])
+                        updated = max(updated, (c.get("time") or {}).get("updated", 0))
+            except Exception:
+                pass
+            k += 1
         for i in ids:
-            for m in get(f"/session/{i}/message")[-2:]:
+            for m in get(f"/session/{urllib.parse.quote(i)}/message")[-2:]:
                 updated = max(updated, (m.get("info", {}).get("time") or {}).get("created", 0))
                 for p in m.get("parts", []):
                     st = p.get("state") or {}
@@ -922,7 +955,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     t0, status = time.time(), "OK"
     with open(log, "wb") as fo, open(err, "wb") as fe:
         p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe)
-        job["child_pid"] = p.pid
+        job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
         sid = wait_session(p, log)
         if sid is None:
@@ -960,15 +993,15 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                             last_m, last_chg = m, time.time()
                         limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
                         act = None
-                        if limit and idle >= limit / 2 and attach.startswith("http") and job.get("session") and time.time() - last_poll >= 20:
-                            last_poll = time.time()  # log เงียบแล้ว → ถามเซิร์ฟเวอร์ว่า subagent/tool ยังขยับไหม (ไม่ถามทุกรอบ)
-                            act = server_activity(attach, job["session"])
+                        can_ask = attach.startswith("http") and bool(job.get("session"))
+                        if limit and can_ask and (idle >= limit or (idle >= limit / 2 and time.time() - last_poll >= 20)):
+                            # log เงียบแล้ว → ถามเซิร์ฟเวอร์ว่า subagent/tool ยังขยับไหม (ไม่ถามทุกรอบ แต่ถามสดเสมอก่อนตัดสินฆ่า)
+                            last_poll = time.time()
+                            act = server_activity(attach, job["session"], str(root))
                             if act and act["updated"]:
-                                srv_idle = time.time() - act["updated"]
-                                idle = min(idle, srv_idle)
+                                idle = min(idle, time.time() - act["updated"])
                         if limit and idle >= limit:
                             why = f"STALL: ไม่มีความเคลื่อนไหว {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
-                            act = act or (server_activity(attach, job["session"]) if attach.startswith("http") and job.get("session") else None)
                             if act is not None:
                                 if act["running"]:
                                     r0 = sorted(act["running"], key=lambda r: r["session"] == job["session"])[0]  # tool ของ subagent (ลึกสุด) ก่อน tool `task` ของ parent
@@ -984,6 +1017,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                         p.wait()
                         rc, status = -1, "TIMEOUT"
                         job["timeout_reason"] = why
+                        note = abort_session(job) if attach.startswith("http") else ""  # ฆ่าแค่ `opencode run --attach` → session บน server ยังเดิน (แก้ไฟล์ซ้อนกับรอบลองใหม่/งานถัดไป)
+                        if note:
+                            print(note, flush=True)
                         break
 
     session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
@@ -1039,7 +1075,11 @@ def cmd_run(a) -> int:
         plan = plan_rel(a.plan, root, start)
         if cfg["require_plan_in_remote"] and is_git:
             ref = f"{cfg['remote']}/{cfg['main_branch']}"
-            subprocess.run(["git", "-C", str(root), "fetch", "-q", cfg["remote"], cfg["main_branch"]], check=False)
+            try:  # จำกัดเวลา + ห้ามถามรหัส (รันแบบ detached จากหน้าเว็บ ไม่มีใครตอบ prompt) · ล้ม = ใช้ ref ในเครื่องที่มีอยู่
+                subprocess.run(["git", "-C", str(root), "fetch", "-q", cfg["remote"], cfg["main_branch"]], check=False,
+                               stdin=subprocess.DEVNULL, timeout=120, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+            except subprocess.TimeoutExpired:
+                print(f"WARN: git fetch {cfg['remote']} เกิน 120 วิ → ตรวจแผนจาก ref ในเครื่องแทน", flush=True)
             if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{plan}"],
                               capture_output=True).returncode != 0:
                 print(f"FLASH_RUN=FAIL ไม่พบแผนใน {ref}: {plan} (push แผนก่อน)")
@@ -1155,13 +1195,15 @@ def cmd_run(a) -> int:
                 continue
             if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:  # สลับบัญชีเฉพาะ flash-worker
                 switches += 1
-                cur = configured_model()
-                if cur and job["model"] and cur != job["model"]:  # งานอื่นที่รันคู่ขนานสลับไปแล้ว → ใช้ตาม ไม่สลับซ้ำ (กันสลับรัว)
-                    print(f"QUOTA → บัญชีถูกสลับเป็น {cur} แล้ว (โดยงานอื่น) → สั่งงานเดิมซ้ำด้วยบัญชีนั้น (ครั้งที่ {switches})", flush=True)
-                    job["model"] = cur
-                    continue
-                new = switch_account("next")
-                if new and new != job["model"]:
+                with file_lock(HOME / "switch.lock"):  # งานคู่ขนานเจอ QUOTA พร้อมกัน → ตรวจ+สลับทีละงาน (ไม่ข้ามบัญชีทีละสอง)
+                    cur = configured_model()
+                    new = "" if (cur and job["model"] and cur != job["model"]) else switch_account("next")
+                if not new:  # งานอื่นที่รันคู่ขนานสลับไปแล้ว → ใช้ตาม ไม่สลับซ้ำ (กันสลับรัว)
+                    if cur and job["model"] and cur != job["model"]:
+                        print(f"QUOTA → บัญชีถูกสลับเป็น {cur} แล้ว (โดยงานอื่น) → สั่งงานเดิมซ้ำด้วยบัญชีนั้น (ครั้งที่ {switches})", flush=True)
+                        job["model"] = cur
+                        continue
+                elif new != job["model"]:
                     print(f"QUOTA → สลับบัญชีเป็น {new} แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
                     job["model"] = new
                     continue
@@ -1257,14 +1299,14 @@ BG_RE = re.compile(r"Start-Process|\bstart\s+/b|nohup|Popen|&\s*$", re.M | re.I)
 
 
 def plan_done_tasks(j: dict) -> list[str]:
-    """งานในแผนที่ติ๊ก `- [x] **T-xx**` แล้ว (ความจริงของความคืบหน้า — ไม่ต้องเดาจาก log)"""
+    """งานในแผนที่ติ๊ก `- [x] **T-xx**` แล้ว (ความจริงของความคืบหน้า — ไม่ต้องเดาจาก log) · รับ `*`/ไม่มีตัวหนา เหมือน TASK_MARK_RE"""
     if not j.get("plan"):
         return []
     try:
         text = (Path(j.get("project", "")) / j["plan"]).read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return []
-    return re.findall(r"^\s*- \[[xX]\]\s+\*\*(T-\d+[A-Za-z]*)\*\*", text, re.M)
+    return re.findall(r"^\s*[-*]\s*\[[xX]\]\s*\**\s*(T-\d+[A-Za-z]*)\b", text, re.M)
 
 
 def diagnose_job(j: dict) -> dict:
@@ -1275,7 +1317,7 @@ def diagnose_job(j: dict) -> dict:
         d.update(verdict="not_running", text=f"งานไม่ได้รันอยู่ (สถานะ {st})")
         return d
     attach, sid = j.get("attach") or "", j.get("session") or ""
-    act = server_activity(attach, sid) if attach.startswith("http") and sid else None
+    act = server_activity(attach, sid, j.get("project", "")) if attach.startswith("http") and sid else None
     if act and act["updated"]:
         d["server_idle_sec"] = max(0, int(time.time() - act["updated"]))
     idles = [x for x in (d["log_idle_sec"], d["server_idle_sec"]) if x is not None]
@@ -1360,7 +1402,8 @@ def cancel_job(j: dict) -> tuple[bool, str]:
         return False, f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {st})"
     note = abort_session(j) if st == "running" else ""
     kill_tree(j["pid"])
-    if j.get("child_pid"):
+    # ลูกถูกฆ่าไปพร้อม /T แล้ว · ฆ่าซ้ำเฉพาะเมื่อยังเป็น process เดิม (pid ของรอบก่อนที่จบไปอาจถูกนำไปใช้ซ้ำโดยโปรแกรมอื่น)
+    if j.get("child_pid") and j.get("child_pid_start") and pid_alive(j["child_pid"], j["child_pid_start"]):
         kill_tree(j["child_pid"])
     j.update(status="cancelled", finished=now())
     save_job(j)
@@ -1427,6 +1470,9 @@ def switch_account(arg: str) -> str:
         return ""
     current = cfg.get("agent", {}).get(agent, {}).get("model")
     models = [m for _, m in accs]
+    if not models:
+        print(f"FAIL: ไม่มีรายการบัญชีใน {REPO / 'accounts.json'}")
+        return ""
     if arg == "next":
         target = models[(models.index(current) + 1 if current in models else 0) % len(models)]
     else:
@@ -1441,7 +1487,9 @@ def switch_account(arg: str) -> str:
         return ""
     shutil.copy2(OC_CONFIG, OC_CONFIG.with_name(OC_CONFIG.name + ".bak-flash-switch"))
     cfg.setdefault("agent", {}).setdefault(agent, {})["model"] = target
-    OC_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp = OC_CONFIG.with_name(OC_CONFIG.name + f".{os.getpid()}.tmp")  # เขียนแล้วสลับไฟล์ — opencode ที่อ่านพร้อมกันไม่เจอไฟล์ครึ่ง ๆ
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, OC_CONFIG)
     print(f"{agent}: {current or '(ยังไม่ตั้ง)'} → {target}")
     return target
 
@@ -1727,13 +1775,14 @@ def ui_state() -> dict:
     acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
                 for s, m in accs]
     rows = history + queued + running
+    rv_act, rv_done = ui_reviews()
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
             "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
-            "stats": job_stats(history), "reviews": ui_reviews()[0], "reviews_done": ui_reviews()[1]}
+            "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done}
 
 
 def job_stats(history: list[dict]) -> dict:
