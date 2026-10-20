@@ -236,6 +236,16 @@ def agent_model(agent: str) -> str:
         return ""
 
 
+def other_providers(model: str, tried: set) -> list[str]:
+    """โมเดลเดียวกัน (ชื่อท้ายตรงกัน) ที่ provider อื่นใน opencode.json — เรียงตาม accounts.json ก่อน · ไม่รวมที่ลองแล้ว"""
+    tail = model.rsplit("/", 1)[-1]
+    provs = read_json(OC_CONFIG).get("provider", {})
+    have = [f"{pv}/{name}" for pv, pd in provs.items() for name in (pd.get("models") or {}) if name.rsplit("/", 1)[-1] == tail]
+    order = [m for _, m in accounts()[1]]
+    have.sort(key=lambda m: order.index(m) if m in order else len(order))
+    return [m for m in have if m not in tried]
+
+
 # ---------- คิว ----------
 def jobs() -> list[dict]:
     out = []
@@ -947,6 +957,7 @@ def cmd_run(a) -> int:
         save_job(job)
         timeout_min = a.timeout_min or cfg["timeout_min"]
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
+        tried_models: set = set()
         while True:
             attempt += 1
             cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
@@ -980,6 +991,16 @@ def cmd_run(a) -> int:
                 if new and new != job["model"]:
                     print(f"QUOTA → สลับบัญชีเป็น {new} แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
                     job["model"] = new
+                    continue
+            if res["status"] == "QUOTA" and not worker_like and job["model"] and switches < a.switch_on_quota:
+                # ผู้ตรวจ/ผู้สืบ: โควตาหมด → ย้าย provider เป็นโมเดลเดิม (ไม่แตะ opencode.json) แล้วสั่งซ้ำ
+                tried_models.add(job["model"])
+                alts = other_providers(job["model"], tried_models)
+                if alts:
+                    switches += 1
+                    print(f"QUOTA → ย้าย provider {job['model']} → {alts[0]} (โมเดลเดิม) แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
+                    job["model"] = alts[0]
+                    save_job(job)
                     continue
             break
     finally:
@@ -1932,6 +1953,8 @@ def main() -> int:
         r.set_defaults(fn=cmd_run)
     vf.set_defaults(attach="none")  # agent ที่เพิ่งติดตั้ง live server 4096 อาจยังไม่เห็น → รันแยกเป็นค่าเริ่มต้น
     inv.set_defaults(attach="none")
+    vf.set_defaults(switch_on_quota=2)  # ผู้ตรวจ/ผู้สืบ: โควตาหมดย้าย provider (โมเดลเดิม) ให้เองได้ 2 ครั้ง
+    inv.set_defaults(switch_on_quota=2)
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)
     li = sp.add_parser("list", help="รายการงาน")
     li.add_argument("--all", action="store_true")

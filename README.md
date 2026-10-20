@@ -68,6 +68,7 @@ python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --ti
 python D:\MyCode\flashq\flashq.py investigate "<บรีฟ: อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ต้องคืน>" [--project P] [--agent flash-investigator] [--auto]
 ```
 - ส่งบรีฟตรง ๆ ให้ agent `flash-investigator` (อ่านอย่างเดียว) — ไม่ต้องมีแผน ไม่ตรวจ branch/remote · `readonly` เสมอ จึงไม่ชนงานอื่น
+- โควตาหมด: ผู้ตรวจ/ผู้สืบย้าย **provider** เป็นโมเดลเดิม (ชื่อโมเดลท้ายเหมือนกันใน `opencode.json` · เรียงตาม `accounts.json`) แล้วสั่งซ้ำ ค่าเริ่มต้น 2 ครั้ง (`--switch-on-quota N`, 0 = ปิด) · ไม่แก้ `opencode.json` ต่างจากผู้ทำที่สลับบัญชีกลาง
 - ทั้ง `verify` และ `investigate` ใช้ `--attach none` เป็นค่าเริ่มต้น (agent ที่เพิ่งติดตั้ง live server พอร์ต 4096 อาจยังไม่เห็น แล้วเงียบ ๆ ถอยไปใช้ agent เริ่มต้น) · อยากดูสดใส่ `--attach live`
 - นับเป็นชนิดงานของตัวเองในสถิติ (`stats.by_kind`) · หน้าเว็บมีโหมด "สืบ" · ออฟฟิศแสดงผู้สืบใส่หมวกนักสืบ
 - Claude Code: `/flash-investigate <บรีฟ>` (ติดตั้งด้วย `flashq.py install`) — เขียนบรีฟ ส่งงาน แล้ว **ตรวจ `ไฟล์:บรรทัด` ที่ผู้สืบอ้างเองก่อนเชื่อ**

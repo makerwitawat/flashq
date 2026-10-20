@@ -737,6 +737,22 @@ class FlashqTest(unittest.TestCase):
         argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
         self.assertEqual(argv[argv.index("--model") + 1], "p8/from-json")
 
+    def test_verify_quota_moves_provider_same_model(self):
+        """ผู้ตรวจโควตาหมด → ย้าย provider เป็นโมเดลเดิม (ชื่อท้ายเหมือนกัน) สั่งซ้ำ · ไม่แตะ opencode.json · หมดตัวเลือกก็จบ QUOTA"""
+        before = self.oc_cfg.read_text(encoding="utf-8")
+        r = self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open",
+                       "--model", "commandcode/deepseek/deepseek-v4.1-flash", env={"FAKE_MODE": "quota"})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=QUOTA", r.stdout)
+        self.assertIn("ย้าย provider", r.stdout)
+        models = [(a := json.loads(l))[a.index("--model") + 1] for l in self.args_out.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(models, ["commandcode/deepseek/deepseek-v4.1-flash", "commandcode2/deepseek/deepseek-v4.1-flash"])
+        self.assertEqual(self.oc_cfg.read_text(encoding="utf-8"), before)
+        self.args_out.unlink()  # ปิดสลับ (--switch-on-quota 0) → รันครั้งเดียว
+        self.run_q("verify", "PLAN.md", "T-01", "--attach", "none", "--no-open", "--switch-on-quota", "0",
+                   "--model", "commandcode/deepseek/deepseek-v4.1-flash", env={"FAKE_MODE": "quota"})
+        self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 1)
+
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
         with socket.socket() as s:
