@@ -885,7 +885,7 @@ class FlashqTest(unittest.TestCase):
         import threading
         now_ms = int(time.time() * 1000)
         routes = {
-            "/session/ses_p/children": [{"id": "ses_c", "time": {"updated": now_ms - 5000}}],
+            "/session/ses_p/children": [{"id": "ses_c", "title": "ทำ T-04", "time": {"updated": now_ms - 5000}}],
             "/session/ses_p/message": [{"info": {"time": {"created": now_ms - 600000}}, "parts": [
                 {"type": "tool", "tool": "task", "state": {"status": "running", "input": {"description": "T-04"}, "time": {"start": now_ms - 600000}}}]}],
             "/session/ses_c/message": [{"info": {"time": {"created": now_ms - 300000}}, "parts": [
@@ -920,6 +920,13 @@ class FlashqTest(unittest.TestCase):
         self.assertIsNotNone(act)
         self.assertLess(time.time() - act["updated"], 10)  # ลูกขยับ 5 วิก่อน
         self.assertEqual({r["tool"] for r in act["running"]}, {"task", "bash", "grep"})
+        # ผู้ช่วยย่อย: เรียงตัวที่ขยับล่าสุดก่อน · ชื่องาน + tool ล่าสุด → หน้าเว็บบอกว่า log หลักเงียบเพราะงานอยู่ที่ผู้ช่วยย่อย
+        self.assertEqual([x["session"] for x in act["subs"]], ["ses_c", "ses_g"])
+        self.assertEqual((act["subs"][0]["title"], act["subs"][0]["doing"]), ("ทำ T-04", "bash: blender --hang"))
+        row = mod._agent_act_row({"at": time.time(), "updated": act["updated"], "subs": act["subs"]})
+        self.assertLess(row["idle_sec"], 10)
+        self.assertEqual((row["subs"][0]["title"], row["subs"][1]["ago_sec"] >= 899), ("ทำ T-04", True))
+        self.assertIsNone(mod._agent_act_row({"at": time.time() - 400, "updated": 0, "subs": []}))  # ข้อมูลเก่าเกิน = ไม่ใช้
         # server เปิดที่ ~/.flashq → ทุกคำขอต้องบอกโฟลเดอร์โปรเจกต์ ไม่งั้นหา session ไม่เจอ
         self.assertTrue(queries and all(q == urllib.parse.urlencode({"directory": "D:/งาน/proj"}) for q in queries), queries)
         self.assertIsNone(mod.server_activity("http://127.0.0.1:1", "ses_p"))

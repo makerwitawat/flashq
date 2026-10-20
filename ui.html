@@ -1520,7 +1520,7 @@ function sceneSVG(m) {
     const sy = stripY + 8, py = sy + 78, colX = vi.length ? ox + (vi[0] % 4) * DW + 72 : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
-      : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""}`
+      : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
       : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
       : "ว่าง · เดินดูรอบออฟฟิศ รองานตรวจ";
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
@@ -1636,7 +1636,7 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600)]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => [r.id, Math.floor((r.age_sec || 0) / 60)]), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600)]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -1665,8 +1665,13 @@ function officeUpdate() {
     else t = `ผ่านไป ${dur(Math.floor(ri.el))} · ยังประมาณเวลาที่เหลือไม่ได้`;
     setText("ofCE" + k, t);
     setText("ofCM" + k, estWhy(ri.est));
-    const idleMs = r.log_idle_sec != null ? r.log_idle_sec * 1000 + (now - stateAt) : L ? now - L.changedAt : 0, quiet = (r.log_idle_sec != null || L) && idleMs > 180000;
-    const warn = quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}` : "";
+    const idleMs = r.log_idle_sec != null ? r.log_idle_sec * 1000 + (now - stateAt) : L ? now - L.changedAt : 0, logQuiet = (r.log_idle_sec != null || L) && idleMs > 180000;
+    // log หลักเงียบได้เพราะงานส่งต่อให้ผู้ช่วยย่อย (subagent) — ตัวคุมงานถามเซิร์ฟเวอร์แล้วว่าใครขยับล่าสุด
+    const aa = r.agent_act, aIdle = aa && aa.idle_sec != null ? aa.idle_sec + (now - stateAt) / 1000 : null, sub = aa && aa.subs && aa.subs[0];
+    const quiet = logQuiet && !(aIdle != null && aIdle < 180);
+    const subTxt = logQuiet && sub && sub.ago_sec != null ? `🧑‍💻 ผู้ช่วยย่อย${sub.title ? " «" + trunc(sub.title, 40) + "»" : ""} ขยับ ${dur(Math.floor(sub.ago_sec + (now - stateAt) / 1000))} ที่แล้ว${sub.doing ? " · " + trunc(sub.doing, 60) : ""}` : "";
+    const warn = logQuiet ? (quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}`
+      : `log หลักเงียบ ${dur(Math.floor(idleMs / 1000))} (ปกติ — งานอยู่ที่ผู้ช่วยย่อย)`) + (subTxt ? " · " + subTxt : "") : "";
     setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${warn ? " · " + warn : ""}` : warn);
     const sw = r.shell_watch;
     setText("ofCG" + k, (sw && sw.state !== "none" ? `🛡 ยามเฝ้า: ${guardText(sw)} · ${trunc(sw.cmd, 50)} (${sw.pids} โปรเซส)` : "")

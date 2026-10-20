@@ -926,29 +926,40 @@ def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
     def get(path):
         return json.loads(urllib.request.urlopen(server.rstrip("/") + path + qs, timeout=8).read())
     try:
-        updated, running, ids = 0, [], [sid]
+        updated, running, ids, titles, cupd = 0, [], [sid], {}, {}
         k = 0
         while k < len(ids) and len(ids) < 30:  # ไล่ลูกหลาน (subagent ซ้อน subagent) · จำกัดจำนวนกันวน
             try:
                 for c in get(f"/session/{urllib.parse.quote(ids[k])}/children"):
                     if c.get("id") and c["id"] not in ids:
                         ids.append(c["id"])
-                        updated = max(updated, (c.get("time") or {}).get("updated", 0))
+                        titles[c["id"]] = str(c.get("title") or "")[:80]
+                        cupd[c["id"]] = (c.get("time") or {}).get("updated", 0)
+                        updated = max(updated, cupd[c["id"]])
             except Exception:
                 pass
             k += 1
+        subs = []  # ผู้ช่วยย่อยแต่ละตัว: ชื่องาน · ขยับล่าสุด · tool ล่าสุด (การ์ดหน้าเว็บแสดงแทน "log เงียบ" ของ session หลัก)
         for i in ids:
+            su, doing = cupd.get(i, 0), ""
             for m in get(f"/session/{urllib.parse.quote(i)}/message")[-2:]:
-                updated = max(updated, (m.get("info", {}).get("time") or {}).get("created", 0))
+                su = max(su, (m.get("info", {}).get("time") or {}).get("created", 0))
                 for p in m.get("parts", []):
                     st = p.get("state") or {}
                     t = st.get("time") or p.get("time") or {}
-                    updated = max(updated, t.get("end", 0), t.get("start", 0))
-                    if p.get("type") == "tool" and st.get("status") == "running":
+                    su = max(su, t.get("end", 0), t.get("start", 0))
+                    if p.get("type") == "tool":
                         inp = st.get("input") or {}
-                        running.append({"tool": p.get("tool"), "what": str(st.get("title") or inp.get("command") or inp.get("description") or "")[:100],
-                                        "since": t.get("start", 0) / 1000, "session": i, "cmd": str(inp.get("command") or "")[:2000]})
-        return {"updated": updated / 1000 if updated else 0, "running": running}
+                        what = str(st.get("title") or inp.get("command") or inp.get("description") or inp.get("filePath") or "")[:100]
+                        doing = f"{p.get('tool')}: {what}" + ("" if st.get("status") == "running" else " (จบแล้ว)")
+                        if st.get("status") == "running":
+                            running.append({"tool": p.get("tool"), "what": what, "since": t.get("start", 0) / 1000, "session": i,
+                                            "cmd": str(inp.get("command") or "")[:2000]})
+            updated = max(updated, su)
+            if i != sid:
+                subs.append({"session": i, "title": titles.get(i, ""), "updated": su / 1000 if su else 0, "doing": doing[:120]})
+        subs.sort(key=lambda s: -s["updated"])
+        return {"updated": updated / 1000 if updated else 0, "running": running, "subs": subs}
     except Exception:
         return None
 
@@ -1138,6 +1149,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                             act = server_activity(attach, job["session"], str(root))
                             if act and act["updated"]:
                                 idle = min(idle, time.time() - act["updated"])
+                            if act is not None:  # หน้าเว็บ: log หลักเงียบเพราะผู้ช่วยย่อยทำงานอยู่ = ไม่ใช่ค้าง
+                                job["agent_act"] = {"at": time.time(), "updated": act["updated"], "subs": act.get("subs", [])[:3]}
+                                save_job(job)
                             if act is not None and watch:
                                 rep = watch.check(act["running"])
                                 job["shell_watch"] = dict(rep, at=now()) if rep else None
@@ -1857,6 +1871,15 @@ def log_idle_sec(j: dict) -> int | None:
         return None
 
 
+def _agent_act_row(a: dict | None) -> dict | None:
+    """ความเคลื่อนไหวของ session + ผู้ช่วยย่อยที่ตัวคุมงานถามจากเซิร์ฟเวอร์ล่าสุด → อายุเป็นวินาที (ข้อมูลเก่าเกิน 5 นาที = ไม่ใช้)"""
+    if not a or time.time() - a.get("at", 0) > 300:
+        return None
+    ago = lambda t: max(0, int(time.time() - t)) if t else None  # noqa: E731
+    return {"checked_ago_sec": ago(a["at"]), "idle_sec": ago(a.get("updated")),
+            "subs": [{"title": s.get("title", ""), "doing": s.get("doing", ""), "ago_sec": ago(s.get("updated"))} for s in a.get("subs") or []]}
+
+
 def _review_rows() -> list[dict]:
     rows = []
     for f in sorted(REVIEWS.glob("rv_*.json")):
@@ -1944,7 +1967,8 @@ def ui_state() -> dict:
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
                        log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j), shell_watch=j.get("shell_watch"),
-                       shell_kills=len(j.get("shell_kills") or []), shell_released=len(j.get("shell_released") or []))
+                       shell_kills=len(j.get("shell_kills") or []), shell_released=len(j.get("shell_released") or []),
+                       agent_act=_agent_act_row(j.get("agent_act")))
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
