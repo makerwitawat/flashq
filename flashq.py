@@ -2497,6 +2497,8 @@ GOAL_VAGUE = ("สวย", "ดีขึ้น", "ดีกว่า", "ง่�
               "ลื่น", "นิ่ง", "ครบถ้วน", "user-friendly", "nice", "better", "faster", "clean", "properly", "works")
 GOAL_TRIVIAL_RE = re.compile(r"^\s*(echo\b|true\s*$|exit\s+0\s*$|rem\b|:\s*$|cd\s*$|dir\s*$|ls\s*$|type\s+nul)", re.I)
 GOAL_DEFAULT_ROUNDS, GOAL_ROUNDS_CAP, GOAL_DEFAULT_HOURS = 5, 10, 6
+GOAL_UI_RE = re.compile(r"หน้าตา|หน้าจอ|ใช้ง่าย|ใช้งานง่าย|\bui\b|\bux\b|layout|ปุ่ม|เมนู|หน้าเว็บ", re.I)
+GOAL_COUNT_RE = re.compile(r"[≥>]=?\s*\d|อย่างน้อย\s*\d|ครบ\s*\d|\d+\s*(?:จุด|ช่อง|ปุ่ม|รายการ)|นับ|count|ใน\s*dom|querySelector", re.I)
 
 
 def goal_parse(path: Path) -> dict:
@@ -2562,6 +2564,13 @@ def goal_lint(g: dict) -> tuple[list[str], list[str]]:
                 warns.append(f"{i['id']}: ไม่พบโปรแกรม `{exe}` ใน PATH (รันจริงอาจล้มทุกรอบ)")
     if items and not machine:
         errs.append("ทุกเกณฑ์เป็น `คนตรวจ:` → วนอัตโนมัติไม่ได้ (ต้องมีเกณฑ์ที่เครื่องตรวจได้อย่างน้อย 1 ข้อ)")
+    ui_h = [i for i in items if i["human"] and GOAL_UI_RE.search(i["desc"] + " " + i["human"])]
+    if ui_h:  # งาน UI: เกณฑ์นับของ (≥12 จุด · มีใน DOM) กันถอยได้แต่ไม่แทน "ใช้ง่าย" · ต้องล็อกแบบจาก mockup R0 ก่อนสร้างจริง
+        counts = [i["id"] for i in machine if GOAL_COUNT_RE.search(i["desc"] + " " + i["cmd"] + " " + i["expect"])]
+        if counts and len(counts) == len(machine):
+            warns.append(f"เกณฑ์ UI ที่เครื่องตรวจเป็นการนับล้วน ({', '.join(counts)}) → ใช้กันถอยได้ แต่ไม่แทน \"ใช้ง่าย\" · คง {', '.join(i['id'] for i in ui_h)} เป็นคนตรวจระหว่างทาง")
+        if not any("mockup" in (i["desc"] + i["cmd"] + i["expect"] + i["human"]).lower() for i in items):
+            warns.append("งาน UI ยังไม่มีเกณฑ์อ้าง mockup → ทำรอบ R0 mockup 2–3 แบบให้ user เลือก แล้วล็อก \"โครงหน้าตรง mockup_X.html\" ก่อนวนสร้างจริง")
     elif machine and len(machine) * 2 < len(items):
         warns.append(f"เกณฑ์ที่เครื่องตรวจได้มีแค่ {len(machine)}/{len(items)} ข้อ → ผ่านรอบอัตโนมัติแล้วยังต้องให้ user ดูอีกมาก")
     if not g["files"]:
