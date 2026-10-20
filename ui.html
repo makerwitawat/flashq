@@ -181,6 +181,17 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); }
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; gap: 0.3rem; }
 .of-card.quiet { border-color: var(--quota); }
+/* ย่อการ์ด: เหลือหัว · ธง/ขั้น · แถบ · บรรทัดสรุปเดียว (% · ขั้น · เวลา · กำลังทำ · ⚠) */
+.of-cardbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.of-cardbar[hidden] { display: none; }
+.of-mini { display: none; }
+.of-cards.compact .of-full { display: none; }
+.of-cards.compact .of-mini { display: block; }
+.of-cards.compact .of-card { gap: 0.2rem; padding: 0.45rem 0.7rem; }
+.of-mini.of-warn { color: var(--quota); font-weight: 600; }
+.goals-compact .goal-full { display: none; }
+.goals-compact .goal-phase li:not(.warn), .goals-compact .goal-phase > .muted { display: none; }
+.of-card .goal-steps { margin: 0; }
 .of-ch { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .of-proj { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-weight: 600; font-size: 0.88rem; color: #fff; background: hsl(var(--h) 55% 42%); }
 .of-bar { height: 0.7rem; background: var(--line); border-radius: 1rem; overflow: hidden; position: relative; }
@@ -332,6 +343,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
     </section>
     <section class="panel" id="goalBox" hidden data-panel="goals">
       <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="gcount"></span></h2><span class="sp"></span>
+        <button data-compact="goals" title="ย่อการ์ดธง: เหลือหัวเรื่อง · รอบ · ผ่าน · ขั้นตอน (ซ่อนรายการเกณฑ์/ปุ่ม)">▤ ย่อ</button>
         <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb" id="goals"></div>
     </section>
@@ -451,9 +463,10 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
   </div>
   <div class="of-colR">
   <section class="panel" id="ofGoalBox" hidden data-panel="ofgoals">
-    <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="ofGcount"></span></h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+    <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="ofGcount"></span></h2><span class="sp"></span><button data-compact="goals" title="ย่อการ์ดธง: เหลือหัวเรื่อง · รอบ · ผ่าน · ขั้นตอน (ซ่อนรายการเกณฑ์/ปุ่ม)">▤ ย่อ</button><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
     <div class="pb" id="ofGoals"></div>
   </section>
+  <div class="of-cardbar" id="ofRunsBar" hidden><b>กำลังทำ <span class="muted" id="ofRunsN"></span></b><span class="sp"></span><button data-compact="runs" title="ย่อการ์ดงาน: เหลือแถบสถานะ + บรรทัดสรุปเดียว">▤ ย่อ</button></div>
   <div class="of-cards" id="ofRuns"></div>
   <div class="of-two">
     <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
@@ -850,22 +863,25 @@ function goalHTML(g) {
   return `<article class="goal-card v-${esc(g.verdict)}">
     <div class="goal-h">${head}</div>
     <div class="goal-bar" title="นับรอบเมื่อรัน goal verify (ท้ายแต่ละรอบ) เท่านั้น · ระหว่าง Flash ทำ ตัวเลขนี้ยังไม่ขยับ"><span>ตรวจแล้ว ${n}/${rmax} รอบ</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">${doing ? `<b>กำลังทำรอบ ${doing}</b> · ` : ""}${(g.unverified || []).length ? `<span style="color:var(--fail)">⚠ รอบ ${g.unverified.join(", ")} ยังไม่ verify</span> · ` : ""}เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
-    <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
+    <div class="goal-bar goal-full"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
-    ${phase}${acts}${stop}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
+    ${phase}${stop}<div class="goal-full">${acts}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</div></article>`;
 }
 /* ขั้นย่อยของรอบ: 🚩 ตั้งธง → ✍️ เขียนแผน → 🧑‍💻 Flash ทำ → 📥 รอตรวจ → 🔍 ตรวจ → 🏁 ผล · ทุกขั้นบอกเคลื่อนไหวล่าสุด (ไม่ต้องเดาว่าค้าง) */
 const GOAL_STEPS = [["flag", "🚩 ตั้งธง"], ["plan", "✍️ เขียนแผน"], ["flash", "🧑‍💻 Flash ทำ"], ["review", "📥 รอตรวจ"], ["verify", "🔍 ตรวจ"], ["result", "🏁 ผล"]];
+function goalStepsHTML(p) {
+  const cur = GOAL_STEPS.findIndex(([k]) => k === p.step);
+  return GOAL_STEPS.map(([k, t], i) => `<span class="${i < cur ? "done" : i === cur ? "cur" + (p.warn ? " warn" : "") : ""}">${t}${k === "plan" && p.step !== "result" ? ` รอบ ${p.round}` : ""}</span>`).join("");
+}
 function phaseHTML(g) {
   const p = g.phase;
   if (!p || !p.step) return "";
-  const cur = GOAL_STEPS.findIndex(([k]) => k === p.step);
-  const steps = GOAL_STEPS.map(([k, t], i) => `<span class="${i < cur ? "done" : i === cur ? "cur" + (p.warn ? " warn" : "") : ""}">${t}${k === "plan" && p.step !== "result" ? ` รอบ ${p.round}` : ""}</span>`).join("");
+  const steps = goalStepsHTML(p);
   const when = p.ago_sec == null ? "" : ` · ${esc(p.ago_what)} <b>${esc(ago(p.ago_sec))}</b>${/มา$/.test(p.ago_what) ? "" : " ที่แล้ว"}`;
   const log = p.job ? ` <button data-oflog="${esc(p.job)}">ดู log สด</button>` : "";
   const notes = (p.notes || []).length && p.step !== "result" ? `<ul>${p.notes.map((x) => `<li class="${x.warn ? "warn" : ""}">${esc(x.t)}${x.ago_sec == null ? "" : ` <span class="muted">· เคลื่อนไหว ${esc(ago(x.ago_sec))} ที่แล้ว</span>`}</li>`).join("")}</ul>` : "";
   const hint = p.warn && p.step !== "result" ? `<div class="muted">นิ่งนาน/รอคุณ → กด ↩ เปิด session นั้นดู · ปิดไปแล้ว → กด 🤖 ให้ Claude ทำต่อ</div>` : "";
-  return `<div class="goal-steps">${steps}</div><div class="goal-idle goal-phase${p.warn ? " long" : ""}">${esc(p.label)}${when}${log}${notes}${hint}</div>`;
+  return `<div class="goal-steps" title="${esc(p.label)}">${steps}</div><div class="goal-idle goal-phase${p.warn ? " long" : ""}">${esc(p.label)}${when}${log}${notes}${hint}</div>`;
 }
 function renderGoals() {
   const gs = state.goals || [];
@@ -1245,6 +1261,21 @@ const olog = new Map();            // job id -> ข้อมูลที่อ�
 const deskOf = new Map();          // job id -> {i: โต๊ะ, h: สีโปรเจกต์}  (จำไว้แสดงตอนจบ)
 const cele = [];                   // งานที่เพิ่งจบ แสดงที่โต๊ะเดิมสั้น ๆ
 let prevRun = new Set(), ofSig = "", ologBusy = false;
+/* ปุ่ม ▤ ย่อ: การ์ดงาน (ออฟฟิศ) / การ์ดธง (ทั้งสองหน้า) · จำค่าไว้ในเบราว์เซอร์นี้ */
+function applyCompact() {
+  const runs = !!store.get("compactRuns", false), goals = !!store.get("compactGoals", false);
+  $("ofRuns").classList.toggle("compact", runs);
+  for (const id of ["goals", "ofGoals"]) $(id).classList.toggle("goals-compact", goals);
+  document.querySelectorAll("[data-compact]").forEach((b) => { const on = b.dataset.compact === "runs" ? runs : goals; b.textContent = on ? "▦ ขยาย" : "▤ ย่อ"; b.setAttribute("aria-pressed", on); });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-compact]");
+  if (!b) return;
+  const k = b.dataset.compact === "runs" ? "compactRuns" : "compactGoals";
+  store.set(k, !store.get(k, false));
+  applyCompact();
+});
+document.addEventListener("DOMContentLoaded", applyCompact);
 
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -1514,9 +1545,12 @@ function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง
 }
 
 function sceneSVG(m) {
-  const cols = Math.min(4, m.N), rows = Math.ceil(m.N / 4);
-  const stripY = DESK_Y0 + rows * DH, H = Math.max(530, stripY + 196 + (m.goals.length ? 94 : 0));
-  const areaW = SCENE_W - DESK_X0 - 10, ox = DESK_X0 + Math.max(0, (areaW - cols * DW) / 2);
+  // จัดโต๊ะ: ≤5 ช่อง = แถวเดียว · มากกว่านั้นแบ่งแถวให้เท่ากัน (≤5 ต่อแถว) · กว้างเกินพื้นที่ = ย่อโต๊ะทั้งชุด (ไม่ล้นขอบ/ไม่เหลือแถวโหรงเหรง)
+  const areaW = SCENE_W - DESK_X0 - 10, rows = Math.max(1, Math.ceil(m.N / 5)), cols = Math.max(1, Math.ceil(m.N / rows));
+  const ds = Math.min(1, areaW / (cols * DW)), dw = DW * ds, dh = DH * ds;
+  const ox = DESK_X0 + Math.max(0, (areaW - cols * dw) / 2);
+  const deskX = (i) => ox + (i % cols) * dw, deskY = (i) => DESK_Y0 + Math.floor(i / cols) * dh, deskPX = (i) => deskX(i) + 72 * ds;
+  const stripY = DESK_Y0 + rows * dh + 6, H = Math.max(530, stripY + 196 + (m.goals.length ? 94 : 0));
   const total = m.runs.length;
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
@@ -1527,11 +1561,11 @@ function sceneSVG(m) {
     <text class="of-tb" x="${SCENE_W - 16}" y="30" text-anchor="end" id="ofClock" style="font-size:15px"></text>
     <text class="of-tm" x="${SCENE_W - 16}" y="48" text-anchor="end">flashq office</text>
     <rect class="of-carpet" x="96" y="86" width="108" height="${H - 108}" rx="14"/>`;
-  m.desks.forEach((r, i) => { g += deskSVG(i, ox + (i % 4) * DW, DESK_Y0 + Math.floor(i / 4) * DH, r, m.celeAt[i]); });
+  m.desks.forEach((r, i) => { g += `<g transform="translate(${deskX(i).toFixed(1)} ${deskY(i).toFixed(1)}) scale(${ds.toFixed(3)})">${deskSVG(i, 0, 0, r, m.celeAt[i])}</g>`; });
   {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = เดินลาดตระเวนในแถบใต้โต๊ะ · มีงานตรวจรันอยู่ = ยืนประจำ บอกช่องที่ตรวจ
     const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
     const rv = m.reviews[0], fin = m.reviewFin;
-    const sy = stripY + 8, py = sy + 78, colX = vi.length ? ox + (vi[0] % 4) * DW + 72 : DESK_X0 + 70;
+    const sy = stripY + 8, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const txt = vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
       : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
@@ -1545,7 +1579,7 @@ function sceneSVG(m) {
   }
   {  // ยามเฝ้า shell: ว่าง = เดินส่องไฟฉาย · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
     const sy = stripY + 102, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
-    const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? ox + (di % 4) * DW + 72 : DESK_X0 + 70;
+    const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? deskPX(di) : DESK_X0 + 70;
     const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
     const txt = caught ? `🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`
       : alert ? `${guardText(sw)} · ${trunc(sw.cmd, 24)} (ช่อง ${di + 1})`
@@ -1613,22 +1647,31 @@ function modelText(j) {
 }
 function modelShort(j) { const raw = (j && j.model) || state.current_model || ""; return raw.split("/").slice(1).join("/") || raw; }
 function modelChip(j) { const t = modelText(j); return t ? `<div class="of-line muted" title="โมเดล · เจ้า (บัญชี)">🤖 ${esc(t)}</div>` : ""; }
+/* งานที่เป็นรอบของเป้าหมาย: บอกว่าเป้าหมายอยู่ขั้นไหน (เขียนแผน → Flash ทำ → รอตรวจ → ตรวจ → ผล) + ตรวจแล้ว/ผ่านกี่ข้อ */
+function runGoalHTML(r) {
+  const gl = (state.goals || []).find((g) => g.id === r.goal.id) || {}, p = gl.phase;
+  const unv = (gl.unverified || []).length ? ` · <span style="color:var(--fail)">⚠ รอบ ${gl.unverified.join(", ")} ยังไม่ verify</span>` : "";
+  return `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(r.goal.title || gl.title || "")}</b></div>
+    ${p && p.step ? `<div class="goal-steps" title="${esc(p.label)}">${goalStepsHTML(p)}</div>` : ""}
+    ${gl.id ? `<div class="of-line muted">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
+}
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
-    ${r.goal ? `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(r.goal.title || ((state.goals || []).find((g) => g.id === r.goal.id) || {}).title || "")}</b></div>`
+    ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     <div class="of-bar" id="ofCB${k}" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
-    <div class="of-line"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
-    <div class="of-line">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
-    <div class="of-line">⏱ <span id="ofCE${k}"></span></div>
-    ${modelChip(r)}
-    <div class="of-line muted" id="ofCM${k}"></div>
-    <div class="of-line muted" id="ofCA${k}"></div>
-    <div class="of-line muted" id="ofCG${k}"></div>
-    <div class="of-line"><button data-ofwhy="${esc(r.id)}" title="ถามเซิร์ฟเวอร์ว่า tool/subagent ยังทำงานอยู่ไหม และค้างที่อะไร">🔍 ตรวจสาเหตุ</button> <span class="muted" id="ofCW${k}"></span></div></article>`;
+    <div class="of-line of-mini" id="ofCX${k}"></div>
+    <div class="of-line of-full"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
+    <div class="of-line of-full">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
+    <div class="of-line of-full">⏱ <span id="ofCE${k}"></span></div>
+    <div class="of-full">${modelChip(r)}</div>
+    <div class="of-line muted of-full" id="ofCM${k}"></div>
+    <div class="of-line muted of-full" id="ofCA${k}"></div>
+    <div class="of-line muted of-full" id="ofCG${k}"></div>
+    <div class="of-line of-full"><button data-ofwhy="${esc(r.id)}" title="ถามเซิร์ฟเวอร์ว่า tool/subagent ยังทำงานอยู่ไหม และค้างที่อะไร">🔍 ตรวจสาเหตุ</button> <span class="muted" id="ofCW${k}"></span></div></article>`;
 }
 function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
@@ -1651,11 +1694,13 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => [r.id, Math.floor((r.age_sec || 0) / 60)]), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600)]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => [r.id, Math.floor((r.age_sec || 0) / 60)]), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
     $("ofRuns").innerHTML = m.runs.map(runCardHTML).join("");
+    $("ofRunsBar").hidden = m.runs.length < 2;  // ปุ่มย่อมีเมื่อหลายการ์ด
+    setText("ofRunsN", `${m.runs.length} งาน`);
     $("ofQueue").innerHTML = queueHTML(m);
     $("ofRecent").innerHTML = recentHTML();
   }
@@ -1694,6 +1739,13 @@ function officeUpdate() {
       + (r.shell_kills ? `${sw && sw.state !== "none" ? " · " : "🛡 "}ฆ่าคำสั่งค้างไปแล้ว ${r.shell_kills} ครั้ง` : "")
       + (r.shell_released ? `${(sw && sw.state !== "none") || r.shell_kills ? " · " : "🛡 "}สงสัยแต่จบเองทัน ปล่อยไป ${r.shell_released} ครั้ง` : ""));
     const card = $("ofC" + k); if (card) card.classList.toggle("quiet", !!quiet || ri.severe);
+    // บรรทัดสรุป (โหมดย่อ): % · ขั้น · เวลา · กำลังทำ · ⚠ log เงียบ/ยาม
+    const swAlert = sw && ["suspect", "quiet", "killed"].includes(sw.state) ? "🛡 " + guardText(sw) : "";
+    const mini = [ri.pct == null ? "" : Math.round(ri.pct) + "%" + (ri.pct >= 95 ? "+" : ""), stepTxt,
+      ri.el == null ? "" : "⏱ " + mmss(ri.el) + (ri.rem != null ? " · เหลือ " + approx(ri.rem) : ri.over ? " · เกินที่คาด " + approx(ri.el - ri.est.sec) : ""),
+      "🛠 " + trunc(act, 60), quiet ? `⚠ log เงียบ ${dur(Math.floor(idleMs / 1000))}` : "", swAlert].filter(Boolean).join(" · ");
+    setText("ofCX" + k, mini);
+    const cx = $("ofCX" + k); if (cx) cx.classList.toggle("of-warn", !!quiet || !!swAlert || ri.severe);
     const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
     if (i >= 0) {
       setText("ofB" + i, trunc(act, 24));
