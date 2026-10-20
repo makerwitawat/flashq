@@ -275,6 +275,8 @@ summary.goal-h::before { content: "▸"; color: var(--muted, #888); } details[op
 summary.goal-h button { margin-left: auto; }
 .goal-st { font-weight: 700; padding: 0 0.5rem; border-radius: 1rem; font-size: 0.82rem; color: #fff; background: var(--accent); white-space: nowrap; }
 .goal-st.v-DONE { background: var(--ok); } .goal-st.v-STOP { background: var(--fail); } .goal-st.v-DONE_NEEDS_USER { background: var(--quota); }
+.goal-card.v-CANCELLED { border-left-color: #9ca3af; } .goal-card.v-CANCELLED summary.goal-h b { color: var(--muted, #888); } .goal-st.v-CANCELLED { background: #6b7280; }
+.goal-cancel-why { font-size: 0.88rem; margin-top: 0.3rem; } .goal-hint { color: var(--quota); font-size: 0.88rem; margin-top: 0.3rem; }
 .goal-bar { display: grid; grid-template-columns: 8.5rem 1fr auto; gap: 0.45rem; align-items: center; font-size: 0.88rem; margin-top: 0.3rem; }
 .goal-bar .t { height: 0.5rem; background: var(--line); border-radius: 0.25rem; overflow: hidden; }
 .goal-bar .t i { display: block; height: 100%; background: var(--accent); } .goal-bar .t i.warn { background: var(--quota); } .goal-bar .t i.over { background: var(--fail); }
@@ -789,7 +791,8 @@ function checkFinished() {
 
 /* --- เป้าหมาย (/flash-goal): การ์ด · แจ้งเตือนเมื่อผ่าน/หยุด/รอตรวจ --- */
 const GOAL_ST = { START: ["🆕 ตั้งธงแล้ว", "ยังไม่ได้ตรวจรอบแรก"], CONTINUE: ["🔄 กำลังวน", "ยังไม่ผ่าน → รอบถัดไป"], DONE: ["✅ ผ่านแล้ว", "เกณฑ์ผ่านครบ"],
-  DONE_NEEDS_USER: ["👀 รอคุณตรวจ", "เครื่องตรวจผ่านหมด เหลือข้อที่ต้องดูเอง"], STOP: ["⛔ หยุด", "ติดเบรก ต้องให้คุณตัดสิน"] };
+  DONE_NEEDS_USER: ["👀 รอคุณตรวจ", "เครื่องตรวจผ่านหมด เหลือข้อที่ต้องดูเอง"], STOP: ["⛔ หยุด", "ติดเบรก ต้องให้คุณตัดสิน"],
+  CANCELLED: ["🚫 ยกเลิกแล้ว", "คุณสั่งเลิกธงนี้ — ไม่ตรวจ/ไม่วนต่อ"] };
 const goalOpen = new Set();  // <details> ที่เปิดอยู่ (คงไว้ตอนวาดใหม่)
 function goalLast(g) { const r = g.rounds || []; return r[r.length - 1] || null; }
 function goalHTML(g) {
@@ -840,7 +843,8 @@ function goalHTML(g) {
       <button data-gact="claude" data-gid="${esc(g.id)}"${dis || (g.verdict === "DONE" ? " disabled" : "")} title="เปิด session ใหม่ในแอป Claude (แท็บ Code) พิมพ์ /flash-goal รอไว้ · ไม่มีแอป → หน้าต่าง CLI">🤖 ให้ Claude ทำต่อ</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="goal">📄 ไฟล์เป้าหมาย</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button>
-      ${g.verdict === "STOP" ? `<button data-gact="archive" data-gid="${esc(g.id)}"${dis} title="เอาออกจากแผงและเสาธง (ไฟล์ GOAL/ประวัติยังอยู่ · ตรวจเรื่องนี้ใหม่ = กลับมาเอง)">✖ เก็บ</button>` : ""}</div></div>`;
+      ${g.verdict === "STOP" ? `<button data-gact="archive" data-gid="${esc(g.id)}"${dis} title="เอาออกจากแผงและเสาธง (ไฟล์ GOAL/ประวัติยังอยู่ · ตรวจเรื่องนี้ใหม่ = กลับมาเอง)">✖ เก็บ</button>` : ""}
+      ${g.verdict !== "DONE" && g.verdict !== "CANCELLED" ? `<button data-gact="cancel" data-gid="${esc(g.id)}" title="เลิกธงนี้: เขียนบรรทัดสถานะในไฟล์ GOAL · ไม่ตรวจ/ไม่วนต่อ · ไม่ถอยโค้ดให้ (บอกรายการ commit ให้ตัดสินเอง)">🚫 ยกเลิกธง</button>` : ""}</div></div>`;
   const chip = (r, k) => {
     const src = r.flash == null ? "" : r.flash ? "🧑‍💻 " : "🔍 ";
     const tip = `${r.at}${r.flash == null ? "" : r.flash ? ` · Flash ทำงาน ${r.flash} ครั้งในรอบนี้` : " · ไม่มีงาน Flash ในรอบนี้ (ตรวจอย่างเดียว หรือ Claude แก้เอง)"}${r.rechecks ? ` · ตรวจซ้ำอีก ${r.rechecks} ครั้งโดยไม่มีงานใหม่ (ไม่นับรอบ)` : ""}`;
@@ -851,6 +855,17 @@ function goalHTML(g) {
   const phase = phaseHTML(g);
   const head = `<span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
       <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span>`;
+  const hint = last && last.cancel_hint && g.verdict !== "CANCELLED" ? `<div class="goal-hint">💡 แนะนำ: พิจารณายกเลิกธง — ${esc(last.cancel_hint)} (วนต่อ หรือกด 🚫 ยกเลิกธง)</div>` : "";
+  if (g.verdict === "CANCELLED") {  // ยกเลิกแล้ว = ป้ายเทา ย่อเหลือบรรทัดเดียว + 🙈 ซ่อนการ์ด (ลบเฉพาะสำเนาใน ~/.flashq/goals)
+    const key = g.id + ":card", c = g.cancelled || {};
+    return `<article class="goal-card v-CANCELLED"><details data-gkey="${esc(key)}"${goalOpen.has(key) ? " open" : ""}><summary class="goal-h">${head}
+      <span class="muted">· ${n} รอบ · ผ่าน ${g.passed}/${g.machine}${c.at ? ` · ยกเลิก ${esc(c.at)}` : ""}</span>
+      <button data-gact="hide" data-gid="${esc(g.id)}" title="เอาการ์ดออก (ลบเฉพาะสำเนาใน ~/.flashq/goals · ไฟล์ GOAL/สถานะในโปรเจกต์ยังอยู่)">🙈 ซ่อนการ์ด</button></summary>
+      <div class="goal-cancel-why">🚫 <b>ยกเลิกโดยคุณ</b>${c.reason ? ` — ${esc(c.reason)}` : ""}</div>
+      ${runs.length ? `<div class="goal-warn">⚠️ งาน Flash ของธงนี้ยังรันอยู่ (${esc(runs.map((r) => r.id).join(", "))}) — ไม่หยุดให้เอง กดยกเลิกงานที่โต๊ะ/ในรายการงาน</div>` : ""}
+      <div class="goal-btns"><button data-gact="open" data-gid="${esc(g.id)}" data-what="goal">📄 ไฟล์เป้าหมาย</button><button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button></div>
+      <ul class="goal-items">${items}</ul>${chips}</details></article>`;
+  }
   if (g.verdict === "DONE") {  // ผ่านแล้ว = ย่อเหลือบรรทัดเดียว (กดเพื่อกางดู) + ✖ เก็บ
     const key = g.id + ":card";
     return `<article class="goal-card v-DONE"><details data-gkey="${esc(key)}"${goalOpen.has(key) ? " open" : ""}><summary class="goal-h">${head}
@@ -863,7 +878,7 @@ function goalHTML(g) {
     <div class="goal-bar" title="นับรอบเมื่อรัน goal verify (ท้ายแต่ละรอบ) เท่านั้น · ระหว่าง Flash ทำ ตัวเลขนี้ยังไม่ขยับ"><span>ตรวจแล้ว ${n}/${rmax} รอบ</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">${doing ? `<b>กำลังทำรอบ ${doing}</b> · ` : ""}${(g.unverified || []).length ? `<span style="color:var(--fail)">⚠ รอบ ${g.unverified.join(", ")} ยังไม่ verify</span> · ` : ""}เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar goal-full"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
-    ${phase}${stop}<div class="goal-full">${acts}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</div></article>`;
+    ${phase}${stop}${hint}<div class="goal-full">${acts}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</div></article>`;
 }
 /* ขั้นย่อยของรอบ: 🚩 ตั้งธง → ✍️ เขียนแผน → 🧑‍💻 Flash ทำ → 📥 รอตรวจ → 🔍 ตรวจ → 🏁 ผล · ทุกขั้นบอกเคลื่อนไหวล่าสุด (ไม่ต้องเดาว่าค้าง) */
 const GOAL_STEPS = [["flag", "🚩 ตั้งธง"], ["plan", "✍️ เขียนแผน"], ["flash", "🧑‍💻 Flash ทำ"], ["review", "📥 รอตรวจ"], ["verify", "🔍 ตรวจ"], ["result", "🏁 ผล"]];
@@ -1616,11 +1631,11 @@ function goalPolesSVG(goals, sy) {
   const top = sy + 10, bot = sy + 58;
   goals.slice(0, 3).forEach((gl, k) => {
     const x = DESK_X0 + 30 + k * 190, v = gl.verdict, ratio = gl.machine ? gl.passed / gl.machine : 0;
-    const fy = v === "DONE" || v === "DONE_NEEDS_USER" ? top : v === "STOP" ? (top + bot) / 2 : bot - (bot - top) * ratio;
-    const col = v === "DONE" ? "#16a34a" : v === "DONE_NEEDS_USER" ? "#eab308" : v === "STOP" ? "#dc2626" : "#2563eb";
+    const fy = v === "DONE" || v === "DONE_NEEDS_USER" ? top : v === "STOP" ? (top + bot) / 2 : v === "CANCELLED" ? bot : bot - (bot - top) * ratio;
+    const col = v === "DONE" ? "#16a34a" : v === "DONE_NEEDS_USER" ? "#eab308" : v === "STOP" ? "#dc2626" : v === "CANCELLED" ? "#9ca3af" : "#2563eb";
     const cls = v === "DONE" ? "of-gdone" : v === "STOP" ? "of-gstop" : "";
     const fresh = v === "DONE" && (gl.age_sec || 0) < 3600;
-    const sub = v === "STOP" ? "⛔ หยุด · ลดครึ่งเสา" : v === "DONE" ? "✅ ผ่านครบ!" : v === "DONE_NEEDS_USER" ? "👀 รอคุณตรวจ" : `ผ่าน ${gl.passed}/${gl.machine} · รอบ ${(gl.rounds || []).length}/${gl.rounds_max}`;
+    const sub = v === "CANCELLED" ? "🚫 ยกเลิกแล้ว · ลดธง" : v === "STOP" ? "⛔ หยุด · ลดครึ่งเสา" : v === "DONE" ? "✅ ผ่านครบ!" : v === "DONE_NEEDS_USER" ? "👀 รอคุณตรวจ" : `ผ่าน ${gl.passed}/${gl.machine} · รอบ ${(gl.rounds || []).length}/${gl.rounds_max}`;
     g += `<g class="${cls}"><title>${esc(`${gl.title} · ${gl.project_name}\n${(GOAL_ST[v] || [v])[0]} · ผ่าน ${gl.passed}/${gl.machine}`)}</title>
       <ellipse class="of-shadow" cx="${x}" cy="${sy + 78}" rx="16" ry="3"/><rect x="${x - 8}" y="${sy + 72}" width="16" height="6" rx="2" fill="#6b7280"/>
       <line class="of-pole" x1="${x}" y1="${sy + 6}" x2="${x}" y2="${sy + 74}"/><circle cx="${x}" cy="${sy + 6}" r="3" fill="#facc15"/>
@@ -1838,6 +1853,14 @@ document.addEventListener("click", async (e) => {
     body: "• เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ — กด Enter ในแอปเพื่อเริ่ม\n• ใช้โควตา Claude · เครื่องไม่มีแอป = เปิดหน้าต่าง CLI แทน" })) return;
   if (d.gact === "archive" && !await ask({ title: "เก็บการ์ดเป้าหมายนี้?", detail: gname, icon: "✖", ok: "เก็บ",
     body: "• เอาออกจากแผงและเสาธง\n• ไฟล์ GOAL และประวัติยังอยู่ครบ · สั่งตรวจเรื่องนี้ใหม่ = กลับมาแสดงเอง" })) return;
+  if (d.gact === "cancel") {
+    const r = await ask({ title: "ยกเลิกธงนี้?", detail: gname, icon: "🚫", ok: "ยกเลิกธง", tone: "warn",
+      body: "• เขียนบรรทัด \"สถานะ: ยกเลิกโดย user\" ใต้หัวไฟล์ GOAL (ต้อง commit ไฟล์นั้นเอง)\n• goal verify/check จะปฏิเสธ · /flash-goal ไม่วนต่อ\n• ไม่ถอยโค้ดให้ — ข้อความตอบกลับบอกรายการ commit + คำสั่ง git revert ให้ตัดสินเอง\n• งาน Flash ที่รันอยู่ไม่ถูกหยุดให้",
+      input: { placeholder: "เหตุที่เลิก เช่น ทำออกมาแย่ลงเรื่อย ๆ จะออกแบบใหม่", check: (v) => (v ? "" : "ใส่เหตุสั้น ๆ ก่อน") } });
+    if (!r) return; body.reason = r;
+  }
+  if (d.gact === "hide" && !await ask({ title: "ซ่อนการ์ดธงที่ยกเลิกนี้?", detail: gname, icon: "🙈", ok: "ซ่อน",
+    body: "• ลบเฉพาะสำเนาการ์ดใน ~/.flashq/goals\n• ไฟล์ GOAL และสถานะในโปรเจกต์ยังอยู่ครบ" })) return;
   if (d.gact === "open") body.what = d.what;
   if (d.gact === "human") {
     body.item = d.item; body.ok = !!d.ok;

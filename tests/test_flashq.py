@@ -1647,6 +1647,118 @@ class FlashqTest(unittest.TestCase):
         for p in (p1, p2):
             self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
 
+    def test_goal_cancel_blocks_verify_and_card(self):
+        """goal cancel: บรรทัดสถานะใต้หัว GOAL · cancelled ในไฟล์สถานะ · การ์ดสถานะยกเลิก (ไม่ลบ) · รายการ commit จาก §4 ของแผน + git revert
+        · verify/check ปฏิเสธ GOAL=CANCELLED ไม่สร้างการ์ดใหม่ · ปุ่มเว็บ ยกเลิก/ซ่อน · เปิดใหม่ = ลบบรรทัด + check --reset"""
+        py = f'"{sys.executable}"'
+        goal = self.goal_repo(f"# GOAL: ค่าใหม่\n> ไฟล์ธง\n\n## เกณฑ์\n- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                              "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n")
+        gq = lambda *a: self.run_q("goal", *a)  # noqa: E731
+        self.assertIn("GOAL_CHECK=OK", gq("check", "docs/plans/GOAL_x.md").stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/5", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        git = lambda *a: subprocess.run(["git", "-C", str(self.proj), *a], capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()  # noqa: E731
+        (self.proj / "src" / "a.txt").write_text("worse\n", encoding="utf-8")
+        git("commit", "-qam", "งาน Flash (T-01)")
+        sha = git("rev-parse", "--short=7", "HEAD")
+        (goal.parent / "PLAN_FLASH_x_R1.md").write_text(
+            "# แผน\n## 1. งาน\n| a | b |\n|---|---|\n| T-09 | 1234567abc |\n## 4. บันทึกผล\n| งาน | ผล | commit | หลักฐาน |\n|---|---|---|---|\n"
+            f"| T-01 | ✅ | {sha} | log deadbeefcafe |\n| T-02 | ⛔ | — | |\n```\n# 4. ในโค้ด\n| x | {sha} |\n```\n", encoding="utf-8")
+        r = gq("cancel", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CANCEL=FAIL", r.stdout)
+        r = gq("cancel", "docs/plans/GOAL_x.md", "--reason", "ทำออกมา  แย่ลง")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("GOAL=CANCELLED", r.stdout)
+        self.assertIn(f"git revert --no-edit {sha}", r.stdout, r.stdout)
+        self.assertNotIn("deadbeef", r.stdout)  # คอลัมน์อื่นในตารางที่มีคอลัมน์ commit ไม่นับ
+        self.assertIn("ต้อง commit ไฟล์ GOAL เอง", r.stdout)
+        lines = goal.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[:4], ["# GOAL: ค่าใหม่", "", f"> **สถานะ: ยกเลิกโดย user ({time.strftime('%Y-%m-%d')})** — ทำออกมา แย่ลง", ""])
+        self.assertEqual(lines[4], "> ไฟล์ธง")
+        self.assertEqual(git("log", "-1", "--format=%s"), "งาน Flash (T-01)")  # ไม่ commit เอง
+        st = json.loads((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").read_text(encoding="utf-8"))
+        self.assertEqual((st["cancelled"]["reason"], st["cancelled"]["rounds"], len(st["rounds"])), ("ทำออกมา แย่ลง", 1, 1))
+        cards = list((self.home / "goals").glob("*.json"))
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(json.loads(cards[0].read_text(encoding="utf-8"))["cancelled"]["reason"], "ทำออกมา แย่ลง")
+        r = gq("cancel", "docs/plans/GOAL_x.md", "--reason", "ซ้ำ")
+        self.assertIn("ยกเลิกไว้แล้ว", r.stdout)
+        self.assertEqual(goal.read_text(encoding="utf-8").count("สถานะ: ยกเลิก"), 1)
+        mod = self.load_mod("flashq_goalcancel")
+        mod.GOALS_DIR = self.home / "goals"
+        g = mod.ui_goals([])[0]
+        self.assertEqual((g["verdict"], g["phase"]["step"], g["cancelled"]["reason"]), ("CANCELLED", "result", "ทำออกมา แย่ลง"))
+        self.assertEqual(mod.goal_ui_action(g["id"], "verify", {})[0], 409)
+        self.assertEqual(mod.goal_ui_action(g["id"], "claude", {})[0], 409)
+        cards[0].unlink()
+        for act in ("verify", "check", "human"):
+            r = gq(act, "docs/plans/GOAL_x.md", *(["G-01", "--pass"] if act == "human" else []))
+            self.assertIn("GOAL=CANCELLED", r.stdout, act)
+            self.assertEqual(r.returncode, 1)
+        self.assertIn("GOAL=CANCELLED", gq("check", "docs/plans/GOAL_x.md", "--reset").stdout)  # บรรทัดยกเลิกยังอยู่ = ไม่เปิดใหม่
+        r = gq("status", "docs/plans/GOAL_x.md")
+        self.assertEqual((r.returncode, "GOAL=CANCELLED" in r.stdout), (0, True))
+        self.assertEqual(list((self.home / "goals").glob("*.json")), [])  # ธงที่ยกเลิกไม่สร้างการ์ดใหม่
+        self.assertEqual(len(json.loads((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").read_text(encoding="utf-8"))["rounds"]), 1)
+        gq("cancel", "docs/plans/GOAL_x.md", "--reason", "x")  # สั่ง cancel อีก = การ์ดยกเลิกกลับมา → ซ่อนได้
+        g = mod.ui_goals([])[0]
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 200)
+        self.assertEqual((mod.ui_goals([]), list((self.home / "goals").glob("*"))), ([], []))
+        # เปิดใหม่: user ยืนยัน → ลบบรรทัดสถานะ → check --reset
+        goal.write_text("\n".join(x for x in goal.read_text(encoding="utf-8").splitlines() if "สถานะ: ยกเลิก" not in x) + "\n", encoding="utf-8")
+        self.assertIn("GOAL=CANCELLED", gq("check", "docs/plans/GOAL_x.md").stdout)  # ไม่ --reset = ยังปิดอยู่ (สถานะในไฟล์ .tmp)
+        self.assertIn("GOAL_CHECK=OK", gq("check", "docs/plans/GOAL_x.md", "--reset").stdout)
+        self.assertIn("GOAL=CONTINUE", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        g = mod.ui_goals([])[0]
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 409)  # ธงที่ยังไม่ยกเลิก = ซ่อนไม่ได้
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FLASHQ_HOME": str(self.home), "CLAUDE_CODE_SESSION_ID": ""}):  # ปุ่มเว็บเรียก goal cancel ตัวเดียวกัน
+            self.assertEqual(mod.goal_ui_action(g["id"], "cancel", {})[0], 400)  # ไม่มีเหตุ
+            code, d = mod.goal_ui_action(g["id"], "cancel", {"reason": "จากหน้าเว็บ"})
+        self.assertEqual(code, 200, d)
+        self.assertIn("GOAL=CANCELLED", d["message"])
+        self.assertEqual(mod.ui_goals([])[0]["cancelled"]["reason"], "จากหน้าเว็บ")
+
+    def test_goal_cancel_line_by_hand_and_hint(self):
+        """บรรทัด "สถานะ: ยกเลิกโดย user" ที่เขียนเองในไฟล์ GOAL = ยกเลิก (การ์ดเดิมขึ้นยกเลิก · verify ปฏิเสธ)
+        · คนตรวจไม่ผ่าน 2 รอบติด (ข้าม check --reset) / ถอยหลังซ้ำ = แนะนำพิจารณายกเลิก"""
+        py = f'"{sys.executable}"'
+        body = (f"# GOAL: ค่าใหม่\n\n## เกณฑ์\n- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "- [ ] G-02 อ่านง่าย · คนตรวจ: เปิด src/a.txt\ngoal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n")
+        goal = self.goal_repo(body)
+        gq = lambda *a: self.run_q("goal", *a)  # noqa: E731
+        gq("check", "docs/plans/GOAL_x.md")
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        self.assertIn("GOAL=DONE_NEEDS_USER", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        r = gq("human", "docs/plans/GOAL_x.md", "G-02", "--fail", "อ่านยาก")
+        self.assertNotIn("แนะนำ: พิจารณายกเลิกธง", r.stdout)
+        gq("check", "docs/plans/GOAL_x.md", "--reset")
+        (self.proj / "src" / "a.txt").write_text("new2\n", encoding="utf-8")
+        self.assertIn("GOAL=DONE_NEEDS_USER", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        r = gq("human", "docs/plans/GOAL_x.md", "G-02", "--fail", "ยังอ่านยาก")
+        self.assertIn("แนะนำ: พิจารณายกเลิกธง (flashq goal cancel docs/plans/GOAL_x.md", r.stdout, r.stdout)
+        self.assertIn("คนตรวจให้ไม่ผ่าน 2 รอบติด", r.stdout)
+        gq("check", "docs/plans/GOAL_x.md", "--reset")
+        (self.proj / "src" / "a.txt").write_text("old\n", encoding="utf-8")
+        r = gq("verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=CONTINUE", r.stdout)
+        self.assertIn("แนะนำ: พิจารณายกเลิกธง", r.stdout, r.stdout)
+        mod = self.load_mod("flashq_goalcancel2")
+        mod.GOALS_DIR = self.home / "goals"
+        self.assertIn("คนตรวจให้ไม่ผ่าน 2 รอบติด", mod.ui_goals([])[0]["rounds"][-1]["cancel_hint"])
+        ok, bad = {"G-01": {"ok": True}}, {"G-01": {"ok": False}}
+        self.assertIn("ถอยหลังแล้ว 2 รอบ", mod.goal_cancel_hint({"rounds": [{"results": ok}, {"results": bad}, {"results": ok}, {"results": bad}]}))
+        self.assertEqual(mod.goal_cancel_hint({"rounds": [{"results": ok}, {"results": bad}]}), "")
+        # เขียนบรรทัดเองแบบ D:\AI (มีเหตุยาวหลังขีด) → การ์ดเดิมขึ้นยกเลิก · verify ปฏิเสธ
+        goal.write_text(body.replace("# GOAL: ค่าใหม่\n", "# GOAL: ค่าใหม่\n\n> **สถานะ: ยกเลิกโดย user (2026-10-20)** — หยุดวนที่รอบ R2 · ไม่มีแผน R3\n"), encoding="utf-8")
+        g = mod.ui_goals([])[0]
+        self.assertEqual((g["verdict"], g["cancelled"]["reason"]), ("CANCELLED", "ยกเลิกโดย user (2026-10-20) — หยุดวนที่รอบ R2 · ไม่มีแผน R3"))
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 200)
+        r = gq("verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=CANCELLED", r.stdout)
+        self.assertIn("หยุดวนที่รอบ R2", r.stdout)
+        self.assertEqual(list((self.home / "goals").glob("*.json")), [])
+        self.assertEqual(mod.goal_cancel_note(self.proj / "README_none.md"), "")
+
 
 class NewProjectTest(unittest.TestCase):
     """โปรเจกต์ใหม่ที่ branch หลักไม่ใช่ master: ตรวจอัตโนมัติ + flashq init"""

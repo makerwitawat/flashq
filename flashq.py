@@ -28,6 +28,7 @@
   python flashq.py review start <แผน> [<งาน>] | done <แผน> pass|fail [--note ...] | list   ป้ายให้หน้าออฟฟิศรู้ว่า Claude กำลังตรวจ (/flash-check)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
   python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
+  python flashq.py goal cancel <GOAL.md> --reason "เหตุ"                  user สั่งเลิกธง → GOAL=CANCELLED (verify/check ปฏิเสธจนกว่าจะเปิดใหม่)
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
 import argparse
@@ -2757,6 +2758,9 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
     def ph(step, label, ago=None, what="เคลื่อนไหวล่าสุด", warn=False, rnd=None, **kw):
         return dict(step=step, label=label, ago_sec=ago, ago_what=what, warn=warn, notes=notes, round=rnd or n_next, **kw)
 
+    if verdict == "CANCELLED":
+        return ph("result", "🚫 ยกเลิกโดย user — ไม่วนต่อ" + (" · งาน Flash ของธงนี้ยังรัน/รอคิวอยู่" if runs or queued else ""),
+                  _secs((gl.get("cancelled") or {}).get("at", "")), "ยกเลิกมา", bool(runs or queued))
     if busy.get("what") == "verify":
         return ph("verify", "🔍 กำลังรันเกณฑ์ตรวจทุกข้อ (goal verify)", _secs(busy.get("at", "")), "เริ่ม")
     if busy.get("what") == "claude":
@@ -2807,7 +2811,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             if line.startswith("# "):
                 title = re.sub(r"^#\s*GOAL\s*:\s*", "", line).strip()
                 break
-        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res", "flash", "rechecks", "warn")} for r in st.get("rounds", [])]
+        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res", "flash", "rechecks", "warn", "cancel_hint")} for r in st.get("rounds", [])]
         if rounds:
             rounds[-1]["results"] = st["rounds"][-1].get("results", {})
         GOALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -2816,7 +2820,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
             "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
             "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds,
-            "owner": st.get("owner") or {}, "goal_abs": str(goal)})
+            "owner": st.get("owner") or {}, "goal_abs": str(goal), "cancelled": goal_cancelled(goal, st)})
     except Exception:
         pass
 
@@ -2865,21 +2869,27 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
         if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
             continue
         verdict = last["verdict"] if last else "START"
+        if not gl.get("cancelled"):  # user เขียนบรรทัด "สถานะ: ยกเลิก…" ในไฟล์ GOAL เอง (ไม่ได้สั่ง goal cancel) ก็นับ
+            note = goal_cancel_note(Path(gl.get("goal_abs") or Path(gl.get("project", "")) / gl.get("goal", "")))
+            gl["cancelled"] = {"at": "", "reason": note, "src": "file"} if note else {}
+        if gl["cancelled"]:
+            verdict = "CANCELLED"
         upd = _secs(gl.get("updated", "")) or 0
-        if verdict in ("DONE", "DONE_NEEDS_USER", "STOP") and upd > 3 * 86400:
+        if verdict in ("DONE", "DONE_NEEDS_USER", "STOP", "CANCELLED") and upd > 3 * 86400:
             continue
         res = (last or {}).get("results") or {}
         machine = [i for i in gl.get("items", []) if not i.get("human")]
-        final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP")
+        final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP", "CANCELLED")
+        end = gl["cancelled"].get("at") or (last or {}).get("at", "") if final else ""
         own = dict(gl.get("owner") or {})
         if own.get("session"):
             own["title"] = claude_session_title(own["session"]) or own.get("title", "")
         bz = read_json(GOALS_DIR / f"{gl['id']}.busy.json")
         busy = bz if bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0)) else {}
         lj = dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {}
-        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict != "DONE" else {}, unv)
+        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict not in ("DONE", "CANCELLED") else {}, unv)
         out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
-                        elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
+                        elapsed_sec=_secs(gl.get("started", ""), end) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
                         jobs=jobs_now, last_job=lj, phase=phase, unverified=unv,
                         project_name=Path(gl.get("project", "")).name))
@@ -2996,6 +3006,9 @@ def goal_human(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, ro
     goal_publish(root, goal, rel, g, st, rounds_max)
     if bad:
         print("ไม่ผ่าน: " + " · ".join(f"{k} {res[k]['reason']}" for k in bad) + " → ให้ Claude แปลงเหตุเป็นเกณฑ์ที่วัดได้ แล้ว `goal check --reset` วนต่อ")
+        hint = goal_cancel_hint(st)
+        if hint:
+            print(f"แนะนำ: พิจารณายกเลิกธง (flashq goal cancel {rel} --reason \"…\") — {hint} · ให้ user เลือก วนต่อ / ยกเลิกธง")
     left = [k for k in hum if k not in res]
     print(f"GOAL={last['verdict']} คนตรวจผ่าน {sum(1 for k in hum if res.get(k, {}).get('ok'))}/{len(hum)}" + (f" · ยังไม่ตรวจ {', '.join(left)}" if left else ""))
     return 0
@@ -3036,6 +3049,7 @@ def open_link(url: str) -> None:
 def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์)
     claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป) · archive (✖ เก็บการ์ดที่จบแล้ว)
+    cancel (ยกเลิกธง + เหตุ = goal cancel) · hide (ซ่อนการ์ดธงที่ยกเลิก = ลบสำเนาใน ~/.flashq/goals)
     path ทุกตัวมาจากสำเนาสถานะใน ~/.flashq/goals เท่านั้น ไม่รับ path จากหน้าเว็บ"""
     if not re.fullmatch(r"[0-9a-f]{12}", gid or ""):
         return 400, {"ok": False, "message": "id ไม่ถูกต้อง"}
@@ -3069,6 +3083,21 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         gl["archived"] = now()
         write_json(GOALS_DIR / f"{gid}.json", gl)
         return 200, {"ok": True, "message": "เก็บแล้ว — ไฟล์ GOAL และประวัติยังอยู่ครบ · สั่ง goal check/verify เรื่องนี้ใหม่ = กลับมาแสดงเอง"}
+    if action == "cancel":  # ตรรกะเดียวกับ `goal cancel` (บรรทัดสถานะในไฟล์ GOAL · ไฟล์สถานะ · การ์ด)
+        if ((gl.get("rounds") or [{}])[-1]).get("verdict") == "DONE":
+            return 409, {"ok": False, "message": "ธงนี้ผ่านแล้ว ยกเลิกไม่ได้ (ใช้ ✖ เก็บ)"}
+        reason = " ".join(str(body.get("reason") or "").split())
+        if not reason:
+            return 400, {"ok": False, "message": "ใส่เหตุที่เลิกก่อน"}
+        r = subprocess.run(me + ["cancel", str(goal), "--reason", reason, "--project", str(root)],
+                           cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+    if action == "hide":  # ซ่อนการ์ดธงที่ยกเลิกแล้ว = ลบเฉพาะสำเนาใน ~/.flashq/goals (ไฟล์ GOAL/สถานะในโปรเจกต์อยู่ครบ)
+        if not (gl.get("cancelled") or goal_cancel_note(goal)):
+            return 409, {"ok": False, "message": "ซ่อนได้เฉพาะธงที่ยกเลิกแล้ว"}
+        for f in [GOALS_DIR / f"{gid}.json", bp] + list(GOALS_DIR.glob(f"{gid}.*.log")):
+            f.unlink(missing_ok=True)
+        return 200, {"ok": True, "message": "ซ่อนการ์ดแล้ว — ไฟล์ GOAL และสถานะในโปรเจกต์ยังอยู่ · ธงที่ยกเลิกไม่สร้างการ์ดใหม่เอง"}
     if action == "session":
         host =(gl.get("owner") or {}).get("host") or ""
         url = claude_app_link("continue", {"session": host}) if re.fullmatch(r"local_[A-Za-z0-9-]{1,64}", host) else ""
@@ -3077,6 +3106,8 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         open_link(url)
         return 200, {"ok": True, "message": "เปิด session เดิมในแอป Claude แล้ว (ถ้า session ถูกลบ/เก็บถาวร แอปจะไปหน้ารวม)"}
     if action in ("verify", "claude"):
+        if gl.get("cancelled") or goal_cancel_note(goal):
+            return 409, {"ok": False, "message": "ธงนี้ยกเลิกแล้ว — ไม่ตรวจ/ไม่วนต่อ (เปิดใหม่: ลบบรรทัดสถานะในไฟล์ GOAL แล้ว goal check --reset)"}
         if busy:
             return 409, {"ok": False, "message": f"กำลัง{'ตรวจใหม่' if bz.get('what') == 'verify' else 'เปิด Claude ทำต่อ'}อยู่แล้ว (เริ่ม {bz.get('at')})"}
         topic, proj = goal_topic(gl.get("stem", "")), os.path.normcase(str(root))
@@ -3104,6 +3135,163 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     return 400, {"ok": False, "message": "action ไม่รู้จัก"}
 
 
+GOAL_CANCEL_RE = re.compile(r"^\s*>\s*\*\*\s*สถานะ\s*:\s*(ยกเลิก[^*]*)\*\*\s*(?:[—–-]+\s*)?(.*)$")
+
+
+def goal_cancel_note(goal: Path) -> str:
+    """บรรทัด `> **สถานะ: ยกเลิกโดย user (<วันที่>)** — <เหตุ>` ใต้หัวไฟล์ GOAL (ก่อนหัวข้อ `## ` แรก) → "ยกเลิกโดย user (...) — เหตุ" · ไม่มี = ''"""
+    try:
+        with goal.open(encoding="utf-8", errors="replace") as fh:
+            for k, line in enumerate(fh):
+                if k > 60 or line.startswith("## "):
+                    break
+                m = GOAL_CANCEL_RE.match(line)
+                if m:
+                    return m.group(1).strip() + (f" — {m.group(2).strip()}" if m.group(2).strip() else "")
+    except OSError:
+        pass
+    return ""
+
+
+def goal_cancelled(goal: Path, st: dict) -> dict:
+    """ธงถูกยกเลิกไหม: สถานะที่ goal cancel บันทึก หรือบรรทัด "สถานะ: ยกเลิก…" ในไฟล์ GOAL (เขียนเอง) → {at, reason} · ไม่ได้ยกเลิก = {}"""
+    c = dict((st or {}).get("cancelled") or {})
+    if not c:
+        note = goal_cancel_note(goal)
+        c = {"at": "", "reason": note, "src": "file"} if note else {}
+    return c
+
+
+def goal_round_brief(r: dict, prev: dict | None) -> dict:
+    """ย่อรอบไว้ข้ามการ check --reset: คนตรวจไม่ผ่าน (None = ยังไม่ตรวจ) · จำนวนเกณฑ์ที่ถอยหลัง"""
+    hres = r.get("human_res") or {}
+    pres = (prev or {}).get("results") or {}
+    return {"at": r.get("at", ""), "verdict": r.get("verdict", ""), "human_bad": any(not v.get("ok") for v in hres.values()) if hres else None,
+            "regress": sum(1 for k, v in (r.get("results") or {}).items() if not v.get("ok") and pres.get(k, {}).get("ok"))}
+
+
+def goal_cancel_hint(st: dict) -> str:
+    """เหตุที่ควรพิจารณายกเลิกธง: คนตรวจไม่ผ่าน ≥2 รอบติด · เกณฑ์ถอยหลัง ≥2 รอบ (นับรวมก่อน check --reset) · ไม่มี = ''"""
+    rs = st.get("rounds") or []
+    seq = list(st.get("past") or []) + [goal_round_brief(r, rs[k - 1] if k else None) for k, r in enumerate(rs)]
+    streak = 0
+    for b in reversed([b for b in seq if b.get("human_bad") is not None]):
+        if not b["human_bad"]:
+            break
+        streak += 1
+    if streak >= 2:
+        return f"คนตรวจให้ไม่ผ่าน {streak} รอบติด"
+    back = sum(1 for b in seq if b.get("regress"))
+    return f"เกณฑ์ถอยหลังแล้ว {back} รอบ (เคยผ่านแล้วกลับไม่ผ่าน)" if back >= 2 else ""
+
+
+def _log_shas(text: str) -> list[str]:
+    """เลข commit ในตารางบันทึกผล (§4 / "บันทึกผล" / "บันทึกรอบ") — มีคอลัมน์ commit = อ่านคอลัมน์นั้น · ไม่มี = คำฐาน 16 ที่มีตัวอักษร"""
+    out, on, lvl, fence, cols = [], False, 0, False, None
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        h = None if fence else re.match(r"^(#{1,6})\s+(.*)$", line)
+        if h:
+            if on and len(h.group(1)) <= lvl:
+                on = False
+            t = h.group(2).strip()
+            if re.match(r"(§\s*)?4\s*[.)]", t) or "บันทึกผล" in t or "บันทึกรอบ" in t:
+                on, lvl = True, len(h.group(1))
+            cols = None
+            continue
+        if not on or fence or not line.lstrip().startswith("|"):
+            cols = None
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cols is None:
+            cols = [k for k, c in enumerate(cells) if "commit" in c.lower()]
+            continue
+        if all(re.fullmatch(r":?-+:?", c) for c in cells if c):
+            continue
+        pool = " ".join(cells[k] for k in cols if k < len(cells)) if cols else " ".join(cells)
+        toks = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])", pool)
+        out += [t for t in toks if cols or re.search(r"[a-f]", t)]
+    return out
+
+
+def goal_round_commits(root: Path, goal: Path) -> list[dict]:
+    """commit ของงานในธงนี้จากบันทึกผลของ GOAL + แผน PLAN_FLASH_<เรื่อง>_R*.md (เฉพาะที่มีจริงใน repo) · ใหม่ → เก่า"""
+    topic, dirs = goal_topic(goal.stem), []
+    for d in (goal.parent, root / (project_cfg(root).get("plan_dir") or "docs/plans")):
+        if d.is_dir() and all(os.path.normcase(str(d.resolve())) != os.path.normcase(str(x.resolve())) for x in dirs):
+            dirs.append(d)
+    plans = sorted({p for d in dirs for p in d.glob("PLAN_FLASH_*.md") if re.search(r"_R\d+\.md$", p.name, re.I) and goal_topic(p.name) == topic},
+                   key=lambda p: int(re.search(r"_R(\d+)\.md$", p.name, re.I).group(1)))
+    found: dict[str, str] = {}
+    for src in [goal] + plans:
+        try:
+            for t in _log_shas(src.read_text(encoding="utf-8", errors="replace")):
+                found.setdefault(t, src.name)
+        except OSError:
+            pass
+    out, seen = [], set()
+    for t, src in found.items():
+        info = _git(root, "show", "-s", "--format=%H%x09%h%x09%ct%x09%s", t + "^{commit}", "--")
+        parts = info.splitlines()[0].split("\t", 3) if info else []
+        if len(parts) == 4 and parts[0] not in seen:
+            seen.add(parts[0])
+            out.append({"sha": parts[0], "short": parts[1], "ts": int(parts[2]), "subject": parts[3], "src": src})
+    return sorted(out, key=lambda c: c["ts"], reverse=True)
+
+
+def goal_cancel(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, rounds_max: int, a, is_git: bool) -> int:
+    """user สั่งเลิกธง: เติมบรรทัดสถานะใต้หัวไฟล์ GOAL · บันทึก cancelled ในไฟล์สถานะ · การ์ดเป็นสถานะยกเลิก (ไม่ลบ)
+    · ไม่ commit/ไม่ถอยโค้ดเอง — พิมพ์ commit ของงานในธง + คำสั่ง git revert ให้ user ตัดสิน"""
+    reason = " ".join((a.reason or "").split())
+    if not reason:
+        print('GOAL_CANCEL=FAIL ต้องระบุ --reason "เหตุที่เลิก"')
+        return 1
+    prev = goal_cancelled(goal, st)
+    if not goal_cancel_note(goal):
+        raw = goal.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        text = raw.decode("utf-8-sig", errors="replace")
+        nl = "\r\n" if "\r\n" in text else "\n"
+        lines = text.splitlines(keepends=True)
+        mark = f"> **สถานะ: ยกเลิกโดย user ({now()[:10]})** — {reason}{nl}"
+        i = next((k for k, x in enumerate(lines) if x.startswith("# ")), -1)
+        if i < 0:
+            lines[:0] = [mark, nl]
+        else:
+            if not lines[i].endswith(("\n", "\r")):
+                lines[i] += nl
+            lines[i + 1:i + 1] = [nl, mark] + ([nl] if i + 1 < len(lines) and lines[i + 1].strip() else [])
+        goal.write_bytes((b"\xef\xbb\xbf" if bom else b"") + "".join(lines).encode("utf-8"))
+    if not st:
+        st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD") if is_git else "", "started": now(), "rounds": []}
+    if not st.get("cancelled"):
+        st["cancelled"] = {"at": now(), "reason": reason if not prev else prev.get("reason") or reason, "by": "user", "rounds": len(st.get("rounds") or [])}
+    st["owner"] = goal_owner() or st.get("owner") or {}
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    write_json(sp, st)
+    goal_publish(root, goal, rel, g, st, rounds_max)
+    c = st["cancelled"]
+    print(("ธงนี้ยกเลิกไว้แล้ว" if prev else "ยกเลิกธงแล้ว") + f" ({c['at']}) — {c['reason']} · ใช้ไป {c.get('rounds', 0)}/{rounds_max} รอบ")
+    topic, proj = goal_topic(goal.stem), os.path.normcase(str(root))
+    live = [j for j in jobs() if live_state(j) in ("running", "queued") and os.path.normcase(j.get("project", "")) == proj
+            and re.search(r"_R\d+\.md$", j.get("plan") or "", re.I) and goal_topic(j["plan"]) == topic]
+    for j in live:
+        print(f"เตือน: งาน Flash ของธงนี้ยัง{'รัน' if live_state(j) == 'running' else 'รอคิว'}อยู่ {j['id']} ({j.get('plan')}) — ไม่หยุดให้เอง · หยุด: `flashq cancel {j['id']}`")
+    cs = goal_round_commits(root, goal) if is_git else []
+    if cs:
+        print("commit ของงานในธงนี้ (จากบันทึกผลของ GOAL/แผน _R*) — ไม่ถอยให้อัตโนมัติ ให้ user ดู diff แล้วตัดสินเอง:")
+        for x in cs:
+            print(f"  {x['short']}  {datetime.fromtimestamp(x['ts']).strftime('%Y-%m-%d %H:%M')}  {x['subject'][:90]}  ({x['src']})")
+        print("ถ้าจะถอยทั้งหมด (ใหม่ → เก่า): git revert --no-edit " + " ".join(x["short"] for x in cs))
+    else:
+        print("ไม่พบ commit ในบันทึกผลของแผน (§4) — ถ้าจะถอย ดูเองด้วย `git log --oneline " + ((st.get("base") or "")[:9] + "..HEAD`" if st.get("base") else "`"))
+    print(f"ต้อง commit ไฟล์ GOAL เอง (flashq ไม่ commit ให้): `git add {rel}` แล้ว `git commit -m \"goal: ยกเลิกธง {goal.stem}\"`")
+    print(f"GOAL=CANCELLED {rel}")
+    return 0
+
+
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -3126,6 +3314,16 @@ def cmd_goal(a) -> int:
         return 1
     rel = goal.relative_to(root).as_posix() if goal.is_relative_to(root) else str(goal)
     rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"]))
+    if a.action == "cancel":
+        return goal_cancel(root, goal, rel, g, st, sp, rounds_max, a, is_git)
+    canc = goal_cancelled(goal, st)
+    if canc and not (a.action == "check" and a.reset and not goal_cancel_note(goal)):  # ธงที่ยกเลิก = ไม่ตรวจ/ไม่วน/ไม่สร้างการ์ดใหม่
+        label = canc.get("reason", "") if canc.get("src") == "file" else f"ยกเลิกโดย user ({canc.get('at', '')}) — {canc.get('reason', '')}"
+        print(f"ธงนี้{label} · ไม่ตรวจ/ไม่วนต่อ")
+        if a.action != "status":
+            print(f"เปิดใหม่: ให้ user ยืนยันก่อน → ลบบรรทัด \"สถานะ: ยกเลิก…\" ใต้หัวไฟล์ GOAL (ถ้ามี) → `goal check {rel} --reset`")
+        print(f"GOAL=CANCELLED {rel}")
+        return 0 if a.action == "status" else 1
     if a.action == "check":
         errs, warns = goal_lint(g)
         if not is_git:
@@ -3141,8 +3339,12 @@ def cmd_goal(a) -> int:
             print("ต้องแก้: เกณฑ์ต่างจากตอนเริ่ม (ย้ายเสาประตู) → ให้ user ยืนยันเกณฑ์ใหม่แล้วรัน `goal check --reset`")
             print("GOAL_CHECK=FAIL")
             return 1
+        old = st
         if not st or a.reset:
             st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": [], "owner": st.get("owner", {}) if st else {}}
+        if a.reset and old:  # ประวัติย่อข้ามการ reset → ยังรู้ว่าคนตรวจไม่ผ่านซ้ำ/ถอยหลังซ้ำ (เตือนพิจารณายกเลิก)
+            ors = old.get("rounds") or []
+            st["past"] = (list(old.get("past") or []) + [goal_round_brief(r, ors[k - 1] if k else None) for k, r in enumerate(ors)])[-30:]
         st["owner"] = goal_owner() or st.get("owner") or {}
         sp.parent.mkdir(parents=True, exist_ok=True)
         write_json(sp, st)
@@ -3226,6 +3428,9 @@ def cmd_goal(a) -> int:
             if all(hres.get(i["id"], {}).get("ok") for i in g["items"] if not i["cmd"]):
                 rnd["verdict"] = verdict = "DONE"
     st["rounds"].append(rnd)
+    hint = goal_cancel_hint(st) if verdict not in ("DONE", "DONE_NEEDS_USER") else ""
+    if hint:
+        rnd["cancel_hint"] = hint
     st["owner"] = goal_owner() or st.get("owner") or {}
     write_json(sp, st)
     goal_publish(root, goal, rel, g, st, rounds_max)
@@ -3242,6 +3447,8 @@ def cmd_goal(a) -> int:
         print("ให้ user ตรวจเอง:\n  " + "\n  ".join(human))
         if recheck and verdict == "DONE_NEEDS_USER":
             print("ข้อคนตรวจ: ให้ user กด ✅/❌ ที่การ์ดในหน้าเว็บ flashq หรือสั่ง `goal human <GOAL> <G-xx> --pass|--fail \"เหตุ\"` (verify ซ้ำไม่ช่วย)")
+    if hint:
+        print(f"แนะนำ: พิจารณายกเลิกธง (flashq goal cancel {rel} --reason \"…\") — {hint} · ให้ user เลือก วนต่อ / ยกเลิกธง")
     left = rounds_max - n
     print(f"GOAL={verdict} รอบ {n}/{rounds_max} · ไม่ผ่าน {', '.join(fail) or '-'}" + (f" · เหลือ {left} รอบ" if verdict == "CONTINUE" else ""))
     return 0 if verdict in ("DONE", "DONE_NEEDS_USER", "CONTINUE") else 1
@@ -3330,12 +3537,13 @@ def main() -> int:
     rn.add_argument("id")
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
     rn.set_defaults(fn=cmd_runnow)
-    go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status")
-    go.add_argument("action", choices=["check", "verify", "status", "human"])
+    go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status · cancel (user สั่งเลิกธง)")
+    go.add_argument("action", choices=["check", "verify", "status", "human", "cancel"])
     go.add_argument("goal", help="ไฟล์เป้าหมาย เช่น docs/plans/GOAL_<เรื่อง>.md")
     go.add_argument("item", nargs="?", default="", help="human: ข้อคนตรวจ เช่น G-07")
     go.add_argument("--pass", dest="passed", action="store_true", help="human: ข้อนี้ผ่าน")
     go.add_argument("--fail", default="", help='human: ข้อนี้ไม่ผ่าน + เหตุ')
+    go.add_argument("--reason", default="", help="cancel: เหตุที่ user สั่งเลิกธง (เขียนลงบรรทัดสถานะใต้หัวไฟล์ GOAL)")
     go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
     go.set_defaults(fn=cmd_goal)
