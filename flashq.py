@@ -1916,12 +1916,14 @@ def ui_state() -> dict:
     acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
                 for s, m in accs]
     rows = history + queued + running
+    history_total = len(history)
     rv_act, rv_done = ui_reviews()
-    goals = ui_goals(running)
+    history = history[::-1][:300]
+    goals = ui_goals(running, history)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
-            "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
-            "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
+            "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history,
+            "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
@@ -2530,7 +2532,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             if line.startswith("# "):
                 title = re.sub(r"^#\s*GOAL\s*:\s*", "", line).strip()
                 break
-        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res")} for r in st.get("rounds", [])]
+        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res", "flash", "rechecks", "warn")} for r in st.get("rounds", [])]
         if rounds:
             rounds[-1]["results"] = st["rounds"][-1].get("results", {})
         GOALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -2551,27 +2553,38 @@ def goal_topic(name: str) -> str:
     return re.sub(r"_R\d+$", "", s, flags=re.I).lower()
 
 
-def ui_goals(running: list[dict]) -> list[dict]:
-    """เป้าหมายสำหรับ UI: สถานะ + ผูกงานที่รันอยู่ (แผน _R<n> ในโปรเจกต์เดียวกัน) · ซ่อนที่จบ/หยุดเกิน 3 วัน"""
-    out = []
+def ui_goals(running: list[dict], history: list[dict] | None = None) -> list[dict]:
+    """เป้าหมายสำหรับ UI: สถานะ + ผูกงานที่รันอยู่ (แผน _R<n> ในโปรเจกต์เดียวกัน) · ซ่อนที่จบ/หยุดเกิน 3 วัน
+    ติดป้ายงาน (รันอยู่ + ประวัติ): r["goal"] = รอบของเป้าหมาย · r["fix_round"] = แผนแก้ซ้ำ _R<n> ธรรมดาที่ไม่มีเป้าหมาย (กันสับสนว่าธงหาย)"""
+    out, rows = [], running + (history or [])
+    rn = {}
+    for r in rows:
+        m = re.search(r"_R(\d+)\.md$", r.get("plan") or "", re.I)
+        if m:
+            rn[id(r)] = int(m.group(1))
     for f in GOALS_DIR.glob("*.json") if GOALS_DIR.is_dir() else []:
         if f.name.endswith(".busy.json"):
             continue
         gl = read_json(f)
-        if not gl.get("id") or gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง)
+        if not gl.get("id"):
+            continue
+        proj, topic = os.path.normcase(gl.get("project", "")), goal_topic(gl.get("stem", ""))
+        jobs_now, last_job = [], {}
+        for r in rows:
+            if id(r) in rn and os.path.normcase(r.get("project", "")) == proj and goal_topic(r["plan"]) == topic:
+                if not r.get("goal") or not gl.get("archived"):  # เรื่องเดียวกันหลายไฟล์ = ไฟล์ที่ไม่ได้เก็บชนะ
+                    r["goal"] = {"id": gl["id"], "round": rn[id(r)], "rounds_max": gl.get("rounds_max", 0), "title": gl.get("title", "")}
+                if any(r is x for x in running):
+                    jobs_now.append(r["id"])
+                elif r.get("finished") and r["finished"] > last_job.get("finished", ""):  # งาน Flash ล่าสุดที่จบ → การ์ดบอกว่ารอใครอยู่
+                    last_job = {"id": r["id"], "state": r.get("state", ""), "finished": r["finished"], "round": r["goal"]["round"]}
+        if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
             continue
         last = (gl.get("rounds") or [None])[-1]
         verdict = last["verdict"] if last else "START"
         upd = _secs(gl.get("updated", "")) or 0
         if verdict in ("DONE", "DONE_NEEDS_USER", "STOP") and upd > 3 * 86400:
             continue
-        proj, topic = os.path.normcase(gl.get("project", "")), goal_topic(gl.get("stem", ""))
-        jobs_now = []
-        for r in running:
-            m = re.search(r"_R(\d+)\.md$", r.get("plan") or "", re.I)
-            if m and os.path.normcase(r.get("project", "")) == proj and goal_topic(r["plan"]) == topic:
-                jobs_now.append(r["id"])
-                r["goal"] = {"id": gl["id"], "round": int(m.group(1)), "rounds_max": gl.get("rounds_max", 0)}
         res = (last or {}).get("results") or {}
         machine = [i for i in gl.get("items", []) if not i.get("human")]
         final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP")
@@ -2583,7 +2596,11 @@ def ui_goals(running: list[dict]) -> list[dict]:
         out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
                         elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
-                        jobs=jobs_now, project_name=Path(gl.get("project", "")).name))
+                        jobs=jobs_now, last_job=dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {},
+                        project_name=Path(gl.get("project", "")).name))
+    for r in rows:
+        if id(r) in rn and not r.get("goal"):
+            r["fix_round"] = rn[id(r)]
     return sorted(out, key=lambda x: x.get("updated", ""), reverse=True)[:12]
 
 
@@ -2599,15 +2616,20 @@ def _ts(s: str) -> float:
         return 0.0
 
 
-def goal_job_windows(root: Path, stem: str) -> list[tuple[float, float]]:
-    """ช่วงเวลาที่งาน Flash ของเป้าหมายนี้รัน (แผน PLAN_FLASH_<เรื่อง>_R<n>.md ในโปรเจกต์เดียวกัน)"""
-    proj, topic, out = os.path.normcase(str(root)), goal_topic(stem), []
+def goal_project_jobs(root: Path) -> list[tuple[str, float, float, bool]]:
+    """งานที่เคยรันในโปรเจกต์นี้: (เรื่องของแผน, เริ่ม, จบ, เป็นแผน _R<n>) — ใช้แยกว่า commit ในช่วงหนึ่งเป็นของงานไหน"""
+    proj, out = os.path.normcase(str(root)), []
     for j in jobs():
         plan = j.get("plan") or ""
-        if (re.search(r"_R\d+\.md$", plan, re.I) and goal_topic(plan) == topic
-                and os.path.normcase(j.get("project", "")) == proj and j.get("started")):
-            out.append((_ts(j["started"]), _ts(j.get("finished", "")) or time.time()))
+        if plan and os.path.normcase(j.get("project", "")) == proj and j.get("started"):
+            out.append((goal_topic(plan), _ts(j["started"]), _ts(j.get("finished", "")) or time.time(), bool(re.search(r"_R\d+\.md$", plan, re.I))))
     return out
+
+
+def goal_job_windows(root: Path, stem: str) -> list[tuple[float, float]]:
+    """ช่วงเวลาที่งาน Flash ของเป้าหมายนี้รัน (แผน PLAN_FLASH_<เรื่อง>_R<n>.md ในโปรเจกต์เดียวกัน)"""
+    topic = goal_topic(stem)
+    return sorted((a, b) for t, a, b, rn in goal_project_jobs(root) if rn and t == topic)
 
 
 def _other_topic(files: list[str], topic: str) -> bool:
@@ -2615,32 +2637,57 @@ def _other_topic(files: list[str], topic: str) -> bool:
     return bool(topic) and any(re.match(r"(GOAL_|PLAN_FLASH_).+\.md$", Path(f).name, re.I) and goal_topic(f) != topic for f in files)
 
 
-def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]], topic: str = "") -> list[str]:
-    """ไฟล์ที่ถูกแก้ระหว่างวนเป้าหมาย — นับเฉพาะ commit (ไม่รวม merge) ที่เกิดระหว่างงาน Flash ของเป้าหมายนี้รัน
-    + ไฟล์ค้าง/ยังไม่ track ที่แก้ระหว่างงาน Flash รัน · ไม่มีประวัติงาน = ทุก commit หลัง base + ไฟล์ค้างที่แก้หลังเริ่มเป้าหมาย
-    ข้าม commit ที่แตะ GOAL_/PLAN_FLASH_ ของเรื่องอื่น (งานเป้าหมาย/แผนอื่นที่รันช่วงเดียวกัน)
-    (กัน STOP ผิด: เทสต์เกณฑ์ที่เจ้าของ commit หลัง check · ไฟล์ขยะที่ไม่ track มาก่อน · commit ของ session อื่นในโปรเจกต์เดียวกัน)"""
-    out = set()
+def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]], topic: str = "",
+                       scope: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """ไฟล์ที่ถูกแก้ระหว่างวนเป้าหมาย → (ของงาน Flash เป้าหมายนี้แน่ ๆ, อาจเป็นของ session อื่น)
+    นับเฉพาะ commit (ไม่รวม merge) ที่เกิดระหว่างงาน Flash ของเป้าหมายนี้รัน · ไม่มีประวัติงาน = ทุก commit หลัง base
+    ข้าม commit ที่แตะ GOAL_/PLAN_FLASH_ ของเรื่องอื่น · commit ที่ไม่แตะ goal-files/แผนของเรื่องนี้ และ (ไม่มีรหัสงาน `(T-xx)` หรือมีงานแผนอื่นรันซ้อนอยู่)
+    = "อาจเป็นของ session อื่น" (เตือน ไม่ STOP) · ไฟล์ค้าง/ยังไม่ track ที่แก้ระหว่างงานรัน ก็เป็น "อาจเป็น" (Flash ต้อง commit ทุกงาน)
+    ไม่มีประวัติงาน Flash ของเป้าหมาย = แยกไม่ได้ → ทุกอย่างนับเป็นของเป้าหมาย (รวมไฟล์ค้างที่แก้หลังเริ่ม)"""
+    ours, maybe = set(), set()
+    split = scope is not None and bool(windows)  # ไม่มีประวัติงาน Flash = แยกไม่ได้ นับทุกอย่างเป็นของเป้าหมาย (เข้มเหมือนเดิม)
+    others = [(a, b) for t, a, b, _ in goal_project_jobs(root) if t != topic] if split else []
     if base:
-        commits: list[tuple[int, list[str]]] = []
-        for line in _git(root, "log", "--no-merges", "--format=@@%ct", "--name-only", f"{base}..HEAD").splitlines():
+        commits: list[tuple[int, str, list[str]]] = []
+        for line in _git(root, "log", "--no-merges", "--format=@@%ct %s", "--name-only", f"{base}..HEAD").splitlines():
             if line.startswith("@@"):
-                commits.append((int(line[2:] or 0), []))
+                t, _, subj = line[2:].partition(" ")
+                commits.append((int(t or 0), subj, []))
             elif line.strip() and commits:
-                commits[-1][1].append(line.strip())
-        for t, files in commits:
-            if (not windows or any(a - 2 <= t <= b + 5 for a, b in windows)) and not _other_topic(files, topic):
-                out.update(files)
+                commits[-1][2].append(line.strip())
+        for t, subj, files in commits:
+            if (windows and not any(a - 2 <= t <= b + 5 for a, b in windows)) or _other_topic(files, topic):
+                continue
+            mine = any(goal_topic(f) == topic and re.match(r"(GOAL_|PLAN_FLASH_)", Path(f).name, re.I) for f in files) or (
+                scope is not None and any(_glob_hit(f, scope) for f in files))
+            stranger = split and not mine and (not re.search(r"\(T-\d+", subj) or any(a - 2 <= t <= b + 5 for a, b in others))
+            (maybe if stranger else ours).update(files)
     dirty = set(_git(root, "diff", "--name-only", "HEAD").splitlines()) | set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     for f in dirty:
         f = f.strip()
         try:
             m = (root / f).stat().st_mtime if f else 0
             if f and (any(a - 2 <= m <= b + 5 for a, b in windows) if windows else m >= _ts(started)):
-                out.add(f)
+                (maybe if split else ours).add(f)
         except OSError:
-            out.add(f)  # ถูกลบ = นับว่าแก้
-    return sorted(out)
+            ours.add(f)  # ถูกลบ = นับว่าแก้
+    return sorted(ours), sorted(maybe - ours)
+
+
+def goal_work_fp(root: Path, base: str, free: list[str], windows: list[tuple[float, float]]) -> str:
+    """ลายนิ้วมือ "งาน" ตั้งแต่ base: เนื้อหาไฟล์ที่ต่างจาก base (ไม่รวมไฟล์จดบันทึก GOAL/แผน/.tmp) + ไฟล์ใหม่ + จำนวนงาน Flash ของเป้าหมาย
+    เท่ากับรอบก่อน = ไม่มีงานใหม่ → verify ซ้ำไม่นับรอบ (กันเสียงบรอบเปล่า)"""
+    ex = [f":(exclude){p.rstrip('/')}" for p in free if p and "*" not in p]
+    h = hashlib.sha1(_git(root, "diff", "--no-color", "--no-ext-diff", base or "HEAD", "--", ".", *ex).encode("utf-8", "replace"))
+    for f in sorted(_git(root, "ls-files", "--others", "--exclude-standard").splitlines()):
+        if f.strip() and not _glob_hit(f.strip(), free):
+            try:
+                s = (root / f.strip()).stat()
+                h.update(f"{f}|{s.st_size}|{int(s.st_mtime)}".encode("utf-8", "replace"))
+            except OSError:
+                pass
+    h.update(f"jobs={len(windows)}".encode())
+    return h.hexdigest()[:16]
 
 
 def goal_human(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, rounds_max: int, a) -> int:
@@ -2849,16 +2896,24 @@ def cmd_goal(a) -> int:
         if not ok:
             fail.append(i["id"])
             print("   " + "\n   ".join(out.strip().splitlines()[-8:]))
-    changed = goal_changed_files(root, st["base"], st["started"], goal_job_windows(root, goal.stem), goal_topic(goal.stem)) if is_git else []
     cfg = project_cfg(root)
     free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"] + g["locked"]
-    out_scope = [f for f in changed if not _glob_hit(f, g["files"] + free)]
-    locked = [f for f in changed if g["locked"] and _glob_hit(f, g["locked"])]
+    windows = goal_job_windows(root, goal.stem) if is_git else []
+    ours, maybe = goal_changed_files(root, st["base"], st["started"], windows, goal_topic(goal.stem), g["files"] + free) if is_git else ([], [])
+    out_scope = [f for f in ours if not _glob_hit(f, g["files"] + free)]
+    warn = [f for f in maybe if not _glob_hit(f, g["files"] + free)]
+    locked = [f for f in ours + maybe if g["locked"] and _glob_hit(f, g["locked"])]
     if locked:
         stop.append("ไฟล์ล็อก (เกณฑ์/เทสต์ตัดสิน) ถูกแก้: " + ", ".join(locked[:8]))
     if out_scope:
         stop.append("แก้ไฟล์นอกขอบเขต goal-files: " + ", ".join(out_scope[:8]) + (" …" if len(out_scope) > 8 else ""))
+    fp = goal_work_fp(root, st["base"], free, windows) if is_git else ""
     prev = st["rounds"][-1] if st["rounds"] else None
+    # ไม่มีงานใหม่ตั้งแต่รอบก่อน (ไฟล์/งาน Flash เหมือนเดิม · เกณฑ์ไม่ถูกแก้) = ตรวจซ้ำ → แทนผลรอบเดิม ไม่นับรอบใหม่
+    recheck = bool(fp and prev and prev.get("fp") == fp and st.get("sig") == g["sig"])
+    popped = st["rounds"].pop() if recheck else {}
+    if recheck:
+        prev = st["rounds"][-1] if st["rounds"] else None
     regress = [k for k, r in results.items() if not r["ok"] and prev and prev["results"].get(k, {}).get("ok")]
     n = len(st["rounds"]) + 1
     hrs = (_secs(st["started"]) or 0) / 3600
@@ -2874,17 +2929,34 @@ def cmd_goal(a) -> int:
         if hrs >= g["hours"]:
             stop.append(f"เกินงบเวลา {g['hours']:g} ชม. (ผ่านไป {hrs:.1f})")
         verdict = "STOP" if stop else "CONTINUE"
-    st["rounds"].append({"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked,
-                         "stop": stop, "human": human})
+    since = _ts(prev["at"]) if prev else _ts(st["started"]) - 5
+    rnd = {"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked,
+           "stop": stop, "human": human, "warn": warn, "fp": fp, "flash": sum(1 for a, _ in windows if a >= since)}
+    if recheck:
+        rnd["flash"] = popped.get("flash", 0)
+        rnd["rechecks"] = popped.get("rechecks", 0) + 1
+        hres = popped.get("human_res") or {}
+        if verdict == "DONE_NEEDS_USER" and hres:  # ผลคนตรวจของรอบเดิมยังใช้ได้ (งานไม่เปลี่ยน)
+            rnd["human_res"] = hres
+            if all(hres.get(i["id"], {}).get("ok") for i in g["items"] if not i["cmd"]):
+                rnd["verdict"] = verdict = "DONE"
+    st["rounds"].append(rnd)
     st["owner"] = goal_owner() or st.get("owner") or {}
     write_json(sp, st)
     goal_publish(root, goal, rel, g, st, rounds_max)
+    if recheck:
+        print(f"ไม่มีงานใหม่ตั้งแต่รอบ {n} (ไฟล์และงาน Flash เหมือนเดิม) → ตรวจซ้ำ ไม่นับรอบเพิ่ม")
+    if warn:
+        print("เตือน: ไฟล์นอกขอบเขตที่อาจเป็นของ session อื่น (ไม่ได้มาจากงาน Flash ของเป้าหมายนี้ชัด ๆ · ไม่เบรก) — ตรวจดูเอง: "
+              + ", ".join(warn[:8]) + (" …" if len(warn) > 8 else ""))
     if regress:
         print(f"ถอยหลัง: {', '.join(regress)} เคยผ่านรอบก่อนแต่รอบนี้ไม่ผ่าน → แผนรอบหน้าต้องแก้ตัวนี้ก่อน")
     for s in stop:
         print(f"เบรก: {s}")
     if human:
         print("ให้ user ตรวจเอง:\n  " + "\n  ".join(human))
+        if recheck and verdict == "DONE_NEEDS_USER":
+            print("ข้อคนตรวจ: ให้ user กด ✅/❌ ที่การ์ดในหน้าเว็บ flashq หรือสั่ง `goal human <GOAL> <G-xx> --pass|--fail \"เหตุ\"` (verify ซ้ำไม่ช่วย)")
     left = rounds_max - n
     print(f"GOAL={verdict} รอบ {n}/{rounds_max} · ไม่ผ่าน {', '.join(fail) or '-'}" + (f" · เหลือ {left} รอบ" if verdict == "CONTINUE" else ""))
     return 0 if verdict in ("DONE", "DONE_NEEDS_USER", "CONTINUE") else 1

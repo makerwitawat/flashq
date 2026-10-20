@@ -283,6 +283,12 @@ summary.goal-h button { margin-left: auto; }
 .goal-human {margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 0.35rem; background: color-mix(in srgb, var(--quota) 14%, transparent); }
 .goal-rounds { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.35rem; font-size: 0.8rem; }
 .goal-rounds span { padding: 0 0.4rem; border-radius: 0.3rem; background: var(--line); }
+.goal-rounds span.re { opacity: 0.75; }
+.goal-idle { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.92em; background: color-mix(in srgb, var(--line) 55%, transparent); }
+.goal-idle.long { background: color-mix(in srgb, var(--quota) 18%, transparent); }
+.goal-warn { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.9em; border: 1px dashed var(--quota); }
+.rtag { font-size: 0.78rem; padding: 0 0.35rem; border-radius: 0.3rem; margin-left: 0.3rem; white-space: nowrap; font-family: inherit; }
+.rtag.goal { background: color-mix(in srgb, var(--accent) 16%, transparent); } .rtag.fix { background: var(--line); }
 .of-goalt { fill: #dc2626; font-size: 11px; font-weight: 700; }
 .of-pole { stroke: #8a94a3; stroke-width: 3; stroke-linecap: round; }
 .of-flag { transition: transform 1s ease; }
@@ -530,6 +536,9 @@ const dur = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h} ชม. ${m} นาที` : m ? `${m} นาที ${x} วิ` : `${x} วิ`;
 };
+const ago = (s) => (s == null ? "-" : s < 60 ? "ไม่ถึง 1 นาที" : dur(s).replace(/ \d+ วิ$/, ""));
+const roundTag = (j) => (j.goal ? `<span class="rtag goal" title="รอบหนึ่งของเป้าหมาย «${esc(j.goal.title || "")}» (/flash-goal)">🚩 รอบ ${j.goal.round}/${j.goal.rounds_max}</span>`
+  : j.fix_round ? `<span class="rtag fix" title="แผนแก้ซ้ำ (_R${j.fix_round}) ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย ไม่มีธง">🔁 แก้รอบ ${j.fix_round}</span>` : "");
 const kindOf = (j) => j.kind || (j.message ? "test" : "work");
 const isSleuth = (j) => /investigator/i.test(j.agent || "");  // ผู้สืบ (flash-investigator · อ่านอย่างเดียว) — แสดงเป็นตัวละครแว่นเหมือนผู้ตรวจ
 const isVerify = (j) => kindOf(j) === "verify" || kindOf(j) === "investigate" || isSleuth(j);
@@ -660,7 +669,7 @@ function render() {
   $("history").innerHTML = hist.length ? `<table>
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}</td>
+      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j)}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`;
@@ -789,12 +798,23 @@ function goalHTML(g) {
     : "🔄 รอ Claude ส่งรอบถัดไป — ถ้า session นั้นปิดไปแล้ว กด 🤖 ให้ทำต่อ";
   const dis = lock ? " disabled" : "";
   const acts = `<div class="goal-acts"><div>${next}</div><div class="goal-btns">
-      <button data-gact="verify" data-gid="${esc(g.id)}"${dis} title="รัน goal verify ใหม่ (รันเกณฑ์ทุกข้อ · นับเป็นรอบใหม่)">🔄 ตรวจใหม่</button>
+      <button data-gact="verify" data-gid="${esc(g.id)}"${dis} title="รัน goal verify ใหม่ (รันเกณฑ์ทุกข้อ · ไม่มีงานใหม่ตั้งแต่รอบก่อน = ไม่นับรอบ แค่อัปเดตผล)">🔄 ตรวจใหม่</button>
       <button data-gact="claude" data-gid="${esc(g.id)}"${dis || (g.verdict === "DONE" ? " disabled" : "")} title="เปิด session ใหม่ในแอป Claude (แท็บ Code) พิมพ์ /flash-goal รอไว้ · ไม่มีแอป → หน้าต่าง CLI">🤖 ให้ Claude ทำต่อ</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="goal">📄 ไฟล์เป้าหมาย</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button>
       ${g.verdict === "STOP" ? `<button data-gact="archive" data-gid="${esc(g.id)}"${dis} title="เอาออกจากแผงและเสาธง (ไฟล์ GOAL/ประวัติยังอยู่ · ตรวจเรื่องนี้ใหม่ = กลับมาเอง)">✖ เก็บ</button>` : ""}</div></div>`;
-  const chips = n ? `<div class="goal-rounds">${g.rounds.map((r, k) => `<span title="${esc(r.at)}">รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}</span>`).join("")}</div>` : "";
+  const chip = (r, k) => {
+    const src = r.flash == null ? "" : r.flash ? "🧑‍💻 " : "🔍 ";
+    const tip = `${r.at}${r.flash == null ? "" : r.flash ? ` · Flash ทำงาน ${r.flash} ครั้งในรอบนี้` : " · ไม่มีงาน Flash ในรอบนี้ (ตรวจอย่างเดียว หรือ Claude แก้เอง)"}${r.rechecks ? ` · ตรวจซ้ำอีก ${r.rechecks} ครั้งโดยไม่มีงานใหม่ (ไม่นับรอบ)` : ""}`;
+    return `<span class="${r.flash === 0 ? "re" : ""}" title="${esc(tip)}">${src}รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}${r.rechecks ? ` ·🔁${r.rechecks}` : ""}</span>`;
+  };
+  const chips = n ? `<div class="goal-rounds" title="🧑‍💻 = Flash ทำงานในรอบนั้น · 🔍 = ตรวจอย่างเดียว · 🔁n = ตรวจซ้ำโดยไม่มีงานใหม่ (ไม่นับรอบ)">${g.rounds.map(chip).join("")}</div>` : "";
+  const warn = last && last.warn && last.warn.length ? `<div class="goal-warn">⚠️ ไฟล์นอกขอบเขตที่<b>อาจเป็นของ session อื่น</b> (ไม่ได้มาจากงาน Flash ของเป้าหมายนี้ชัด ๆ · ไม่เบรก — ตรวจดูเอง): <span class="mono">${esc(last.warn.slice(0, 8).join(", "))}${last.warn.length > 8 ? " …" : ""}</span></div>` : "";
+  const lj = g.last_job || {}, fresh = lj.finished && lj.finished > (last ? last.at : g.started || "");
+  const quiet = g.age_sec || 0, waitWho = g.verdict === "DONE_NEEDS_USER" ? "รอคุณตรวจ" : g.verdict === "STOP" ? "รอคุณตัดสินใจ" : "รอ Claude ส่งรอบถัดไป";
+  const idle = lock || g.verdict === "DONE" ? ""
+    : fresh ? `<div class="goal-idle${(lj.ago_sec || 0) > 1800 ? " long" : ""}">📥 Flash ทำรอบ ${lj.round} เสร็จแล้ว ${esc(ago(lj.ago_sec))} ที่แล้ว (${esc((STATUS[lj.state] || [lj.state])[0])}) — <b>รอ Claude ตรวจ (goal verify)</b> · session นั้นปิดไปแล้ว → กด 🔄 ตรวจใหม่</div>`
+    : `<div class="goal-idle${quiet > 1800 ? " long" : ""}">⏸ ${waitWho} — นิ่งมา <b>${esc(ago(quiet))}</b> <span class="muted">(อัปเดตล่าสุด ${esc(g.updated || "-")})</span></div>`;
   const head = `<span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
       <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span>`;
   if (g.verdict === "DONE") {  // ผ่านแล้ว = ย่อเหลือบรรทัดเดียว (กดเพื่อกางดู) + ✖ เก็บ
@@ -809,7 +829,7 @@ function goalHTML(g) {
     <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
-    ${live}${acts}${stop}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
+    ${live}${idle}${acts}${stop}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
 }
 function renderGoals() {
   const gs = state.goals || [];
@@ -1402,6 +1422,7 @@ function deskSVG(i, cx, cy, r, c) {
     stCls = "of-st-work";
     who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: roleOf(r) });
     if (r.goal) bubble += `<text class="of-goalt" x="${cx + 180}" y="${cy + 62}" text-anchor="end">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max}<title>งานนี้เป็นรอบหนึ่งของเป้าหมาย (/flash-goal)</title></text>`;
+    else if (r.fix_round) bubble += `<text class="of-goalt" x="${cx + 180}" y="${cy + 62}" text-anchor="end" opacity="0.7">🔁 แก้รอบ ${r.fix_round}<title>แผนแก้ซ้ำ (_R${r.fix_round}) ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย ไม่มีธง</title></text>`;
     bubble += `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
     label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 8 : 10))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 162}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 10))}<title>${esc(modelText(r))}</title></text>` : ""}`;
@@ -1560,7 +1581,8 @@ function runCardHTML(r, k) {
   return `<article class="of-card" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
-    ${r.goal ? `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(((state.goals || []).find((g) => g.id === r.goal.id) || {}).title || "")}</b></div>` : ""}
+    ${r.goal ? `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(r.goal.title || ((state.goals || []).find((g) => g.id === r.goal.id) || {}).title || "")}</b></div>`
+      : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     <div class="of-bar" id="ofCB${k}" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     <div class="of-line"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
     <div class="of-line">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
@@ -1583,7 +1605,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */

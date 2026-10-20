@@ -1109,6 +1109,10 @@ class FlashqTest(unittest.TestCase):
         r = v()
         self.assertIn("GOAL=CONTINUE รอบ 1/3 · ไม่ผ่าน G-01", r.stdout, r.stdout)
         self.assertIn("VAL=old", r.stdout)  # ท้าย output ของเกณฑ์ที่ล้ม = หลักฐานให้แผนรอบหน้า
+        r = v()  # ไม่มีงานใหม่ = ตรวจซ้ำ ไม่นับรอบ (ไม่เสียงบรอบเปล่า)
+        self.assertIn("ไม่มีงานใหม่ตั้งแต่รอบ 1", r.stdout, r.stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/3", r.stdout)
+        (self.proj / "src" / "b.txt").write_text("x\n", encoding="utf-8")  # มีงานแต่ผลเหมือนเดิม
         r = v()
         self.assertIn("GOAL=STOP", r.stdout)
         self.assertIn("พังซ้ำเรื่องเดิม 2 รอบติด", r.stdout)
@@ -1166,10 +1170,16 @@ class FlashqTest(unittest.TestCase):
         other = {"id": "J2", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_y_R2.md"}
         g = mod.ui_goals([run, other])[0]
         self.assertEqual((g["verdict"], g["passed"], g["jobs"]), ("CONTINUE", 0, ["J1"]))
-        self.assertEqual(run["goal"], {"id": g["id"], "round": 2, "rounds_max": 3})
+        self.assertEqual(run["goal"], {"id": g["id"], "round": 2, "rounds_max": 3, "title": "ค่าใหม่"})
         self.assertNotIn("goal", other)
+        self.assertEqual(other["fix_round"], 2)  # แผน _R<n> ธรรมดาที่ไม่มีเป้าหมาย = ป้าย 🔁 แก้รอบ ไม่ใช่ 🚩
+        done = {"id": "J0", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R1.md", "state": "ok", "finished": "2099-01-01 00:00:00"}
+        g = mod.ui_goals([], [done])[0]  # งานที่จบแล้วในประวัติก็ติด 🚩 + การ์ดรู้ว่า Flash ทำรอบไหนเสร็จล่าสุด
+        self.assertEqual((done["goal"]["round"], g["last_job"]["id"], g["last_job"]["round"]), (1, "J0", 1))
+        self.assertEqual(g["rounds"][-1]["flash"], 0)  # รอบนี้ไม่มีงาน Flash = ตรวจอย่างเดียว
         self.assertIn("VAL=old", g["rounds"][-1]["results"]["G-01"]["tail"])
-        self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # ผลเดิมซ้ำ = STOP
+        (self.proj / "src" / "b.txt").write_text("x\n", encoding="utf-8")
+        self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # มีงานใหม่แต่ผลเดิมซ้ำ = STOP
         g = mod.ui_goals([])[0]
         self.assertEqual(g["verdict"], "STOP")
         self.assertIn("พังซ้ำเรื่องเดิม", g["rounds"][-1]["stop"][0])
@@ -1196,6 +1206,10 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")
         self.assertIn("GOAL=DONE คนตรวจผ่าน 1/1", r.stdout, r.stdout)
         self.assertEqual(mod.ui_goals([])[0]["verdict"], "DONE")
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # ตรวจซ้ำโดยไม่มีงานใหม่ = ผลคนตรวจเดิมยังใช้ได้ ไม่นับรอบ
+        self.assertIn("GOAL=DONE รอบ 1/", r.stdout, r.stdout)
+        g2 = mod.ui_goals([])[0]
+        self.assertEqual((len(g2["rounds"]), g2["rounds"][-1]["rechecks"], g2["verdict"]), (1, 1, "DONE"))
         self.assertEqual(mod.goal_ui_action(g["id"], "archive", {})[0], 200)  # ✖ เก็บ = หายจากแผง/เสาธง
         self.assertEqual(mod.ui_goals([]), [])
         self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")  # สั่งเรื่องนี้ใหม่ = กลับมาเอง
@@ -1251,11 +1265,22 @@ class FlashqTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "งานเรื่อง y"], check=True)
         r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
         self.assertIn("GOAL=DONE", r.stdout, r.stdout)
-        (self.proj / "other.py").write_text("x\n", encoding="utf-8")  # ระหว่างงาน Flash รัน = นอกขอบเขต
+        (self.proj / "other.py").write_text("x\n", encoding="utf-8")  # ไฟล์ค้าง/commit ไม่มีรหัสงาน = อาจเป็นของ session อื่น → เตือน ไม่ STOP
+        (self.proj / "lib" / "z.py").write_text("z\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.proj), "add", "lib/z.py"], check=True)
+        subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "งานอื่น"], check=True)
         r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
-        self.assertIn("แก้ไฟล์นอกขอบเขต goal-files: other.py", r.stdout, r.stdout)
+        self.assertIn("GOAL=DONE", r.stdout, r.stdout)
+        self.assertIn("อาจเป็นของ session อื่น", r.stdout)
+        self.assertIn("lib/z.py, other.py", r.stdout)
         self.assertNotIn("junk.bin", r.stdout)
         self.assertNotIn("ไฟล์ล็อก", r.stdout)
+        (self.proj / "lib" / "w.py").write_text("w\n", encoding="utf-8")  # commit ของงาน Flash (มีรหัสงาน) ที่หลุดขอบเขต = STOP
+        subprocess.run(["git", "-C", str(self.proj), "add", "lib/w.py"], check=True)
+        subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "fix(lib): w (T-02)"], check=True)
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("แก้ไฟล์นอกขอบเขต goal-files: lib/w.py", r.stdout, r.stdout)
+        self.assertNotIn("other.py", r.stdout.split("เบรก:")[-1])
 
     def test_cancel_does_not_kill_reused_child_pid(self):
         """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
