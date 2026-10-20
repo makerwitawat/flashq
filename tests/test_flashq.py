@@ -850,6 +850,15 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
         self.assertEqual(r.stdout.count("ลองใหม่อัตโนมัติ"), 1)
 
+    def test_stall_limit_adapts_to_floor_not_only_ceiling(self):
+        """เพดาน 10 นาที แต่ขั้นต่ำเล็ก → ตัดตั้งแต่ log เงียบเกินขั้นต่ำ (ไม่ต้องรอเพดาน)"""
+        (self.proj / ".flash.json").write_text(json.dumps({"stall_min": 10, "stall_floor_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
+        t0 = time.time()
+        r = self.run_q(*self.base(), env={"FAKE_SLEEP": "40"})
+        self.assertLess(time.time() - t0, 35)
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        self.assertIn("ขั้นต่ำ 0.05", r.stdout)
+
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -66,6 +66,8 @@ DEFAULTS = {
     "timeout_min": 480,
     "stall_min": 20,  # log ไม่ขยับเกินนี้ (นาที) = ค้าง → ฆ่าแล้วรายงาน TIMEOUT (0 = ปิด) · งานทำจริง
     "agent_stall_min": 10,  # เหมือน stall_min แต่ผู้ตรวจ/ผู้สืบ
+    "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
+    "agent_stall_floor_min": 4,
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
 }
 
@@ -879,7 +881,7 @@ def open_in_desktop(sid: str, server: str) -> None:
     print((r.stdout.strip() or f"DESKTOP_OPEN=FAIL rc={r.returncode}"), flush=True)
 
 
-def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: int = 0) -> dict:
+def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -902,6 +904,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                 save_job(job)
                 if not no_open:
                     open_in_desktop(sid, attach)
+            last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
             while True:  # เฝ้า 2 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ
                 try:
                     rc = p.wait(timeout=max(1, min(15 if stall_min >= 1 else 1, timeout_min * 60 - (time.time() - t0))))
@@ -915,8 +918,17 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                             idle = time.time() - os.path.getmtime(log)
                         except OSError:
                             idle = 0
-                        if stall_min and idle >= stall_min * 60:
-                            why = f"STALL: log เงียบ {idle / 60:.0f} นาที (เกิน {stall_min})"
+                        try:
+                            m = os.path.getmtime(log)
+                        except OSError:
+                            m = last_m
+                        if m != last_m:
+                            if last_m:
+                                maxgap = max(maxgap, time.time() - last_chg)
+                            last_m, last_chg = m, time.time()
+                        limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
+                        if limit and idle >= limit:
+                            why = f"STALL: log เงียบ {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
                     if why:
                         kill_tree(p.pid)
                         p.wait()
@@ -1054,6 +1066,7 @@ def cmd_run(a) -> int:
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
         stall_retry = 1
         stall_min = cfg["agent_stall_min"] if kind in AGENT_KINDS else cfg["stall_min"]
+        stall_floor = cfg["agent_stall_floor_min"] if kind in AGENT_KINDS else cfg["stall_floor_min"]
         tried_models: set = set()
         while True:
             attempt += 1
@@ -1072,11 +1085,18 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min)
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor)
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
                 stall_retry -= 1
+                if not worker_like and job["model"]:  # ผู้ตรวจ/ผู้สืบ: ค้างที่ผู้ให้บริการนี้ → รอบใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี)
+                    tried_models.add(job["model"])
+                    alts = other_providers(job["model"], tried_models)
+                    if alts:
+                        print(f"ย้าย provider {job['model']} → {alts[0]} (โมเดลเดิม) สำหรับรอบใหม่", flush=True)
+                        job["model"] = alts[0]
+                        save_job(job)
                 print(f"TIMEOUT ({job.get('timeout_reason', '')}) → ลองใหม่อัตโนมัติ 1 ครั้ง · ก่อนหน้าทำถึง: " + " | ".join(res.get("recent") or ["(ไม่มี tool)"]), flush=True)
                 continue
             if res["status"] == "NOSTART" and nostart_retry > 0:
