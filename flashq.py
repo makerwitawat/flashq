@@ -973,7 +973,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                                 if act["running"]:
                                     r0 = sorted(act["running"], key=lambda r: r["session"] == job["session"])[0]  # tool ของ subagent (ลึกสุด) ก่อน tool `task` ของ parent
                                     why += f" · สาเหตุ: tool `{r0['tool']}` ค้าง ({r0['what']}) รันมา {(time.time() - r0['since']) / 60:.0f} นาทีไม่จบ → คำสั่ง/โปรเซสไม่ตอบ"
-                                    if re.search(r"Start-Process|start\s+/b|nohup|Popen|\)\s*&\s*$|&\s*$", r0.get("cmd", ""), re.M | re.I):
+                                    if re.search(r"Start-Process|\bstart\s+/b|nohup|Popen|\)\s*&\s*$|&\s*$", r0.get("cmd", ""), re.M | re.I):
                                         why += " · ⚠ คำสั่งเปิดโปรเซสค้าง (เช่นเซิร์ฟเวอร์) ในเบื้องหลัง → bash tool รอ handle ของลูกไม่ยอมคืนค่า: ให้เขียนสคริปต์ที่ เปิด-ทดสอบ-ปิด ในคำสั่งเดียว (try/finally) หรือทดสอบแบบ in-process"
                                 else:
                                     why += f" · สาเหตุ: ไม่มี tool ใดรันอยู่ → รอโมเดล/ผู้ให้บริการ ({job.get('model') or 'ค่าเริ่มต้น'}) ตอบไม่ได้"
@@ -1251,6 +1251,71 @@ def cmd_status(a) -> int:
               + (f"\n       ↳ {why}" if why else ""))
     print(f"บัญชี flash-worker: {configured_model() or '(ยังไม่ตั้ง)'}")
     return 0
+
+
+BG_RE = re.compile(r"Start-Process|\bstart\s+/b|nohup|Popen|&\s*$", re.M | re.I)
+
+
+def plan_done_tasks(j: dict) -> list[str]:
+    """งานในแผนที่ติ๊ก `- [x] **T-xx**` แล้ว (ความจริงของความคืบหน้า — ไม่ต้องเดาจาก log)"""
+    if not j.get("plan"):
+        return []
+    try:
+        text = (Path(j.get("project", "")) / j["plan"]).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return []
+    return re.findall(r"^\s*- \[[xX]\]\s+\*\*(T-\d+[A-Za-z]*)\*\*", text, re.M)
+
+
+def diagnose_job(j: dict) -> dict:
+    """งานที่กำลังรันเป็นอย่างไรตอนนี้: log เงียบกี่นาที · subagent/tool ขยับล่าสุด · tool ไหนรันอยู่ → ตัดสิน ok/tool_hang/tool_long/model_wait/unknown"""
+    st = live_state(j)
+    d = {"id": j.get("id"), "state": st, "log_idle_sec": log_idle_sec(j), "server_idle_sec": None, "running": [], "verdict": "", "text": ""}
+    if st != "running":
+        d.update(verdict="not_running", text=f"งานไม่ได้รันอยู่ (สถานะ {st})")
+        return d
+    attach, sid = j.get("attach") or "", j.get("session") or ""
+    act = server_activity(attach, sid) if attach.startswith("http") and sid else None
+    if act and act["updated"]:
+        d["server_idle_sec"] = max(0, int(time.time() - act["updated"]))
+    idles = [x for x in (d["log_idle_sec"], d["server_idle_sec"]) if x is not None]
+    quiet = min(idles) if idles else None
+    d["quiet_sec"] = quiet
+    mins = lambda s: f"{s / 60:.0f} นาที" if s is not None else "?"
+    base = f"log เงียบ {mins(d['log_idle_sec'])}" + (f" · subagent/tool ขยับล่าสุด {mins(d['server_idle_sec'])} ที่แล้ว" if d["server_idle_sec"] is not None else "")
+    if act is None:
+        d.update(verdict="unknown", text=base + " · แยกสาเหตุไม่ได้ (ไม่ได้ต่อ server ให้ถามสถานะ tool — งานนี้รัน --attach none หรือ server ไม่ตอบ)")
+        return d
+    d["running"] = [{"tool": r["tool"], "what": r["what"], "min": round((time.time() - r["since"]) / 60, 1)} for r in act["running"]]
+    if quiet is not None and quiet < 180:
+        d.update(verdict="ok", text=base + " · ทำงานปกติ")
+        return d
+    if act["running"]:
+        r0 = sorted(act["running"], key=lambda r: r["session"] == sid)[0]
+        run_min = (time.time() - r0["since"]) / 60
+        bg = bool(BG_RE.search(r0.get("cmd", "")))
+        verdict = "tool_hang" if bg or run_min >= 10 else "tool_long"
+        d.update(verdict=verdict, text=f"{base} · tool `{r0['tool']}` รันมา {run_min:.0f} นาที: {r0['what']}"
+                 + (" · ⚠ คำสั่งเปิดโปรเซสค้างในเบื้องหลัง → tool รอ handle ของลูกไม่คืนค่า (ต้องยกเลิกงาน แล้วให้ทดสอบด้วยสคริปต์ เปิด-ทดสอบ-ปิด)" if bg
+                    else (" · นานผิดปกติ น่าจะค้าง" if run_min >= 10 else " · อาจเป็นคำสั่งยาวจริง (build/export) รอต่อได้")))
+        return d
+    d.update(verdict="model_wait", text=base + f" · ไม่มี tool ใดรันอยู่ → รอโมเดล/ผู้ให้บริการ ({j.get('model') or 'ค่าเริ่มต้น'}) ตอบ — ถ้าเกิน ~10 นาทีควรยกเลิกแล้วสั่งใหม่/ย้ายผู้ให้บริการ")
+    return d
+
+
+def cmd_why(a) -> int:
+    """flashq why [id] — งานที่รันอยู่เป็นอย่างไร (ไม่ระบุ id = ทุกงานที่กำลังรัน)"""
+    if a.id:
+        j = find_job(a.id)
+        targets = [j] if j else []
+    else:
+        targets = [j for j in jobs() if live_state(j) == "running"]
+        if not targets:
+            print("ไม่มีงานที่กำลังรัน")
+    for j in targets:
+        d = diagnose_job(j)
+        print(f"[{d['verdict'] or d['state']}] {j['id']} {j.get('title', '')}\n   {d['text']}")
+    return 0 if targets or not a.id else 1
 
 
 def find_job(jid: str) -> dict:
@@ -1643,7 +1708,7 @@ def ui_state() -> dict:
         if st == "running":
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
-                       log_idle_sec=log_idle_sec(j))
+                       log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j))
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
@@ -1954,6 +2019,11 @@ def make_ui_server(port: int = 4097):
                 except ValueError:
                     return self._send(400, {"error": "attempt/offset ต้องเป็นตัวเลข"})
                 return self._send(200, log_tail(j, attempt, offset))
+            if u.path == "/api/why":
+                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0]), None)
+                if not j:
+                    return self._send(404, {"error": "ไม่พบงาน"})
+                return self._send(200, diagnose_job(j))
             if u.path == "/api/overlap":
                 j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0]), None)
                 if not j:
@@ -2152,6 +2222,9 @@ def main() -> int:
     inv.set_defaults(attach="none")
     vf.set_defaults(switch_on_quota=2)  # ผู้ตรวจ/ผู้สืบ: โควตาหมดย้าย provider (โมเดลเดิม) ให้เองได้ 2 ครั้ง
     inv.set_defaults(switch_on_quota=2)
+    wy = sp.add_parser("why", help="งานที่รันอยู่เป็นอย่างไร: ปกติ/tool ค้าง/รอโมเดล (ไม่ระบุ id = ทุกงานที่รัน)")
+    wy.add_argument("id", nargs="?", default="")
+    wy.set_defaults(fn=cmd_why)
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)
     li = sp.add_parser("list", help="รายการงาน")
     li.add_argument("--all", action="store_true")

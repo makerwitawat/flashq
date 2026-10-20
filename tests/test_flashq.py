@@ -897,6 +897,41 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual({r["tool"] for r in act["running"]}, {"task", "bash"})
         self.assertIsNone(mod.server_activity("http://127.0.0.1:1", "ses_p"))
 
+    def test_why_diagnoses_hung_tool_model_wait_and_plan_progress(self):
+        """flashq why: แยก tool ค้าง (มีคำสั่งเปิดโปรเซสเบื้องหลัง) / รอโมเดล / ปกติ / ไม่รู้ และนับ T-xx ที่ติ๊ก [x] ในแผน"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("flashq_mod2", FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        plan = self.proj / "plan.md"
+        plan.write_text("- [x] **T-01** a\n- [ ] **T-02** b\n  - [x] **T-02a** sub\n- [X] **T-03** c\n", encoding="utf-8")
+        j = {"id": "J1", "project": str(self.proj), "plan": "plan.md", "attach": "http://x", "session": "ses_p"}
+        self.assertEqual(mod.plan_done_tasks(j), ["T-01", "T-02a", "T-03"])
+        now = time.time()
+        mod.live_state = lambda _j: "running"
+        mod.log_idle_sec = lambda _j: 1200
+        run = lambda cmd, mins: {"updated": now - 1200, "running": [
+            {"tool": "bash", "what": cmd, "since": now - mins * 60, "session": "ses_c", "cmd": cmd}]}
+        mod.server_activity = lambda *a: run("Start-Process python srv.py", 3)
+        d = mod.diagnose_job(j)
+        self.assertEqual(d["verdict"], "tool_hang")
+        self.assertIn("Start-Process", d["text"])
+        mod.server_activity = lambda *a: run("blender --export", 4)
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "tool_long")
+        mod.server_activity = lambda *a: run("blender --export", 25)
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "tool_hang")
+        mod.server_activity = lambda *a: {"updated": now - 1200, "running": []}
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "model_wait")
+        mod.server_activity = lambda *a: {"updated": now - 5, "running": []}
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "ok")
+        mod.server_activity = lambda *a: None
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "unknown")
+        mod.live_state = lambda _j: "done"
+        self.assertEqual(mod.diagnose_job(j)["verdict"], "not_running")
+        r = self.run_q("why")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ไม่มีงานที่กำลังรัน", r.stdout)
+
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

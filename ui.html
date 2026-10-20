@@ -1038,8 +1038,9 @@ function runInfo(r) {
   const el = r.elapsed_sec == null ? null : r.elapsed_sec + (Date.now() - stateAt) / 1000;
   const est = estimate(r), L = olog.get(r.id);
   const list = parseTasks(r.tasks), n = list.length;
-  const doneList = L ? list.filter((t) => L.done.has(normT(t))) : [];
-  const cur = list.find((t) => !(L && L.done.has(normT(t)))) || "";
+  const pd = new Set((r.plan_done || []).map(normT)), isDone = (t) => pd.has(normT(t)) || !!(L && L.done.has(normT(t)));   // ติ๊ก [x] ในแผน = จริงที่สุด · log = เสริม
+  const doneList = list.filter(isDone);
+  const cur = list.find((t) => !isDone(t)) || "";
   const doneFrac = n > 1 ? doneList.length / n : 0;
   const timePct = el != null && est && est.sec > 0 ? el / est.sec * 100 : null;
   let pct = null, rem = null, over = false;
@@ -1299,7 +1300,8 @@ function runCardHTML(r, k) {
     <div class="of-line">⏱ <span id="ofCE${k}"></span></div>
     ${modelChip(r)}
     <div class="of-line muted" id="ofCM${k}"></div>
-    <div class="of-line muted" id="ofCA${k}"></div></article>`;
+    <div class="of-line muted" id="ofCA${k}"></div>
+    <div class="of-line"><button data-ofwhy="${esc(r.id)}" title="ถามเซิร์ฟเวอร์ว่า tool/subagent ยังทำงานอยู่ไหม และค้างที่อะไร">🔍 ตรวจสาเหตุ</button> <span class="muted" id="ofCW${k}"></span></div></article>`;
 }
 function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
@@ -1406,7 +1408,14 @@ function setView(v) {
 }
 document.querySelectorAll("#viewTabs button").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
 function openLogFromOffice(id) { setView("dash"); openLog(id); }
-$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("officeView").addEventListener("click", async (e) => {
+  const w = e.target.closest("button[data-ofwhy]"); if (!w) return;
+  const out = w.parentElement.querySelector("span"); w.disabled = true; out.textContent = "กำลังตรวจ…";
+  try { const d = await (await fetch("/api/why?id=" + encodeURIComponent(w.dataset.ofwhy), { cache: "no-store" })).json(); out.textContent = d.text || d.error || "ตรวจไม่ได้"; out.classList.toggle("of-warn", ["tool_hang", "model_wait"].includes(d.verdict)); }
+  catch { out.textContent = "ถามไม่ได้ (เซิร์ฟเวอร์ UI ไม่ตอบ)"; }
+  w.disabled = false;
+});
+$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel],button[data-ofwhy]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
 $("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
 $("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
 $("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };
