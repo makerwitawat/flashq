@@ -122,7 +122,7 @@ def write_json(path: Path, data: dict) -> None:
 
 def read_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))  # -sig: PowerShell 5.1 / Notepad เก่าเขียน BOM ให้ไฟล์ UTF-8
     except (OSError, ValueError):
         return {}
 
@@ -140,14 +140,20 @@ def opencode_cmd() -> list[str]:
 def project_root(start: Path) -> tuple[Path, bool]:
     """รากของ checkout หลัก (worktree → checkout หลัก) · ไม่ใช่ git = โฟลเดอร์นั้นเอง"""
     r = subprocess.run(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         return start.resolve(), False
-    return Path(r.stdout.strip()).parent, True
+    common = Path(r.stdout.strip())
+    if common.name != ".git":  # .git แยกที่ (--separate-git-dir / submodule) → parent ของมันไม่ใช่รากโปรเจกต์
+        top = subprocess.run(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.splitlines()
+        if len(top) >= 2 and top[0].strip() and Path(top[1].strip()) == common:  # ไม่ใช่ linked worktree → toplevel คือราก
+            return Path(top[0].strip()), True
+    return common.parent, True
 
 
 def _git(root: Path, *args: str) -> str:
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
@@ -180,6 +186,11 @@ def project_cfg(root: Path) -> dict:
     """DEFAULTS < ตรวจอัตโนมัติ (remote/main_branch เมื่อ .flash.json ไม่ได้ตั้ง) < .flash.json"""
     cfg = dict(DEFAULTS)
     own = read_json(root / ".flash.json")
+    if not own and (root / ".flash.json").is_file():
+        try:
+            json.loads((root / ".flash.json").read_text(encoding="utf-8-sig"))
+        except ValueError:
+            print(f"คำเตือน: อ่าน {root / '.flash.json'} ไม่ได้ (JSON เสีย?) → ใช้ค่าอัตโนมัติแทน", file=sys.stderr)
     if (root / ".git").exists():
         if "remote" not in own:
             cfg["remote"] = detect_remote(root)
@@ -870,7 +881,7 @@ def cmd_run(a) -> int:
             return 1
         if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
             br = subprocess.run(["git", "-C", str(root), "branch", "--show-current"],
-                                capture_output=True, text=True).stdout.strip()
+                                capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
             if br != cfg["main_branch"]:
                 print(f"FLASH_RUN=FAIL checkout หลัก {root} อยู่บน branch '{br or '(detached)'}' ไม่ใช่ "
                       f"{cfg['main_branch']} → สลับกลับ {cfg['main_branch']} (git switch {cfg['main_branch']}) แล้วสั่งใหม่")
@@ -1272,7 +1283,7 @@ def cmd_init(a) -> int:
         if dirty:
             subprocess.run(["git", "-C", str(root), "add", "--", *mine], check=False)
             r = subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
-                                "--", *mine], capture_output=True, text=True)
+                                "--", *mine], capture_output=True, text=True, encoding="utf-8", errors="replace")
             print("commit     " + ("สำเร็จ" if r.returncode == 0 else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
             todo = [t for t in todo if not t.startswith("commit")]
         else:
@@ -1280,7 +1291,7 @@ def cmd_init(a) -> int:
         branch, remote = _git(root, "branch", "--show-current"), new.get("remote", "origin")
         if _git(root, "remote") and branch == new["main_branch"]:
             r = subprocess.run(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
             print("push       " + (f"{remote}/{new['main_branch']} สำเร็จ" if r.returncode == 0
                                      else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
         elif _git(root, "remote"):

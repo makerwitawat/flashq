@@ -967,6 +967,29 @@ class NewProjectTest(unittest.TestCase):
         cfg = json.loads((self.proj / ".flash.json").read_text(encoding="utf-8"))
         self.assertEqual((cfg["main_branch"], cfg["require_plan_in_remote"]), ("main", False))
 
+    def test_thai_path_and_bom_config_and_separate_gitdir(self):
+        """โปรเจกต์จริงที่เจอ: path ไทย (git พิมพ์ UTF-8) · .flash.json มี BOM · .git แยกที่ (--separate-git-dir)"""
+        self.make_repo("main")
+        thai = self.tmp / "โปรเจกต์ ไทย"
+        shutil.move(str(self.proj), str(thai))
+        self.proj = thai
+        (thai / ".flash.json").write_bytes("﻿".encode("utf-8") + json.dumps({"plan_dir": "แผน"}).encode("utf-8"))
+        r = self.run_q("init", "--project", str(thai))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+        self.assertEqual(json.loads((thai / ".flash.json").read_text(encoding="utf-8-sig"))["plan_dir"], "แผน")  # ไม่ทับค่า BOM ที่ผู้ใช้ตั้ง
+        sep = self.tmp / "แยก"
+        proj2 = self.tmp / "sepgit"
+        proj2.mkdir()
+        self.git(proj2, "init", "-q", "-b", "main", "--separate-git-dir", str(sep))
+        (proj2 / "PLAN.md").write_text("# p\n", encoding="utf-8")
+        (proj2 / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False}), encoding="utf-8")
+        self.git(proj2, "add", ".")
+        self.git(proj2, "commit", "-q", "-m", "i")
+        r = subprocess.run([sys.executable, str(FLASHQ), "run", "PLAN.md", "T-01", "--attach", "none", "--no-open"], cwd=proj2,
+                           env=self.env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertIn("FLASH_RUN=OK", r.stdout + r.stderr)  # root = proj2 ไม่ใช่โฟลเดอร์แม่ของ .git ที่แยกไว้
+
     def test_init_install_flag_installs_missing_globals(self):
         self.make_repo("main")
         claude_home = self.tmp / "claude_home"
