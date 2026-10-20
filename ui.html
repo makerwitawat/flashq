@@ -129,6 +129,21 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 #submitMsg.err, #rnMsg.err { color: var(--fail); }
 .run-item { padding: 0.6rem 0; border-top: 1px solid var(--line); }
 .run-item:first-child { border-top: 0; padding-top: 0; }
+/* กล่องยืนยัน/ถาม (แทน confirm/prompt ของเบราว์เซอร์) */
+dialog.ask { width: min(30rem, calc(100vw - 2rem)); }
+dialog.ask[open] { animation: ask-in .16s ease-out; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+.ask-h { display: flex; gap: 0.7rem; align-items: center; }
+.ask-ic { flex: none; width: 2.2rem; height: 2.2rem; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 1.1rem;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); }
+.ask.t-danger .ask-ic { background: color-mix(in srgb, var(--fail) 16%, var(--panel)); color: var(--fail); }
+.ask.t-warn .ask-ic { background: color-mix(in srgb, var(--quota) 18%, var(--panel)); color: var(--quota); }
+.ask-detail { background: var(--code); border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.45rem 0.65rem; overflow-wrap: anywhere; font-size: 0.9em; }
+.ask-body { color: var(--muted); line-height: 1.55; }
+.ask-body ul { margin: 0.25rem 0 0 1.1rem; padding: 0; }
+.ask-err { margin: 0; color: var(--fail); font-weight: 600; }
+.ask-btns { justify-content: flex-end; }
+.ask.t-danger #askOk { background: var(--fail); border-color: var(--fail); color: #fff; }
 .rn-cmp { border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
 .rn-cmp.bad { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 10%, var(--panel)); }
 .rn-list { margin: 0.2rem 0 0 1.2rem; padding: 0; }
@@ -483,6 +498,16 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
       <button value="cancel" formnovalidate>ปิด</button>
       <button id="rnGo" class="primary" value="default">รันเลย</button>
     </div>
+  </form>
+</dialog>
+<dialog id="askDlg" class="ask">
+  <form method="dialog">
+    <div class="ask-h"><span id="askIcon" class="ask-ic">?</span><h2 id="askTitle"></h2></div>
+    <div id="askDetail" class="ask-detail mono" hidden></div>
+    <div id="askBody" class="ask-body" hidden></div>
+    <label id="askInRow" class="field" hidden><span id="askInLabel"></span><input id="askIn" autocomplete="off" spellcheck="false"></label>
+    <p id="askErr" class="ask-err" hidden></p>
+    <div class="row ask-btns"><button value="cancel" id="askNo" formnovalidate>ยกเลิก</button><button value="ok" id="askOk" class="primary">ตกลง</button></div>
   </form>
 </dialog>
 <div id="toast"></div>
@@ -1001,23 +1026,24 @@ document.addEventListener("click", async (ev) => {
   if (t.hasAttribute("data-max")) { setMax(panel); return; }
   if (t.dataset.copy) { ev.stopPropagation(); return copyText(t.dataset.copy); }
   if (t.dataset.cancel) {
-    if (!confirm(`ยกเลิกงาน ${t.dataset.cancel} ?`)) return;
+    const j = (state?.queued || []).find((x) => x.id === t.dataset.cancel);
+    if (!await ask({ title: "ยกเลิกงานในคิว?", detail: j ? `${j.project_name} · ${what(j)}` : t.dataset.cancel, body: "งานจะถูกเอาออกจากคิว (ยังไม่ได้เริ่มทำ)", ok: "ยกเลิกงาน", cancel: "เก็บไว้", tone: "danger" })) return;
     const d = await post("/api/cancel", { id: t.dataset.cancel }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.runnow) { ev.stopPropagation(); return openRunNow(t.dataset.runnow); }
   if (t.dataset.stop) {
     const id = t.dataset.stop, j = (state?.running_list || []).find((x) => x.id === id);
-    if (!confirm(`หยุดงานที่กำลังทำ?\n\n${j ? j.project_name + " · " + what(j) : id}\n\nopencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง`)) return;
     const tail = id.slice(-5);
-    const typed = prompt(`ยืนยันชั้นที่ 2: พิมพ์ 5 ตัวท้ายของ job (${tail}) เพื่อหยุดงาน`);
-    if (typed === null) return;
-    if (typed.trim() !== tail) { toast("พิมพ์ไม่ตรง — ไม่ได้หยุดงาน"); return; }
+    const typed = await ask({ title: "หยุดงานที่กำลังทำ?", detail: j ? `${j.project_name} · ${what(j)}` : id, tone: "danger", ok: "หยุดงาน", cancel: "ทำต่อ",
+      body: "opencode จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง",
+      input: { label: `ยืนยัน: พิมพ์ 5 ตัวท้ายของ job (${tail})`, placeholder: tail, check: (v) => (v === tail ? "" : `พิมพ์ให้ตรง ${tail} ก่อน`) } });
+    if (typed !== tail) return;
     const d = await post("/api/stop", { id, confirm: id }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.dismiss) { const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.retry) {
     const j = [...(state?.history || []), ...(state?.dead || [])].find((x) => x.id === t.dataset.retry);
-    if (!confirm(`ส่งงานนี้เข้าคิวอีกครั้ง?\n\n${j ? j.project_name + " · " + what(j) : t.dataset.retry}\n\n(ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน)`)) return;
+    if (!await ask({ title: "ส่งงานนี้เข้าคิวอีกครั้ง?", detail: j ? `${j.project_name} · ${what(j)}` : t.dataset.retry, body: "ใช้ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน", ok: "ส่งเข้าคิว", icon: "↻" })) return;
     const d = await post("/api/retry", { id: t.dataset.retry, ...runOpts(prefs) }); toast(d.message || d.error || "ผิดพลาด");
     refresh(); if (d.ok && d.job && view === "dash") setTimeout(() => openLog(d.job), 600); return;
   }
@@ -1025,6 +1051,35 @@ document.addEventListener("click", async (ev) => {
   if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.log) openLog(t.dataset.log);
 });
+/* ---------- กล่องยืนยัน/ถาม: await ask({...}) → true/false · มี input → ข้อความ หรือ null (ยกเลิก) ----------
+   body: บรรทัดละข้อ (ขึ้นต้น "• " = รายการ) · detail: กล่องโค้ดบอกว่าทำกับอะไร · tone: danger/warn · input.check(v) คืนข้อความผิด = ไม่ปิด */
+function ask({ title, body = "", detail = "", ok = "ตกลง", cancel = "ยกเลิก", tone = "", icon = "", input = null }) {
+  const dlg = $("askDlg"), inp = $("askIn"), err = $("askErr");
+  if (dlg.open) dlg.close();
+  dlg.className = "ask" + (tone ? " t-" + tone : "");
+  $("askIcon").textContent = icon || (tone === "danger" ? "!" : tone === "warn" ? "!" : input ? "✎" : "?");
+  $("askTitle").textContent = title;
+  $("askDetail").hidden = !detail; $("askDetail").textContent = detail;
+  const lines = String(body).split("\n").filter((l) => l.trim());
+  let h = "", list = [];
+  const flush = () => { if (list.length) h += `<ul>${list.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`; list = []; };
+  for (const l of lines) { if (/^[•·-]\s/.test(l)) list.push(l.replace(/^[•·-]\s/, "")); else { flush(); h += `<div>${esc(l)}</div>`; } }
+  flush();
+  $("askBody").hidden = !h; $("askBody").innerHTML = h;
+  $("askOk").textContent = ok; $("askNo").textContent = cancel;
+  $("askInRow").hidden = !input; err.hidden = true;
+  if (input) { $("askInLabel").textContent = input.label || ""; inp.value = input.value || ""; inp.placeholder = input.placeholder || ""; }
+  const check = () => { const m = input && input.check ? input.check(inp.value.trim()) : ""; err.hidden = !m; err.textContent = m || ""; return !m; };
+  $("askOk").onclick = (e) => { if (!check()) { e.preventDefault(); inp.focus(); } };
+  inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("askOk").click(); } };
+  inp.oninput = () => { if (!err.hidden) check(); };
+  dlg.returnValue = "";
+  return new Promise((resolve) => {
+    dlg.onclose = () => { const yes = dlg.returnValue === "ok"; resolve(input ? (yes ? inp.value.trim() : null) : yes); };
+    dlg.showModal();
+    (input ? inp : tone === "danger" ? $("askNo") : $("askOk")).focus();
+  });
+}
 /* ---------- รันเลย (คู่ขนาน) + จำนวนช่อง ---------- */
 const rnDlg = $("runNowDlg");
 let rnJob = null, rnRep = null;
@@ -1073,12 +1128,15 @@ $("rnGo").onclick = async (e) => {
 };
 $("schedMode").onchange = async () => {
   const v = $("schedMode").value;
-  if (v === "auto" && !confirm("จัดคิวอัตโนมัติ?\n\nงานที่ไม่ชนกัน (คนละโปรเจกต์ หรือไฟล์ไม่ซ้อน) จะเริ่มพร้อมกันเอง และอาจแซงงานที่ชนซึ่งรออยู่ก่อน\n(งานที่ถูกแซงรอเกิน " + (state?.starve_min || 120) + " นาที = ล็อกเป็นหัวคิว)\nทุกงานใช้บัญชี/โควตาเดียวกัน · ถ้าพร้อมกันเป็น 1 จะตั้งเป็น 2 ให้")) { $("schedMode").value = state?.schedule || "fifo"; return; }
+  if (v === "auto" && !await ask({ title: "เปิดจัดคิวอัตโนมัติ?", tone: "warn", ok: "เปิดอัตโนมัติ",
+    body: "• งานที่ไม่ชนกัน (คนละโปรเจกต์ หรือไฟล์ไม่ซ้อน) จะเริ่มพร้อมกันเอง และอาจแซงงานที่ชนซึ่งรออยู่ก่อน\n"
+      + `• งานที่ถูกแซงรอเกิน ${state?.starve_min || 120} นาที = ล็อกเป็นหัวคิว\n• ทุกงานใช้บัญชี/โควตาเดียวกัน · ถ้าพร้อมกันเป็น 1 จะตั้งเป็น 2 ให้` })) { $("schedMode").value = state?.schedule || "fifo"; return; }
   const d = await post("/api/config", { schedule: v }); toast(d.message || d.error || "ผิดพลาด"); refresh();
 };
 $("maxPar").onchange = async () => {
   const n = +$("maxPar").value;
-  if (n > 1 && !confirm(`ให้รันพร้อมกันได้ ${n} งาน?\n\nทุกงานใช้บัญชี/โควตาเดียวกัน และงานโปรเจกต์เดียวกันจะแก้ checkout เดียวกันพร้อมกัน\n(งานที่รอคิวจะเริ่มเพิ่มทันทีถ้ามีช่องว่าง)`)) { $("maxPar").value = String(state?.slots?.max || 1); return; }
+  if (n > 1 && !await ask({ title: `ให้รันพร้อมกันได้ ${n} งาน?`, tone: "warn", ok: `ตั้งเป็น ${n} งาน`,
+    body: "• ทุกงานใช้บัญชี/โควตาเดียวกัน\n• งานโปรเจกต์เดียวกันจะแก้ checkout เดียวกันพร้อมกัน\n• งานที่รอคิวจะเริ่มเพิ่มทันทีถ้ามีช่องว่าง" })) { $("maxPar").value = String(state?.slots?.max || 1); return; }
   const d = await post("/api/config", { max_parallel: n }); toast(d.message || d.error || "ผิดพลาด"); refresh();
 };
 
@@ -1093,7 +1151,7 @@ async function prune(dry) {
     const chk = await post("/api/prune", { days, dry: true });
     if (!chk.ok) { $("pruneMsg").textContent = chk.message || chk.error || "ผิดพลาด"; return; }
     if (!chk.jobs && !chk.files) { $("pruneMsg").textContent = "ไม่มีอะไรให้ลบ"; return; }
-    if (!confirm(`ลบถาวร: ${chk.message.replace("จะลบ", "")}\nเก่ากว่า ${days} วัน — ยืนยัน?`)) return;
+    if (!await ask({ title: "ลบถาวร?", detail: chk.message.replace("จะลบ", "").trim(), body: `ประวัติ/ไฟล์ที่เก่ากว่า ${days} วัน จะถูกลบและกู้คืนไม่ได้`, ok: "ลบถาวร", tone: "danger" })) return;
   }
   const d = await post("/api/prune", { days, dry });
   $("pruneMsg").textContent = d.message || d.error || "ผิดพลาด"; refresh();
@@ -1635,13 +1693,23 @@ document.addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-gact]"); if (!b || b.disabled) return;
   e.stopPropagation(); e.preventDefault();  // ปุ่มใน <summary> ไม่ให้พับ/กางการ์ด
   const d = b.dataset, body = { id: d.gid, action: d.gact };
-  if (d.gact === "verify" && !confirm("ตรวจใหม่: รันเกณฑ์ทุกข้อของเป้าหมายนี้ (นับเป็นรอบใหม่ · ใช้เวลาหลายนาที) ?")) return;
-  if (d.gact === "claude" && !confirm("เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ ?\n(กด Enter ในแอปเพื่อเริ่ม · ใช้โควตา Claude · ไม่มีแอป → เปิดหน้าต่าง CLI แทน)")) return;
-  if (d.gact === "archive" && !confirm("เก็บการ์ดเป้าหมายนี้ออกจากแผงและเสาธง ?\n(ไฟล์ GOAL และประวัติยังอยู่ · สั่งตรวจเรื่องนี้ใหม่ = กลับมาแสดงเอง)")) return;
+  const gl = (state?.goals || []).find((x) => x.id === d.gid), gname = gl ? `${gl.project_name} · ${gl.title}` : "";
+  if (d.gact === "verify" && !await ask({ title: "ตรวจเป้าหมายนี้ใหม่?", detail: gname, icon: "↻", ok: "ตรวจใหม่",
+    body: "• รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที\n• นับเป็นรอบใหม่ของงบรอบ" })) return;
+  if (d.gact === "claude" && !await ask({ title: "ให้ Claude ทำต่อ?", detail: gname, icon: "🤖", ok: "เปิดในแอป Claude",
+    body: "• เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ — กด Enter ในแอปเพื่อเริ่ม\n• ใช้โควตา Claude · เครื่องไม่มีแอป = เปิดหน้าต่าง CLI แทน" })) return;
+  if (d.gact === "archive" && !await ask({ title: "เก็บการ์ดเป้าหมายนี้?", detail: gname, icon: "✖", ok: "เก็บ",
+    body: "• เอาออกจากแผงและเสาธง\n• ไฟล์ GOAL และประวัติยังอยู่ครบ · สั่งตรวจเรื่องนี้ใหม่ = กลับมาแสดงเอง" })) return;
   if (d.gact === "open") body.what = d.what;
   if (d.gact === "human") {
     body.item = d.item; body.ok = !!d.ok;
-    if (!body.ok) { const r = prompt(`${d.item} ไม่ผ่านเพราะอะไร (Claude จะแปลงเป็นเกณฑ์ที่วัดได้)`); if (!r || !r.trim()) return; body.reason = r.trim(); }
+    if (!body.ok) {
+      const it = ((gl && gl.items) || []).find((x) => x.id === d.item);
+      const r = await ask({ title: `${d.item} ไม่ผ่าน — เพราะอะไร?`, detail: it ? it.desc : "", icon: "✎", ok: "บันทึกว่าไม่ผ่าน", tone: "warn",
+        body: "Claude จะแปลงเหตุนี้เป็นเกณฑ์ที่วัดได้ แล้ววนรอบใหม่",
+        input: { placeholder: "เช่น ตัวอักษรเล็กไป อ่านไม่ออกบนจอ 1080p", check: (v) => (v ? "" : "ใส่เหตุสั้น ๆ ก่อน") } });
+      if (!r) return; body.reason = r;
+    }
   }
   b.disabled = true;
   const r = await post("/api/goal", body);
