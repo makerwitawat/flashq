@@ -77,7 +77,8 @@ DEFAULTS = {
 }
 SHELL_POLL_SEC = float(os.environ.get("FLASHQ_SHELL_POLL_SEC") or 30)  # ถามสถานะ tool + วัดโปรเซสถี่แค่ไหนตอน log เงียบ
 SHELL_NAMES = {"powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "sh.exe"}
-SHELL_WORDS = {"cmd", "start", "powershell", "pwsh", "bash", "exe", "nologo", "noprofile", "noninteractive", "command", "null", "out-null"}
+SHELL_WORDS = {"cmd", "start", "powershell", "pwsh", "bash", "exe", "nologo", "noprofile", "noninteractive", "command", "null", "out-null",
+               "executionpolicy", "bypass", "-file", "file", "-command", "-noprofile", "-executionpolicy"}
 
 
 # ---------- ทั่วไป ----------
@@ -987,8 +988,8 @@ def shell_kill(pid: int) -> None:
     kill_tree(pid)
 
 
-def _cmd_norm(s: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[\"'`^]", "", s)).strip().lower()
+def _cmd_norm(s: str) -> str:  # \" ที่ opencode หนีไว้ใน command line ของ shell ต้องหายไปพร้อมเครื่องหมายคำพูด (ไม่งั้นจับคู่ shell ไม่ได้ → เข้าใจผิดว่า shell จบ)
+    return re.sub(r"\s+", " ", re.sub(r"\\*[\"'`^]", "", s)).strip().lower()
 
 
 class ShellWatch:
@@ -1038,7 +1039,7 @@ class ShellWatch:
                 prev = [by[i] for i, c in w["pids"].items() if i in by and abs(by[i]["created"] - c) < 2]
                 toks = [t for t in re.findall(r"[a-z0-9_.-]{3,}", _cmd_norm(r["cmd"])) if t not in SHELL_WORDS]
                 orph = [p for p in tab if p["ppid"] not in by and r["since"] - 2 <= p["created"] <= now
-                        and (p["ppid"] in w["pids"] or any(t in _cmd_norm(p["cmd"]) for t in toks))]
+                        and (p["ppid"] in w["pids"] or sum(t in _cmd_norm(p["cmd"]) for t in toks) >= min(2, len(toks)))]  # คำเดียวซ้ำกันบังเอิญได้ (เช่น tools)
                 group = tree(prev + orph)
                 w["gone"] += 1
             for i, p in group.items():

@@ -1029,6 +1029,20 @@ class FlashqTest(unittest.TestCase):
         w.check(run, now=T + 61)
         w.check([], now=T + 62)
         self.assertEqual(w.seen, {})
+        # เคสจริง 2026-10-20: opencode หนี \" ใน command line ของ shell → ต้องจับคู่ได้ (เดิมเข้าใจผิดว่า shell จบ แล้วฆ่า python/timeout ของเทสต์ที่ยังทำงาน)
+        # + กำพร้าที่ตรงคำเดียวบังเอิญ (tools) ห้ามโดน
+        cmd = r'powershell -NoProfile -ExecutionPolicy Bypass -File "D:\o\run-long.ps1" -Command "regression_all.ps1 -Tier quick"'
+        tab[:] = [tab[0], {"pid": 30, "ppid": 1, "name": "powershell.exe", "created": T + 1, "act": 1,
+                           "cmd": 'powershell.EXE -NoLogo -Command "' + cmd.replace('"', '\\"') + '"'},
+                  {"pid": 31, "ppid": 30, "name": "powershell.exe", "cmd": "x", "created": T + 2, "act": 1},
+                  {"pid": 40, "ppid": 999, "name": "python.exe", "cmd": r"python tools\other.py quick", "created": T + 5, "act": 1}]
+        killed.clear()
+        w = mod.ShellWatch(4, table=lambda: tab, killer=killed.append)
+        run = [{"tool": "bash", "cmd": cmd, "what": "", "since": T, "session": "s3"}]
+        for t in (30, 60, 90):
+            tab[2]["act"] += 1
+            rep = w.check(run, now=T + t)
+        self.assertEqual((rep["state"], rep["pids"], killed), ("active", 2, []))
         w2 = mod.ShellWatch(4, table=lambda: self.fail("ไม่ควรอ่านตาราง"), killer=killed.append)
         self.assertIsNone(w2.check([{"tool": "grep", "cmd": "", "since": T, "session": "s"}], now=T))
 
