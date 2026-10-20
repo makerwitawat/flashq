@@ -1275,6 +1275,12 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual((done["goal"]["round"], g["last_job"]["id"], g["last_job"]["round"]), (1, "J0", 1))
         self.assertEqual(g["rounds"][-1]["flash"], 0)  # รอบนี้ไม่มีงาน Flash = ตรวจอย่างเดียว
         self.assertEqual(g["phase"]["step"], "review")  # Flash จบหลังตรวจล่าสุด = รอ Claude ตรวจ
+        self.assertEqual(g["unverified"], [1])
+        run3 = {"id": "J3", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R3.md"}
+        g = mod.ui_goals([run3], [dict(done)])[0]  # ข้าม verify รอบ 1 แล้วส่งรอบถัดไป → ปุ่มขั้นใช้รอบของงานที่รัน + เตือน
+        self.assertEqual((g["phase"]["step"], g["phase"]["round"], g["unverified"]), ("flash", 3, [1]))
+        self.assertTrue(g["phase"]["notes"][0]["warn"])
+        self.assertIn("รอบ 1 Flash ทำเสร็จแล้วแต่ยังไม่ได้ goal verify", g["phase"]["notes"][0]["t"])
         self.assertIn("VAL=old", g["rounds"][-1]["results"]["G-01"]["tail"])
         (self.proj / "src" / "b.txt").write_text("x\n", encoding="utf-8")
         self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # มีงานใหม่แต่ผลเดิมซ้ำ = STOP

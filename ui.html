@@ -266,7 +266,7 @@ summary.goal-h::before { content: "▸"; color: var(--muted, #888); } details[op
 summary.goal-h button { margin-left: auto; }
 .goal-st { font-weight: 700; padding: 0 0.5rem; border-radius: 1rem; font-size: 0.82rem; color: #fff; background: var(--accent); white-space: nowrap; }
 .goal-st.v-DONE { background: var(--ok); } .goal-st.v-STOP { background: var(--fail); } .goal-st.v-DONE_NEEDS_USER { background: var(--quota); }
-.goal-bar { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: 0.45rem; align-items: center; font-size: 0.88rem; margin-top: 0.3rem; }
+.goal-bar { display: grid; grid-template-columns: 8.5rem 1fr auto; gap: 0.45rem; align-items: center; font-size: 0.88rem; margin-top: 0.3rem; }
 .goal-bar .t { height: 0.5rem; background: var(--line); border-radius: 0.25rem; overflow: hidden; }
 .goal-bar .t i { display: block; height: 100%; background: var(--accent); } .goal-bar .t i.warn { background: var(--quota); } .goal-bar .t i.over { background: var(--fail); }
 .goal-items { list-style: none; padding: 0; margin: 0.45rem 0 0; } .goal-items li { margin: 0.2rem 0; }
@@ -786,6 +786,7 @@ function goalHTML(g) {
   const [stT, stD] = GOAL_ST[g.verdict] || [g.verdict, ""];
   const hrs = (g.hours || 0) * 3600, el = g.elapsed_sec || 0, tp = hrs ? Math.min(100, (el / hrs) * 100) : 0, rp = Math.min(100, (n / rmax) * 100);
   const cls = (p) => (p >= 100 ? "over" : p >= 80 ? "warn" : "");
+  const doing = g.phase && g.phase.step === "flash" ? g.phase.round : 0;  // รอบที่ Flash ทำ/เข้าคิวอยู่ (ตามชื่อแผน _R<n>)
   const items = (g.items || []).map((i) => {
     if (i.human) {
       const h = hres[i.id], can = g.verdict === "DONE_NEEDS_USER" || g.verdict === "DONE";
@@ -848,7 +849,7 @@ function goalHTML(g) {
   }
   return `<article class="goal-card v-${esc(g.verdict)}">
     <div class="goal-h">${head}</div>
-    <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
+    <div class="goal-bar" title="นับรอบเมื่อรัน goal verify (ท้ายแต่ละรอบ) เท่านั้น · ระหว่าง Flash ทำ ตัวเลขนี้ยังไม่ขยับ"><span>ตรวจแล้ว ${n}/${rmax} รอบ</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">${doing ? `<b>กำลังทำรอบ ${doing}</b> · ` : ""}${(g.unverified || []).length ? `<span style="color:var(--fail)">⚠ รอบ ${g.unverified.join(", ")} ยังไม่ verify</span> · ` : ""}เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
     ${phase}${acts}${stop}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;

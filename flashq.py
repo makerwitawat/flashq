@@ -2701,11 +2701,17 @@ def goal_next_plan(gl: dict, n: int) -> dict:
 
 
 def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list[dict], queued: list[dict],
-               last_job: dict, act: dict) -> dict:
+               last_job: dict, act: dict, unverified: list[int] | None = None) -> dict:
     """ขั้นย่อยตอนนี้ของเป้าหมาย: step = flag · plan · flash · review · verify · result + ข้อความ + เคลื่อนไหวล่าสุดกี่วินาที
-    notes = สิ่งที่ session/subagent กำลังทำ (ให้รู้ว่าไม่ได้ค้าง) · warn = นิ่งนาน/รอคุณ"""
+    notes = สิ่งที่ session/subagent กำลังทำ (ให้รู้ว่าไม่ได้ค้าง) · warn = นิ่งนาน/รอคุณ
+    round = รอบที่กำลังทำ (งานที่รัน/เข้าคิวอยู่ชนะ — เลขรอบตามชื่อแผน _R<n> อาจนำจำนวนรอบที่ verify แล้ว)
+    unverified = รอบที่ Flash ทำเสร็จหลัง verify ล่าสุดแต่ยังไม่มีใคร verify → เตือน (ตัวเลขรอบ/ผ่าน/G-xx ยังเป็นของก่อนรอบนั้น)"""
     n_next = len(gl.get("rounds") or []) + 1
     notes = []
+    skipped = [n for n in unverified or [] if n not in {(r.get("goal") or {}).get("round") for r in runs + queued}]
+    if skipped and (runs or queued):  # ไม่มีงานรัน/คิว = ขั้น "รอตรวจ" บอกอยู่แล้ว
+        notes.append({"t": f"⚠ รอบ {', '.join(map(str, skipped))} Flash ทำเสร็จแล้วแต่ยังไม่ได้ goal verify — "
+                           "ตัวเลขรอบ/ผ่าน และผล G-xx บนการ์ดจึงยังเป็นของก่อนรอบนั้น", "warn": True})
     if act:
         st = act.get("state")
         main = ("❓ รอคุณตอบคำถาม/อนุมัติใน session นั้น" if st == "ask"
@@ -2719,8 +2725,8 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
     sess_warn = bool(act) and (act.get("state") == "ask" or (act.get("state") == "end" and not act.get("subs")) or (sess_ago or 0) > 1800)
     fresh = last_job and last_job.get("finished", "") > ((last or {}).get("at") or gl.get("started", ""))
 
-    def ph(step, label, ago=None, what="เคลื่อนไหวล่าสุด", warn=False, **kw):
-        return dict(step=step, label=label, ago_sec=ago, ago_what=what, warn=warn, notes=notes, round=n_next, **kw)
+    def ph(step, label, ago=None, what="เคลื่อนไหวล่าสุด", warn=False, rnd=None, **kw):
+        return dict(step=step, label=label, ago_sec=ago, ago_what=what, warn=warn, notes=notes, round=rnd or n_next, **kw)
 
     if busy.get("what") == "verify":
         return ph("verify", "🔍 กำลังรันเกณฑ์ตรวจทุกข้อ (goal verify)", _secs(busy.get("at", "")), "เริ่ม")
@@ -2729,12 +2735,12 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
     if runs:
         idle = min(r.get("log_idle_sec") or 0 for r in runs)
         return ph("flash", f"🧑‍💻 Flash กำลังทำรอบ {', '.join(str(r['goal']['round']) for r in runs)} · ช่อง {', '.join(str(r.get('slot') or '?') for r in runs)}",
-                  idle, "log เคลื่อนไหวล่าสุด", idle > 1200, job=runs[0]["id"])
+                  idle, "log เคลื่อนไหวล่าสุด", idle > 1200, max(r["goal"]["round"] for r in runs), job=runs[0]["id"])
     if queued:
         q = queued[0]
         why = q.get("wait_reason") or ""
         return ph("flash", f"⏳ แผนรอบ {q['goal']['round']} อยู่ในคิว ลำดับ {q.get('position', '?')}" + (f" · {why}" if why else ""),
-                  q.get("wait_sec"), "เข้าคิวมา")
+                  q.get("wait_sec"), "เข้าคิวมา", rnd=q["goal"]["round"])
     if fresh and verdict != "DONE":
         return ph("review", f"📥 Flash ทำรอบ {last_job['round']} เสร็จแล้ว — รอ Claude ตรวจ (goal verify)",
                   sess_ago if act else last_job.get("ago_sec"), "เคลื่อนไหวล่าสุด" if act else "Flash เสร็จมา", sess_warn or (not act and (last_job.get("ago_sec") or 0) > 1800))
@@ -2822,9 +2828,13 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
                     qs.append(r)
                 elif r.get("finished") and r["finished"] > last_job.get("finished", ""):  # งาน Flash ล่าสุดที่จบ → การ์ดบอกว่ารอใครอยู่
                     last_job = {"id": r["id"], "state": r.get("state", ""), "finished": r["finished"], "round": r["goal"]["round"]}
+        last = (gl.get("rounds") or [None])[-1]
+        since = (last or {}).get("at") or gl.get("started", "")
+        unv = sorted({r["goal"]["round"] for r in rows if id(r) in rn and (r.get("goal") or {}).get("id") == gl["id"]
+                      and r.get("finished", "") > since and r.get("state") not in ("cancelled", "busy", "queue_timeout")
+                      and not any(r is x for x in running + queued)})
         if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
             continue
-        last = (gl.get("rounds") or [None])[-1]
         verdict = last["verdict"] if last else "START"
         upd = _secs(gl.get("updated", "")) or 0
         if verdict in ("DONE", "DONE_NEEDS_USER", "STOP") and upd > 3 * 86400:
@@ -2838,11 +2848,11 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
         bz = read_json(GOALS_DIR / f"{gl['id']}.busy.json")
         busy = bz if bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0)) else {}
         lj = dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {}
-        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict != "DONE" else {})
+        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict != "DONE" else {}, unv)
         out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
                         elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
-                        jobs=jobs_now, last_job=lj, phase=phase,
+                        jobs=jobs_now, last_job=lj, phase=phase, unverified=unv,
                         project_name=Path(gl.get("project", "")).name))
     for r in rows:
         if id(r) in rn and not r.get("goal"):
