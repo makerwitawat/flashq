@@ -859,6 +859,44 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
         self.assertIn("ขั้นต่ำ 0.05", r.stdout)
 
+    def test_server_activity_sees_child_session_and_running_tool(self):
+        """ถามเซิร์ฟเวอร์: session ลูกขยับเมื่อไร + tool ไหนกำลังรัน (ใช้บอกสาเหตุค้าง และกันฆ่างานที่ subagent ยังทำอยู่)"""
+        import http.server
+        import importlib.util
+        import threading
+        now_ms = int(time.time() * 1000)
+        routes = {
+            "/session/ses_p/children": [{"id": "ses_c", "time": {"updated": now_ms - 5000}}],
+            "/session/ses_p/message": [{"info": {"time": {"created": now_ms - 600000}}, "parts": [
+                {"type": "tool", "tool": "task", "state": {"status": "running", "input": {"description": "T-04"}, "time": {"start": now_ms - 600000}}}]}],
+            "/session/ses_c/message": [{"info": {"time": {"created": now_ms - 300000}}, "parts": [
+                {"type": "tool", "tool": "bash", "state": {"status": "running", "input": {"command": "blender --hang"}, "time": {"start": now_ms - 300000}}}]}],
+        }
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps(routes.get(self.path, [])).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            spec = importlib.util.spec_from_file_location("flashq_mod", FLASHQ)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            act = mod.server_activity(f"http://127.0.0.1:{srv.server_address[1]}", "ses_p")
+        finally:
+            srv.shutdown()
+        self.assertIsNotNone(act)
+        self.assertLess(time.time() - act["updated"], 10)  # ลูกขยับ 5 วิก่อน
+        self.assertEqual({r["tool"] for r in act["running"]}, {"task", "bash"})
+        self.assertIsNone(mod.server_activity("http://127.0.0.1:1", "ses_p"))
+
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -881,6 +881,37 @@ def open_in_desktop(sid: str, server: str) -> None:
     print((r.stdout.strip() or f"DESKTOP_OPEN=FAIL rc={r.returncode}"), flush=True)
 
 
+def server_activity(server: str, sid: str) -> dict | None:
+    """ถามเซิร์ฟเวอร์ opencode (เมื่อ attach) ว่า session นี้ + session ลูก (subagent ที่ /flash ส่งไปทำ T-xx) ขยับล่าสุดเมื่อไร และมี tool ไหนกำลังรันอยู่
+    log ของ parent เงียบได้ทั้งที่ subagent กำลังทำงาน → ใช้ตัดสินว่า "ค้างจริง" + บอกสาเหตุ (tool ค้าง vs รอโมเดล) · ถามไม่ได้ = None (ใช้ log อย่างเดียว)"""
+    import urllib.request
+
+    def get(path):
+        return json.loads(urllib.request.urlopen(server.rstrip("/") + path, timeout=8).read())
+    try:
+        updated, running, ids = 0, [], [sid]
+        try:
+            for c in get(f"/session/{sid}/children"):
+                ids.append(c["id"])
+                updated = max(updated, (c.get("time") or {}).get("updated", 0))
+        except Exception:
+            pass
+        for i in ids:
+            for m in get(f"/session/{i}/message")[-2:]:
+                updated = max(updated, (m.get("info", {}).get("time") or {}).get("created", 0))
+                for p in m.get("parts", []):
+                    st = p.get("state") or {}
+                    t = st.get("time") or p.get("time") or {}
+                    updated = max(updated, t.get("end", 0), t.get("start", 0))
+                    if p.get("type") == "tool" and st.get("status") == "running":
+                        inp = st.get("input") or {}
+                        running.append({"tool": p.get("tool"), "what": str(st.get("title") or inp.get("command") or inp.get("description") or "")[:100],
+                                        "since": t.get("start", 0) / 1000, "session": i, "cmd": str(inp.get("command") or "")[:2000]})
+        return {"updated": updated / 1000 if updated else 0, "running": running}
+    except Exception:
+        return None
+
+
 def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
@@ -904,6 +935,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                 save_job(job)
                 if not no_open:
                     open_in_desktop(sid, attach)
+            last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
             while True:  # เฝ้า 2 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ
                 try:
@@ -927,8 +959,26 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                                 maxgap = max(maxgap, time.time() - last_chg)
                             last_m, last_chg = m, time.time()
                         limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
+                        act = None
+                        if limit and idle >= limit / 2 and attach.startswith("http") and job.get("session") and time.time() - last_poll >= 20:
+                            last_poll = time.time()  # log เงียบแล้ว → ถามเซิร์ฟเวอร์ว่า subagent/tool ยังขยับไหม (ไม่ถามทุกรอบ)
+                            act = server_activity(attach, job["session"])
+                            if act and act["updated"]:
+                                srv_idle = time.time() - act["updated"]
+                                idle = min(idle, srv_idle)
                         if limit and idle >= limit:
-                            why = f"STALL: log เงียบ {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
+                            why = f"STALL: ไม่มีความเคลื่อนไหว {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
+                            act = act or (server_activity(attach, job["session"]) if attach.startswith("http") and job.get("session") else None)
+                            if act is not None:
+                                if act["running"]:
+                                    r0 = sorted(act["running"], key=lambda r: r["session"] == job["session"])[0]  # tool ของ subagent (ลึกสุด) ก่อน tool `task` ของ parent
+                                    why += f" · สาเหตุ: tool `{r0['tool']}` ค้าง ({r0['what']}) รันมา {(time.time() - r0['since']) / 60:.0f} นาทีไม่จบ → คำสั่ง/โปรเซสไม่ตอบ"
+                                    if re.search(r"Start-Process|start\s+/b|nohup|Popen|\)\s*&\s*$|&\s*$", r0.get("cmd", ""), re.M | re.I):
+                                        why += " · ⚠ คำสั่งเปิดโปรเซสค้าง (เช่นเซิร์ฟเวอร์) ในเบื้องหลัง → bash tool รอ handle ของลูกไม่ยอมคืนค่า: ให้เขียนสคริปต์ที่ เปิด-ทดสอบ-ปิด ในคำสั่งเดียว (try/finally) หรือทดสอบแบบ in-process"
+                                else:
+                                    why += f" · สาเหตุ: ไม่มี tool ใดรันอยู่ → รอโมเดล/ผู้ให้บริการ ({job.get('model') or 'ค่าเริ่มต้น'}) ตอบไม่ได้"
+                            else:
+                                why += " · สาเหตุแยกไม่ได้ (ไม่ได้ต่อ server ให้ถามสถานะ tool — ใช้ --attach live)"
                     if why:
                         kill_tree(p.pid)
                         p.wait()
