@@ -1244,6 +1244,257 @@ def plan_size(text: str) -> tuple[int, int]:
     return len(lines), code
 
 
+# ---------- ตรวจแผนพิการก่อนส่ง Flash (เชิงกลไก ไม่ใช้โมเดล) ----------
+# alias ในตัวของ PowerShell ที่ชื่อชนคำสั่ง/ชื่อที่คนวางแผนมักตั้งใจหมายถึงอย่างอื่น (sc = Set-Content ไม่ใช่ sc.exe · ls -la พัง ฯลฯ)
+PS_ALIASES = {"sc": "Set-Content", "r": "Invoke-History", "h": "Get-History", "ls": "Get-ChildItem", "cat": "Get-Content",
+              "dir": "Get-ChildItem", "cp": "Copy-Item", "mv": "Move-Item", "rm": "Remove-Item", "rmdir": "Remove-Item",
+              "del": "Remove-Item", "ps": "Get-Process", "kill": "Stop-Process", "sort": "Sort-Object", "curl": "Invoke-WebRequest",
+              "wget": "Invoke-WebRequest", "diff": "Compare-Object", "man": "help", "where": "Where-Object", "type": "Get-Content",
+              "echo": "Write-Output", "gc": "Get-Content", "gi": "Get-Item", "gl": "Get-Location", "gp": "Get-ItemProperty",
+              "gm": "Get-Member", "gu": "Get-Unique", "gv": "Get-Variable", "ni": "New-Item", "sl": "Set-Location",
+              "sp": "Set-ItemProperty", "sv": "Set-Variable", "si": "Set-Item", "iwr": "Invoke-WebRequest", "irm": "Invoke-RestMethod",
+              "iex": "Invoke-Expression", "fc": "Format-Custom", "fl": "Format-List", "ft": "Format-Table", "fw": "Format-Wide",
+              "lp": "Out-Printer", "nv": "New-Variable", "ri": "Remove-Item", "rv": "Remove-Variable", "md": "mkdir", "rd": "Remove-Item"}
+FILE_EXTS = set("""c cc cpp cxx h hh hpp hxx inl ipp cs vb fs py pyw pyi js mjs cjs ts tsx jsx vue svelte java kt kts go rs rb php pl lua
+swift m mm scala sh bash zsh ps1 psm1 psd1 bat cmd md markdown txt rst json jsonc yaml yml toml ini cfg conf xml xsd xaml html htm css scss
+less sql csv tsv rc def sln vcxproj filters csproj props targets cmake mk mak gradle lock env gitignore glsl hlsl fx shader nif dds tga png
+jpg jpeg gif bmp ico svg wav ogg mp3 dll exe lib pdb proto graphql tf hcl dockerfile log""".split())
+LABEL_RE = re.compile(r"(?<![\u0E00-\u0E7F\w])\**(ก่อน|หลัง)\**(?:\s*\([^()\n]*\))?\s*[:：]")
+MULTI_OK_RE = re.compile(r"replace_all|ทุกที่|ทั้งหมดที่|หลายที่")  # แผนบอกเองว่าแก้หลายที่ (ไม่ระบุจำนวน)
+MULTI_N_RE = re.compile(r"(\d+|สอง|สาม)\s*ที่")  # "มี 2 ที่" / "ต้องเจอ 3 ที่พอดี" / "ทั้งสองที่" → จำนวนที่ต้องเจอ
+NEW_AFTER_RE = re.compile(r"^[^`]*?(สร้างใหม่|ไฟล์ใหม่|\(ใหม่\)|ใหม่\b|\bnew\b|ถ้ามี)", re.I)  # ไฟล์ใหม่ / ไม่บังคับ
+SCOPE_RE = re.compile(r"ตัวหา|เลือกที่อยู่ใน|ถ้าเจอหลายที่|\(\s*ใน[\s`]")  # anchor มีขอบเขตกำกับ (ใน `ฟังก์ชัน` ...) → เจอหลายที่ = เตือน
+NEW_BEFORE_RE = re.compile(r"(สร้างใหม่|ไฟล์ใหม่|ใหม่|new)\s*\**\s*[:：]?\s*\**\s*$", re.I)
+
+
+def _plan_path_tok(tok: str, root: Path | None = None) -> str:
+    """`token` ที่ดูเป็น path ไฟล์ (มี / หรือ \\ หรือนามสกุลที่รู้จัก) → path แบบ / · ไม่ใช่ = """""
+    t = re.sub(r":\d+(-\d+)?$", "", tok.strip().strip("~,;()\"'*"))
+    if not t or " " in t or not PATHISH_RE.match(t) or any(c in t for c in "*?<>") or t.startswith(("-", "http:", "https:")):
+        return ""
+    base = re.split(r"[/\\]", t.rstrip("/\\"))[-1]
+    ext = base.rsplit(".", 1)[-1].lower() if "." in base[1:] else ""
+    if not (("/" in t or "\\" in t) and re.search(r"[A-Za-z]", base) or ext in FILE_EXTS) or t[0].isdigit():
+        return ""
+    p = Path(t)
+    if p.is_absolute() or re.match(r"[A-Za-z]:", t):
+        if not root:
+            return ""
+        try:
+            t = p.relative_to(root).as_posix()
+        except ValueError:
+            return ""
+    t = t.replace("\\", "/")
+    return t[2:] if t.startswith("./") else t
+
+
+def _plan_tasks(text: str):
+    """แยกบล็อกงาน T-xx: [(id, checked, [(lineno, line), ...])] — จบบล็อกที่หัวงานถัดไป / ## / ---"""
+    out, cur, fence = [], None, ""
+    for i, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"\s*(`{3,}|~{3,})", line)
+        if m and not fence:
+            fence = m.group(1)
+        elif m and fence and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+            fence = ""
+        elif not fence:
+            tm = TASK_MARK_RE.match(line)
+            if tm:
+                cur = (tm.group(1), bool(re.match(r"\s*[-*]\s*\[[xX]\]", line)), [])
+                out.append(cur)
+            elif line.startswith("## ") or line.strip() == "---":
+                cur = None
+        if cur:
+            cur[2].append((i, line))
+    return out
+
+
+def _snippets(lines):
+    """ก่อน/หลัง ในบล็อกงาน → [(label, lineno, ข้อความบรรทัดป้าย, เนื้อโค้ด)] (แบบ `inline` หรือ code block บรรทัดถัดไป)"""
+    out, k = [], 0
+    while k < len(lines):
+        no, line = lines[k]
+        m = LABEL_RE.search(line)
+        k += 1
+        if not m or re.match(r"\s*(`{3,}|~{3,})", line):
+            continue
+        rest = line[m.end():]
+        im = re.match(r"\s*(`+)(.+?)\1", rest)  # ข้อความบรรยายก่อน backtick (เช่น "ก่อน: ไฟล์ปัจจุบัน 132 บรรทัด") = ไม่ใช่ anchor
+        if im:
+            code = im.group(2).strip()
+            if "\\n" in code:  # inline ที่เขียน \n \t แทนขึ้นบรรทัด/tab
+                code = code.replace("\\n", "\n").replace("\\t", "\t")
+            out.append((m.group(1), no, line, code))
+            continue
+        if rest.strip():
+            continue
+        j = k
+        while j < len(lines) and not lines[j][1].strip():
+            j += 1
+        fm = re.match(r"(\s*)(`{3,}|~{3,})", lines[j][1]) if j < len(lines) else None
+        if not fm:
+            continue
+        ind, fence, body = len(fm.group(1)), fm.group(2), []
+        j += 1
+        while j < len(lines):
+            ln = lines[j][1]
+            cm = re.match(r"\s*(`{3,}|~{3,})\s*$", ln)
+            if cm and cm.group(1)[0] == fence[0] and len(cm.group(1)) >= len(fence):
+                break
+            body.append(ln[ind:] if ln[:ind].strip() == "" else ln.lstrip())
+            j += 1
+        out.append((m.group(1), no, line, "\n".join(body)))
+        k = j + 1
+    return out
+
+
+def _lenient(s: str) -> str:
+    return "\n".join(x.strip() for x in s.replace("\r\n", "\n").split("\n") if x.strip())
+
+
+class PlanSource:
+    """ไฟล์ของโปรเจกต์ ณ rev (git) หรือในโฟลเดอร์ (ไม่ใช่ git) — ให้ตรวจแผนเทียบของจริง"""
+
+    def __init__(self, root: Path, rev: str = ""):
+        self.root, self.rev, self.cache = root, rev, {}
+        if rev:
+            r = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", "--name-only", rev], capture_output=True)
+            if r.returncode != 0:
+                raise ValueError(f"อ่าน {rev} ไม่ได้")
+            files = [x.decode("utf-8", "replace") for x in r.stdout.split(b"\0") if x]
+        else:
+            files = []
+            for dp, dns, fns in os.walk(root):
+                dns[:] = [d for d in dns if d not in (".git", "node_modules", ".tmp", "__pycache__", ".venv")]
+                files += [Path(dp, f).relative_to(root).as_posix() for f in fns]
+                if len(files) > 200_000:
+                    break
+        self.files = {f.lower(): f for f in files}
+        self.dirs = {d.lower() for f in files for d in (f.rsplit("/", n)[0] for n in range(1, f.count("/") + 1))}
+        self.bases: dict[str, list[str]] = {}
+        for f in files:
+            self.bases.setdefault(f.rsplit("/", 1)[-1].lower(), []).append(f)
+
+    def find(self, p: str) -> str:
+        return self.files.get(p.lower().rstrip("/"), "") or (p if p.rstrip("/").lower() in self.dirs else "")
+
+    def read(self, p: str) -> str:
+        if p not in self.cache:
+            if self.rev:
+                r = subprocess.run(["git", "-C", str(self.root), "show", f"{self.rev}:{p}"], capture_output=True)
+                data = r.stdout if r.returncode == 0 else b""
+            else:
+                try:
+                    data = (self.root / p).read_bytes()
+                except OSError:
+                    data = b""
+            self.cache[p] = data.decode("utf-8-sig", "replace").replace("\r\n", "\n")
+        return self.cache[p]
+
+
+def plan_precheck(text: str, tasks: str, src: PlanSource) -> tuple[list[str], list[str]]:
+    """ตรวจงาน T-xx ที่สั่ง (ยังไม่ติ๊ก) → (ข้อผิด, คำเตือน)
+    ผิด: path ในหัวงาน/บรรทัด "ไฟล์" ไม่มีจริง (ยกเว้นไฟล์ที่แผนบอกว่าสร้างใหม่) · ข้อความ "ก่อน:" เจอในไฟล์ 0 ครั้ง/หลายครั้ง
+    เตือน: คำสั่งใน ยืนยัน/แดง/เขียว ขึ้นต้นด้วย alias ในตัวของ PowerShell · function ในโค้ดของแผนตั้งชื่อชน alias"""
+    match = task_matcher(tasks)
+    errs, warns = [], []
+    if not match:
+        return errs, warns
+    blocks = _plan_tasks(text)
+    is_file_line = lambda ln: bool(re.match(r"\s*[-*]?\s*\**ไฟล์\**\s*[:：]", ln))
+    # ไฟล์ที่ทั้งแผนบอกว่าสร้างใหม่ (งานก่อนหน้าสร้าง งานหลังแก้ต่อได้)
+    new_files: set[str] = set()
+    task_files: dict[str, list[tuple[int, str, str]]] = {}
+    for tid, _, lines in blocks:
+        for idx, (no, line) in enumerate(lines):
+            if idx and not is_file_line(line):
+                continue
+            parts = re.split(r"`([^`\n]+)`", line)
+            for p in range(1, len(parts), 2):
+                tok = parts[p].strip()  # `คำสั่ง ที่มี ช่องว่าง` ไม่ใช่ path
+                path = _plan_path_tok(tok, src.root)
+                if not path:
+                    continue
+                task_files.setdefault(tid, []).append((no, tok, path))
+                if NEW_AFTER_RE.match(parts[p + 1]) or NEW_BEFORE_RE.search(parts[p - 1]):
+                    new_files.add(path.lower())
+    afters = [(no, _lenient(code)) for _, _, lines in blocks for lab, no, _, code in _snippets(lines) if lab == "หลัง"]
+
+    def resolve(tok_path: str, tid: str) -> str:
+        """path ในบรรทัดก่อน: (มักเป็นแค่ชื่อไฟล์) → path จริงใน repo · "" = ไม่รู้ว่าไฟล์ไหน/ไม่มี"""
+        if "/" in tok_path:
+            return src.find(tok_path)
+        mine = [p for _, _, p in task_files.get(tid, []) if p.rsplit("/", 1)[-1].lower() == tok_path.lower()]
+        if len(mine) == 1:
+            return src.find(mine[0])
+        hits = src.bases.get(tok_path.lower(), [])
+        return src.find(tok_path) or (hits[0] if len(hits) == 1 else "")
+
+    for tid, checked, lines in blocks:
+        if checked or not match(tid):
+            continue
+        for no, tok, path in task_files.get(tid, []):
+            if path.lower() in new_files or src.find(path):
+                continue
+            if "/" not in path and src.bases.get(path.lower()):
+                continue  # ชื่อไฟล์เปล่า ๆ ที่มีอยู่ใน repo
+            hint = src.bases.get(path.rsplit("/", 1)[-1].lower(), [])
+            hint = f" (หรือหมายถึง {', '.join(hint[:3])}?)" if hint else ""
+            errs.append(f"บรรทัด {no} ({tid}): ไม่พบไฟล์ `{tok}`{hint} — ถ้าเป็นไฟล์ใหม่ให้เขียน (ใหม่) ต่อท้าย")
+        heads = [p for _, _, p in task_files.get(tid, [])]
+        prev = {no: ln for (no, _), (_, ln) in zip(lines[1:], lines)}  # บรรทัดก่อนป้าย (มักมีคำกำกับขอบเขต)
+        for lab, no, line, code in _snippets(lines):
+            if lab != "ก่อน" or not code.strip() or re.fullmatch(r"<[^>\n]*>", code.strip()):
+                continue
+            pre = line[:LABEL_RE.search(line).start()]
+            cand = [_plan_path_tok(t, src.root) for b in re.findall(r"`([^`\n]+)`", pre) for t in b.split()]
+            cand = [c for c in cand if c]
+            if cand:
+                tokp = cand[-1]
+            elif len(heads) == 1:
+                tokp = heads[0]
+            else:
+                continue  # บอกไม่ได้ว่าไฟล์ไหน → ไม่ตัดสิน
+            if tokp.lower() in new_files or any(h.lower() in new_files and h.rsplit("/", 1)[-1].lower() == tokp.rsplit("/", 1)[-1].lower() for h in heads):
+                continue
+            real = resolve(tokp, tid)
+            if not real or real.lower() not in src.files:
+                continue  # ไฟล์หาไม่เจอ = รายงานในข้อ path แล้ว
+            body = src.read(real)
+            exact = "\n".join(x.rstrip() for x in code.split("\n")).strip("\n")
+            n = "\n".join(x.rstrip() for x in body.split("\n")).count(exact) if exact else 0
+            if n == 0:
+                n = _lenient(body).count(_lenient(code))
+            nm = MULTI_N_RE.search(line)
+            want = ({"สอง": 2, "สาม": 3}.get(nm.group(1)) or int(nm.group(1))) if nm else 1
+            if n == want or (n > 1 and MULTI_OK_RE.search(line)):
+                continue
+            if n == 0 and any(ano < no and _lenient(code) in atext for ano, atext in afters):
+                continue  # ข้อความนี้มาจาก "หลัง:" ของงานก่อนหน้าในแผนเดียวกัน
+            first = exact.split("\n")[0].strip()[:80]
+            if n > want and SCOPE_RE.search(line[:LABEL_RE.search(line).end()] + " " + prev.get(no, "")):
+                warns.append(f"บรรทัด {no} ({tid}): ข้อความ ก่อน: ใน {real} เจอ {n} ที่ (แผนกำกับขอบเขตไว้ · Flash ต้องเลือกเอง) — `{first}`")
+                continue
+            why = "ไม่เจอ (anchor เก่า/ผิด · branch หลักเปลี่ยนแล้ว?)" if n == 0 else (f"เจอ {n} ที่ (กำกวม · ขยาย anchor ให้ไม่ซ้ำ หรือเขียน replace_all ถ้าตั้งใจแก้ทุกที่)" if want == 1
+                                                       else f"เจอ {n} ที่ แต่แผนบอก {want} ที่")
+            errs.append(f"บรรทัด {no} ({tid}): ข้อความ ก่อน: ใน {real} {why} — `{first}`")
+        for no, line in lines:
+            if not re.match(r"\s*[-*]?\s*\**(ยืนยัน|แดง|เขียว)", line):
+                continue
+            for cmd in re.findall(r"`([^`\n]+)`", line):
+                for seg in re.split(r";|&&|\|\|", cmd):
+                    w = seg.strip().split(" ", 1)[0].lower() if seg.strip() else ""
+                    if w in PS_ALIASES:
+                        warns.append(f"บรรทัด {no} ({tid}): คำสั่ง `{seg.strip()[:60]}` ขึ้นต้นด้วย `{w}` = alias ในตัวของ PowerShell "
+                                     f"({PS_ALIASES[w]}) — ใช้ชื่อเต็ม/ชื่อ .exe")
+    for no, line in enumerate(text.splitlines(), 1):
+        fm = re.match(r"\s*function\s+([\w-]+)", line, re.I)
+        if fm and fm.group(1).lower() in PS_ALIASES:
+            warns.append(f"บรรทัด {no}: function {fm.group(1)} ชื่อชน alias ในตัวของ PowerShell ({PS_ALIASES[fm.group(1).lower()]}) "
+                         f"— alias ชนะ function จะไม่ถูกเรียก → ตั้งชื่ออื่น")
+    return errs, warns
+
+
 def cmd_run(a) -> int:
     if isinstance(a.message, list):  # investigate รับบรีฟเป็นหลายคำ
         a.message = " ".join(a.message).strip()
@@ -1295,6 +1546,20 @@ def cmd_run(a) -> int:
                 return 1
             if n > PLAN_SOFT[0] or code > PLAN_SOFT[1]:
                 print(f"WARN: แผนใหญ่ ({why} · แนะนำ ≤{PLAN_SOFT[0]}/{PLAN_SOFT[1]}) — โค้ดยาวควรเป็นสเปกให้ Flash เขียนเอง", flush=True)
+            if not getattr(a, "skip_precheck", False) and a.tasks:
+                rev = (f"{cfg['remote']}/{cfg['main_branch']}" if cfg["require_plan_in_remote"] else "HEAD") if is_git else ""
+                try:
+                    errs, warns = plan_precheck(body or "", a.tasks, PlanSource(root, rev))
+                except (ValueError, OSError) as e:
+                    errs, warns = [], [f"ตรวจแผนเทียบโค้ดไม่ได้ ({e}) → ข้าม"]
+                for w in warns:
+                    print(f"WARN: {w}", flush=True)
+                if errs:
+                    print(f"FLASH_RUN=FAIL แผนพิการ {len(errs)} จุด (เทียบ {rev or 'โฟลเดอร์โปรเจกต์'}) — แก้แผนแล้ว push ใหม่ · "
+                          f"มั่นใจว่าแผนถูก → ใส่ --skip-precheck")
+                    for e in errs:
+                        print(f"  - {e}")
+                    return 1
         if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
             br = subprocess.run(["git", "-C", str(root), "branch", "--show-current"],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
@@ -3257,6 +3522,7 @@ def main() -> int:
     r.add_argument("tasks", nargs="?")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
     r.add_argument("--big-plan", action="store_true", help=f"ยอมรับแผนที่ใหญ่เกินเพดาน ({PLAN_HARD[0]} บรรทัด / โค้ด {PLAN_HARD[1]} บรรทัด) — ใช้เมื่อ user อนุญาต")
+    r.add_argument("--skip-precheck", action="store_true", help="ข้ามด่านตรวจแผนพิการ (path ไม่มีจริง · ข้อความ ก่อน: ไม่เจอ/เจอหลายที่)")
     r.set_defaults(kind="", prompt="")
     vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
     vf.add_argument("plan")

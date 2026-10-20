@@ -84,6 +84,75 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open")
         self.assertNotIn("แผนใหญ่", r.stdout)
 
+    PRECHECK_PLAN = """# แผน
+- [ ] **T-01** `src\\a.cpp` (`f`)
+  - ก่อน: `int x = 1;`
+  - หลัง: `int x = 2;`
+  - ยืนยัน: `sc out.txt 1` → ok
+- [ ] **T-02** `src\\missing.h` + `src\\new.cpp` (ใหม่)
+  - (1) `a.cpp` — ก่อน (ตรงตัว 2 บรรทัด):
+    ```cpp
+    	return y;
+    }
+    ```
+    หลัง:
+    ```cpp
+    	return y + 1;
+    }
+    ```
+  - แดง: `ls -la src` → FAIL
+- [ ] **T-03** `src\\a.cpp`
+  - ก่อน: `old_anchor();`
+  - หลัง: `new_anchor();`
+- [ ] **T-04** `src\\a.cpp`
+  - ก่อน: `int x = 2;`
+  - หลัง: `int x = 3;`
+  - เขียว: `python -m pytest` → PASS
+- [x] **T-05** `src\\gone.cpp`
+  - ก่อน: `nothing();`
+"""
+
+    def write_precheck_proj(self):
+        (self.proj / "src").mkdir()
+        (self.proj / "src" / "a.cpp").write_text("int x = 1;\nint f() {\n\treturn y;\n}\nint g() {\n\treturn y;\n}\n", encoding="utf-8")
+        (self.proj / "PRE.md").write_text(self.PRECHECK_PLAN, encoding="utf-8")
+
+    def test_plan_precheck_unit(self):
+        """ตรวจแผนพิการเชิงกลไก: path ไม่มีจริง (ยกเว้นไฟล์ใหม่) · ก่อน: เจอ 0/หลายครั้ง · alias PowerShell = เตือน"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        self.write_precheck_proj()
+        src = flashq.PlanSource(self.proj)
+        text = self.PRECHECK_PLAN
+        errs, warns = flashq.plan_precheck(text, "T-01", src)
+        self.assertEqual(errs, [])
+        self.assertTrue(any("`sc`" in w and "Set-Content" in w for w in warns), warns)
+        errs, warns = flashq.plan_precheck(text, "T-02", src)
+        self.assertTrue(any("ไม่พบไฟล์ `src\\missing.h`" in e for e in errs), errs)  # ข้อ 1
+        self.assertFalse(any("new.cpp" in e for e in errs), errs)  # ไฟล์ที่บอกว่า (ใหม่) ยกเว้น
+        self.assertTrue(any("บรรทัด 7 (T-02)" in e and "เจอ 2 ที่ (กำกวม" in e for e in errs), errs)  # ข้อ 2 หลายครั้ง
+        self.assertTrue(any("`ls`" in w for w in warns), warns)  # ข้อ 3
+        errs, _ = flashq.plan_precheck(text, "T-03", src)
+        self.assertTrue(len(errs) == 1 and "ไม่เจอ" in errs[0] and "old_anchor" in errs[0], errs)  # ข้อ 2 ไม่เจอ
+        errs, warns = flashq.plan_precheck(text, "T-04", src)  # anchor มาจาก "หลัง:" ของ T-01 → ไม่ถือว่าผิด · pytest ไม่ใช่ alias
+        self.assertEqual((errs, warns), ([], []))
+        self.assertEqual(flashq.plan_precheck(text, "T-05", src), ([], []))  # งานที่ติ๊กแล้วไม่ตรวจ
+        # แผนบอกจำนวนที่เองตรงกับของจริง → ผ่าน
+        ok = text.replace("ก่อน (ตรงตัว 2 บรรทัด)", "ก่อน (ต้องเจอ 2 ที่ แก้ทั้งสองที่)").replace("`src\\missing.h` + ", "")
+        self.assertEqual(flashq.plan_precheck(ok, "T-02", src)[0], [])
+
+    def test_plan_precheck_blocks_run(self):
+        self.write_precheck_proj()
+        r = self.run_q("run", "PRE.md", "T-03", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL แผนพิการ 1 จุด", r.stdout)
+        self.assertIn("บรรทัด 19 (T-03)", r.stdout)
+        r = self.run_q("run", "PRE.md", "T-03", "--attach", "none", "--no-open", "--skip-precheck")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        r = self.run_q("run", "PRE.md", "T-01", "--attach", "none", "--no-open")  # เตือนอย่างเดียว ยังรัน
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("WARN: บรรทัด 5 (T-01): คำสั่ง `sc out.txt 1`", r.stdout)
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)
@@ -1684,6 +1753,23 @@ class NewProjectTest(unittest.TestCase):
         r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
         self.assertIn("ไม่พบแผนใน origin/main", r.stdout)
+
+    def test_plan_precheck_against_remote(self):
+        """ตรวจแผนเทียบ origin/<main> ไม่ใช่ไฟล์ในเครื่อง: ไฟล์/anchor ที่มีแค่ในเครื่อง (ยังไม่ push) = แผนพิการ"""
+        self.make_repo("main")
+        (self.proj / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (self.proj / "PRE.md").write_text("- [ ] **T-01** `a.py`\n  - ก่อน: `x = 1`\n  - หลัง: `x = 2`\n"
+                                          "- [ ] **T-02** `a.py`\n  - ก่อน: `y = 1`\n", encoding="utf-8")
+        self.git(self.proj, "add", "a.py", "PRE.md")
+        self.git(self.proj, "commit", "-q", "-m", "pre")
+        self.git(self.proj, "push", "-q", "origin", "main")
+        r = self.run_q("run", "PRE.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        (self.proj / "a.py").write_text("y = 1\n", encoding="utf-8")  # มีในเครื่องแต่ไม่ได้ push
+        r = self.run_q("run", "PRE.md", "T-02", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("แผนพิการ 1 จุด (เทียบ origin/main)", r.stdout)
+        self.assertIn("บรรทัด 5 (T-02): ข้อความ ก่อน: ใน a.py ไม่เจอ", r.stdout)
 
     def test_explicit_main_branch_wins(self):
         self.make_repo("main")
