@@ -67,22 +67,129 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ไม่พบไฟล์แผน", r.stdout)
 
     def test_big_plan_warn_and_reject(self):
-        """แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash: เกินเพดานอ่อน = เตือนแต่ส่ง · เกินเพดานแข็ง = ปฏิเสธ (เว้นแต่ --big-plan) · นับ fence ~~~~ ด้วย"""
-        code = lambda n, f="```": f + "python\n" + "x = 1\n" * n + f + "\n"
-        (self.proj / "BIG.md").write_text("# แผน\n" + code(450, "~~~~"), encoding="utf-8")
+        """แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash: เกินเพดานอ่อน (300/100/30) = เตือนแต่ส่ง · เกินเพดานแข็ง (600/200/60) หรือภาคผนวกโค้ด = ปฏิเสธ
+        ไม่มีทางลัด (--big-plan ถูกตัด) · ยกเว้นส่งเฉพาะรอบแก้ T-xxR ของแผนที่เคยรันแล้ว = เตือนผ่าน · นับ fence ~~~~ ด้วย"""
+        code = lambda n, f="```": f + "python\n" + "x = 1\n" * n + f + "\n"  # noqa: E731
+        (self.proj / "BIG.md").write_text("# แผน\n" + code(250, "~~~~"), encoding="utf-8")
         r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
         self.assertIn("แผนใหญ่เกิน", r.stdout)
-        self.assertIn("โค้ดใน ``` 450 บรรทัด", r.stdout)
+        self.assertIn("รวม 250 บรรทัด", r.stdout)
+        self.assertIn("บล็อกโค้ดเดียวยาว 250 บรรทัด", r.stdout)
         r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open", "--big-plan")
-        self.assertNotIn("แผนใหญ่เกิน", r.stdout)
-        self.assertEqual(r.returncode, 0, r.stdout)
-        (self.proj / "MID.md").write_text("# แผน\n" + code(250), encoding="utf-8")
+        self.assertNotEqual(r.returncode, 0)  # ทางลัดเดิมไม่มีแล้ว
+        self.assertIn("--big-plan", r.stderr)
+        # โค้ดรวมไม่เกิน แต่บล็อกเดียวยาวเกิน 60 = ปฏิเสธ · บอกบรรทัดที่บล็อกเริ่ม
+        (self.proj / "BLOCK.md").write_text("# แผน\n\nข้อความ\n" + code(61), encoding="utf-8")
+        r = self.run_q("run", "BLOCK.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("บล็อกโค้ดเดียวยาว 61 บรรทัด (บรรทัด 4", r.stdout)
+        # หัวข้อภาคผนวกที่มีโค้ด >20 บรรทัด = ปฏิเสธ แม้ขนาดรวมไม่เกิน
+        (self.proj / "APP.md").write_text("# แผน\n- [ ] T-01 x\n\n## ภาคผนวก A — โค้ดเต็ม\n" + code(25), encoding="utf-8")
+        r = self.run_q("run", "APP.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ภาคผนวก", r.stdout)
+        (self.proj / "APPEN.md").write_text("# plan\n\n## Appendix: full code\n" + code(25), encoding="utf-8")
+        self.assertEqual(self.run_q("run", "APPEN.md", "T-01", "--attach", "none", "--no-open").returncode, 1)
+        (self.proj / "APPOK.md").write_text("# แผน\n\n## ภาคผนวก — หมายเหตุ\n" + code(5), encoding="utf-8")  # โค้ดสั้นในภาคผนวก = ผ่าน
+        self.assertEqual(self.run_q("run", "APPOK.md", "T-01", "--attach", "none", "--no-open").returncode, 0)
+        # เกินเพดานอ่อน = เตือนแต่ส่ง
+        (self.proj / "MID.md").write_text("# แผน\n" + "".join(code(25) for _ in range(5)), encoding="utf-8")  # โค้ดรวม 125 บล็อกละ 25
         r = self.run_q("run", "MID.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("WARN: แผนใหญ่", r.stdout)
         r = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open")
         self.assertNotIn("แผนใหญ่", r.stdout)
+        # รอบแก้ T-xxR ของแผนที่เคยรันแล้ว (MID.md มีประวัติ) → แผนโตเกินเพดานแข็งก็เตือนผ่าน · แผนไม่เคยรัน = ปฏิเสธ
+        (self.proj / "MID.md").write_text("# แผน\n" + code(250), encoding="utf-8")
+        r = self.run_q("run", "MID.md", "T-01R", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("รอบแก้", r.stdout)
+        r = self.run_q("run", "MID.md", "T-01R,T-02", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        r = self.run_q("run", "BIG.md", "T-01R", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_wait_blocks_until_done_and_reports(self):
+        """wait <job|แผน> บล็อกจนงานจบแล้วพิมพ์ FLASH_RUN=... (exit 0 = OK · 1 = ไม่ OK/ไม่พบ · 3 = ยังไม่จบ)"""
+        p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "5"}, wait=False)
+        time.sleep(2.5)
+        r = self.run_q("wait", "PLAN.md", "--timeout-min", "0.02", "--poll", "0.5")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("FLASH_WAIT=TIMEOUT", r.stdout)
+        r = self.run_q("wait", "PLAN.md", "--poll", "0.5")
+        p1.communicate(timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("FLASH_RUN=OK job=", r.stdout)
+        self.assertIn("PLAN.md T-01", r.stdout)
+        jid = re.search(r"job=(\S+)", r.stdout).group(1)
+        r = self.run_q("wait", jid[:10])  # งานจบแล้ว = ตอบทันที
+        self.assertEqual(r.returncode, 0, r.stdout)
+        r = self.run_q("wait", "NOPE.md")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FLASH_WAIT=NOJOB", r.stdout)
+        p2 = self.run_q(*self.base(), env={"FAKE_MODE": "fail"})
+        self.assertIn("FLASH_RUN=FAIL", p2.stdout)
+        r = self.run_q("wait", "PLAN.md")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
+    def test_shrink_image(self):
+        """shrink ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ด้านยาว ≤ --max · พื้นโปร่งเป็นขาว"""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("ไม่มี Pillow")
+        Image.new("RGBA", (2400, 1200), (255, 0, 0, 0)).save(self.proj / "big.png")
+        r = self.run_q("shrink", "big.png")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = self.proj / ".tmp" / "shrink" / "big.jpg"
+        self.assertTrue(out.exists(), r.stdout)
+        self.assertIn("2400x1200→800x400", r.stdout)
+        self.assertEqual(Image.open(out).size, (800, 400))
+        r = self.run_q("shrink", "missing.png")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("SHRINK=FAIL", r.stdout)
+
+    def test_image_guard_hook(self):
+        """hook กันอ่านรูป: ใหญ่ >1200px = บล็อก (exit 2 + วิธีย่อ) · รูปเล็กผ่าน · เกิน image_max_reads ต่อ session = บล็อก · ไฟล์ปิดยาม = ผ่าน · ไม่ใช่รูป/พัง = ผ่าน"""
+        import struct
+        import zlib
+        guard = REPO / "hooks" / "image_guard.py"
+
+        def png(path, w, h):  # PNG เล็กสุด (header ถูกต้องพอให้อ่านขนาด)
+            def chunk(t, d):
+                return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+            raw = zlib.compress(b"".join(b"\x00" + b"\x00" * (w * 3) for _ in range(h)))
+            path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", raw) + chunk(b"IEND", b""))
+
+        def hook(file_path, session="s1"):
+            data = json.dumps({"tool_name": "Read", "session_id": session, "tool_input": {"file_path": str(file_path)}})
+            return subprocess.run([sys.executable, str(guard)], input=data, capture_output=True, text=True, encoding="utf-8",
+                                  env=self.env, timeout=30)
+        png(self.proj / "big.png", 1600, 900)
+        png(self.proj / "small.png", 640, 480)
+        r = hook(self.proj / "big.png")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("1600x900", r.stderr)
+        self.assertIn("shrink", r.stderr)
+        self.assertEqual(hook(self.proj / "small.png").returncode, 0)
+        (self.proj / ".tmp" / "shrink").mkdir(parents=True)
+        png(self.proj / ".tmp" / "shrink" / "big.jpg", 1600, 900)  # ไฟล์ที่ย่อแล้ว (ชื่อ .jpg เนื้อ png ก็อ่านได้) ไม่ตรวจขนาด
+        self.assertEqual(hook(self.proj / ".tmp" / "shrink" / "big.jpg").returncode, 0)
+        self.assertEqual(hook(self.proj / "PLAN.md").returncode, 0)
+        self.assertEqual(hook(self.proj / "none.png").returncode, 0)
+        (self.home).mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"image_max_reads": 3}), encoding="utf-8")
+        self.assertEqual(hook(self.proj / "small.png").returncode, 0)  # s1 นับแล้ว 3 (small + shrink + นี้ · รูปที่ถูกบล็อกไม่นับ) → ครั้งถัดไปเกินเพดาน
+        r = hook(self.proj / "small.png")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("อ่านรูปไปแล้ว", r.stderr)
+        self.assertEqual(hook(self.proj / "small.png", session="s2").returncode, 0)  # session อื่นนับแยก
+        (self.home / "image_guard_off").write_text("", encoding="utf-8")
+        self.assertEqual(hook(self.proj / "big.png").returncode, 0)  # ปิดยาม
+        self.assertEqual(subprocess.run([sys.executable, str(guard)], input="not json", capture_output=True, text=True,
+                                        env=self.env, timeout=30).returncode, 0)
 
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
@@ -184,10 +291,35 @@ class FlashqTest(unittest.TestCase):
         self.assertNotIn("{{FLASHQ}}", plan)
         self.assertEqual((claude / "commands" / "flash-check.md").read_text(encoding="utf-8"), "ของผู้ใช้เอง\n")
         self.assertTrue((self.tmp / "command" / "flash.md").exists())
+        self.assertTrue((claude / "agents" / "flash-checker.md").exists(), r.stdout)
+        self.assertTrue((claude / "hooks" / "image_guard.py").exists(), r.stdout)
+        self.assertNotIn("{{FLASHQ}}", (claude / "hooks" / "image_guard.py").read_text(encoding="utf-8"))
+        self.assertIn("ยังไม่ได้ลงทะเบียน image_guard", r.stdout)
         r = self.run_q("install", "--force", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("flashq:managed", (claude / "commands" / "flash-check.md").read_text(encoding="utf-8"))
         self.assertTrue(list((claude / "commands").glob("flash-check.md.bak-flashq-*")))
+        # ไฟล์ที่ flashq ติดตั้งเองเปลี่ยน = ทับเลย ไม่สำรอง (ต้นฉบับอยู่ใน git)
+        (claude / "commands" / "flash-plan.md").write_text(plan + "\nแก้ทดลอง\n", encoding="utf-8")
+        r = self.run_q("install", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((claude / "commands" / "flash-plan.md").read_text(encoding="utf-8"), plan)
+        self.assertFalse(list((claude / "commands").glob("flash-plan.md.bak-flashq-*")))
+        # --hooks ลงทะเบียนใน settings.json แบบทำซ้ำได้ · ไม่ทับค่าอื่น
+        (claude / "settings.json").write_text(json.dumps({"model": "claude-sonnet-5", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}), encoding="utf-8")
+        r = self.run_q("install", "--hooks", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ลงทะเบียน", r.stdout)
+        st = json.loads((claude / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(st["model"], "claude-sonnet-5")
+        self.assertEqual(len(st["hooks"]["Stop"]), 1)
+        pre = st["hooks"]["PreToolUse"]
+        self.assertEqual(len(pre), 1)
+        self.assertEqual(pre[0]["matcher"], "Read")
+        self.assertIn("image_guard.py", pre[0]["hooks"][0]["command"])
+        r = self.run_q("install", "--hooks", env=env)
+        self.assertIn("เหมือนเดิม  hook", r.stdout)
+        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 1)
 
     def start_ui(self):
         with socket.socket() as s:

@@ -32,17 +32,25 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
 | ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min`) · สัญญาณรันเลย `run_now/` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
-| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
+| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว แล้วจบ session) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
+| subagent Claude Code `flash-checker` (ผู้ตรวจรุ่น Sonnet — session Opus/Fable ส่งงานตรวจให้ตัวนี้) | `~/.claude/agents/` (ติดตั้งด้วย `install`) |
+| hook `image_guard.py` (กันอ่านรูปใหญ่ >1200px / อ่านรูปเกิน 12 รูปต่อ session — รูปค้างใน context ทุก turn) | `~/.claude/hooks/` (ติดตั้งด้วย `install` · ลงทะเบียนใน `settings.json` ด้วย `install --hooks`) |
 | ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้ · `main_branch` `remote` `plan_dir` `rules`) |
 
 โปรเจกต์ที่มี `.opencode/command/flash.md` หรือ `.opencode/agent/flash-worker.md` ของตัวเอง (เช่น IRIS_CODE_1.2) → opencode ใช้ของโปรเจกต์ก่อน
-· `/flash-plan` `/flash-check` แบบ global จะเช็คก่อนว่าโปรเจกต์มี `.claude/commands/` หรือ `.opencode/command/` ชื่อเดียวกันไหม — มี = ทำตามไฟล์ของโปรเจกต์แทน
+· `/flash-plan` `/flash-check` แบบ global = กติกากลาง · โปรเจกต์มี `.claude/commands/` หรือ `.opencode/command/` ชื่อเดียวกัน (ไม่มี `flashq:managed`) = อ่านเพิ่มเป็น **ส่วนต่าง** (ขั้น/คำสั่งเฉพาะโปรเจกต์ · ขัดกันของโปรเจกต์ชนะเฉพาะข้อนั้น) — ไฟล์ของโปรเจกต์จึงควรสั้น มีแต่ส่วนต่าง
 
 ## ติดตั้งครั้งแรก
 ```
 python D:\MyCode\flashq\flashq.py install
 ```
-แล้วรีโหลด opencode desktop · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ)
+แล้วรีโหลด opencode desktop · ไฟล์ที่ flashq ติดตั้งไว้เอง (`flashq:managed`) ทับได้เลยไม่สำรอง (ต้นฉบับอยู่ใน git ของ repo นี้) · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ) · `--hooks` = ลงทะเบียน `image_guard.py` เป็น PreToolUse(Read) ใน `~/.claude/settings.json` (ทำซ้ำได้ · ปิดชั่วคราว 60 นาที = สร้างไฟล์ `~/.flashq/image_guard_off` · เพดานตั้งใน `~/.flashq/config.json`: `image_max_px` `image_max_reads`)
+
+## ประหยัด token ของ Claude (เหตุผลที่เครื่องมือนี้มีอยู่)
+- **แผน = สเปก ไม่ใช่โค้ดสำเร็จรูป**: `flashq run` ตรวจขนาดแผนเอง — เตือนเมื่อ >300 บรรทัด / โค้ดใน ``` รวม >100 / บล็อกเดียว >30 · **ปฏิเสธ** เมื่อ >600 / >200 / >60 หรือมีหัวข้อ "ภาคผนวก · คัดลอกตรงตัว · โค้ดเต็ม · appendix · verbatim" ที่มีโค้ด >20 บรรทัด (ไม่มีตัวเลือกเลี่ยง · ยกเว้นส่งเฉพาะรอบแก้ `T-xxR` ของแผนที่เคยรันแล้ว = เตือนผ่าน) — แผนที่ Claude เขียนโค้ดเต็มให้ Flash คัดลอก = Claude ทำงานเองในราคาแพงกว่า
+- **1 แผน = 1 session · โมเดลตามขั้น**: วางแผน (Opus/Sonnet) → ส่งเข้าคิวแล้ว**จบ session** (ห้าม sleep/poll รอใน session ใหญ่) → ตรวจใน session ใหม่รุ่น Sonnet ที่รัน `flashq wait <แผน>` ใน background แล้วทำ `/flash-check` · session Opus/Fable ที่ต้องตรวจ → subagent `flash-checker` · ตั้งค่า `"model": "claude-sonnet-5"` ใน `.claude/settings.json` ของโปรเจกต์ให้ session ใหม่เริ่มที่ Sonnet
+- **รูปภาพ**: รูป 1 รูป ≈ 1–1.6k token แต่**ค้างใน context ทุก turn** จนจบ session → `flashq shrink <รูป>` ย่อเป็น `.tmp/shrink/<ชื่อ>.jpg` (ด้านยาว 800px) ก่อนอ่าน · hook `image_guard` บล็อกรูปใหญ่/อ่านรัวให้เอง
+- `python flashq.py wait <job|แผน> [--timeout-min 480]` = บล็อกจนงานจบแล้วพิมพ์ `FLASH_RUN=...` (exit 0 = OK · 1 = ไม่ OK · 3 = ยังไม่จบ) — Claude รันใน background แล้วรอแจ้งเตือน ไม่ต้องวนถาม `status`
 
 ## โปรเจกต์ใหม่ (ครั้งเดียวต่อโปรเจกต์)
 ```
@@ -102,7 +110,7 @@ python flashq.py review list
 - `/flash-check` ให้ Claude เป็นผู้ตรวจเอง (ไม่ใช่ `flashq verify` ที่รัน agent ของ opencode) จึงทำเป็นป้ายเบา ๆ: เริ่มตรวจ = `review start` · ตรวจเสร็จ = `review done` — หน้าออฟฟิศแสดง "Claude กำลังตรวจ" ที่ผู้ตรวจประจำ
 - ผ่านชูมือ · ไม่ผ่านหน้าเสีย 10 นาที + แจ้งเตือน/เสียง (ปุ่ม 🔊) · ป้ายค้างเกิน 90 นาทีถือว่าหมดอายุ (ไม่แสดง)
 - คำเตือน "log เงียบ" ใช้เวลาแก้ไขไฟล์ log จากเซิร์ฟเวอร์ (ไม่ต้องเปิดหน้าไว้ก่อน) · มือถือ: ฉากออฟฟิศเลื่อนแนวนอนได้
-- เปลี่ยน `flashq.py` ต้องรีสตาร์ท `flashq ui` · เปลี่ยน `claude/commands/*.md` ต้องรัน `flashq install` ใหม่
+- เปลี่ยน `flashq.py` ต้องรีสตาร์ท `flashq ui` · เปลี่ยน `claude/commands/*.md` `claude/agents/*.md` `hooks/*.py` ต้องรัน `flashq install` ใหม่
 
 ### หน้าเว็บ dashboard
 ```
