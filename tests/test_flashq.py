@@ -836,6 +836,26 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(job["title"].startswith("flash-investigate "))
         self.assertIn("[สืบ]", self.run_q("list", "--all").stdout)
 
+    def test_stalled_agent_job_is_killed_retried_once_and_explained(self):
+        """log เงียบเกิน agent_stall_min → ฆ่า · TIMEOUT พร้อมเหตุ · ผู้สืบลองใหม่ 1 ครั้งเอง · งานทำจริงไม่ลองเอง"""
+        (self.proj / ".flash.json").write_text(json.dumps({"agent_stall_min": 0.05, "stall_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
+        r = self.run_q("investigate", "--no-open", "ค้างไหม", env={"FAKE_SLEEP": "60"})
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("FLASH_RUN=TIMEOUT", out)
+        self.assertIn("STALL", out)
+        self.assertIn("ลองใหม่อัตโนมัติ", out)
+        self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 2)
+        r = self.run_q(*self.base(), env={"FAKE_SLEEP": "60"})
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        self.assertNotIn("ลองใหม่อัตโนมัติ", r.stdout)
+
+    def test_denied_tool_calls_are_counted_not_failures(self):
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("DENIED: 1 คำสั่ง", r.stdout)
+        self.assertIn("find . -name x", r.stdout)
+
     def test_investigate_subagent_fails_and_never_conflicts(self):
         r = self.run_q("investigate", "--no-open", "สืบหน่อย", env={"FAKE_MODE": "subagent"})
         self.assertNotEqual(r.returncode, 0)

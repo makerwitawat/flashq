@@ -64,6 +64,8 @@ DEFAULTS = {
     "require_plan_in_remote": True,   # แผนต้องอยู่ใน <remote>/<main_branch> ก่อนส่ง
     "command": "flash",               # คำสั่ง opencode ที่เรียก (โปรเจกต์มีของตัวเองใน .opencode/command ได้)
     "timeout_min": 480,
+    "stall_min": 20,  # log ไม่ขยับเกินนี้ (นาที) = ค้าง → ฆ่าแล้วรายงาน TIMEOUT (0 = ปิด) · งานทำจริง
+    "agent_stall_min": 10,  # เหมือน stall_min แต่ผู้ตรวจ/ผู้สืบ
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
 }
 
@@ -877,7 +879,7 @@ def open_in_desktop(sid: str, server: str) -> None:
     print((r.stdout.strip() or f"DESKTOP_OPEN=FAIL rc={r.returncode}"), flush=True)
 
 
-def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int) -> dict:
+def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: int = 0) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -900,14 +902,29 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                 save_job(job)
                 if not no_open:
                     open_in_desktop(sid, attach)
-            try:
-                rc = p.wait(timeout=max(1, timeout_min * 60 - (time.time() - t0)))
-            except subprocess.TimeoutExpired:
-                kill_tree(p.pid)
-                p.wait()
-                rc, status = -1, "TIMEOUT"
+            while True:  # เฝ้า 2 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ
+                try:
+                    rc = p.wait(timeout=max(1, min(15 if stall_min >= 1 else 1, timeout_min * 60 - (time.time() - t0))))
+                    break
+                except subprocess.TimeoutExpired:
+                    why = ""
+                    if time.time() - t0 >= timeout_min * 60:
+                        why = f"เกินเวลารวม {timeout_min} นาที"
+                    else:
+                        try:
+                            idle = time.time() - os.path.getmtime(log)
+                        except OSError:
+                            idle = 0
+                        if stall_min and idle >= stall_min * 60:
+                            why = f"STALL: log เงียบ {idle / 60:.0f} นาที (เกิน {stall_min})"
+                    if why:
+                        kill_tree(p.pid)
+                        p.wait()
+                        rc, status = -1, "TIMEOUT"
+                        job["timeout_reason"] = why
+                        break
 
-    session, texts, errors, tools = "", [], [], 0
+    session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             ev = json.loads(line)
@@ -919,6 +936,11 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
             texts.append(part["text"])
         elif ev.get("type") == "tool_use":
             tools += 1
+            st = part.get("state") or {}
+            inp = st.get("input") or {}
+            recent.append(f"{part.get('tool', '?')} {st.get('status', '')} " + str(inp.get("command") or inp.get("filePath") or inp.get("pattern") or "")[:90])
+            if "prevents you from using" in str(st.get("error", "")):
+                denied.append(str(inp.get("command") or part.get("tool"))[:100])
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
     errtxt = err.read_text(encoding="utf-8", errors="replace")
@@ -933,7 +955,8 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
         status = "QUOTA"
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools,
-            "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last}
+            "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
+            "denied": denied, "recent": recent[-5:]}
 
 
 # ---------- คำสั่ง ----------
@@ -1029,6 +1052,8 @@ def cmd_run(a) -> int:
         timeout_min = a.timeout_min or (cfg["agent_timeout_min"] if kind in AGENT_KINDS else cfg["timeout_min"])
         snap0 = dirty_snapshot(root) if job["readonly"] else None
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
+        stall_retry = 1
+        stall_min = cfg["agent_stall_min"] if kind in AGENT_KINDS else cfg["stall_min"]
         tried_models: set = set()
         while True:
             attempt += 1
@@ -1047,7 +1072,13 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt)
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min)
+            if res.get("denied"):
+                job["denied"] = (job.get("denied") or []) + res["denied"][:20]
+            if res["status"] == "TIMEOUT" and kind in AGENT_KINDS and stall_retry > 0:  # ผู้ตรวจ/ผู้สืบอ่านอย่างเดียว → ลองใหม่ได้ปลอดภัย (งานทำจริงไม่ลองเอง เพราะอาจแก้ไฟล์ค้างไว้)
+                stall_retry -= 1
+                print(f"TIMEOUT ({job.get('timeout_reason', '')}) → ลองใหม่อัตโนมัติ 1 ครั้ง · ก่อนหน้าทำถึง: " + " | ".join(res.get("recent") or ["(ไม่มี tool)"]), flush=True)
+                continue
             if res["status"] == "NOSTART" and nostart_retry > 0:
                 nostart_retry -= 1
                 print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
@@ -1101,6 +1132,12 @@ def cmd_run(a) -> int:
     print(f"FLASH_RUN={res['status']} exit={res['rc']} เวลา={res['mins']:.1f} นาที tool={res['tools']} "
           f"session={res['session']} job={jid}")
     print(f"desktop: โปรเจกต์ {root.name} > session '{title}'")
+    if res["status"] == "TIMEOUT":
+        print(f"REASON: {job.get('timeout_reason', '')}")
+        print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))
+        print("แนะนำ: เปิด log ดูท้ายไฟล์ · บรีฟกว้างเกิน/ไฟล์ใหญ่เกิน → แบ่งงานให้เล็กลง · ผู้ให้บริการช้า → --model ตัวอื่น แล้วสั่งใหม่")
+    if job.get("denied"):
+        print(f"DENIED: {len(job['denied'])} คำสั่งถูกสิทธิ์ของ agent บล็อก (ไม่ใช่งานล้มเหลว · agent ต้องใช้ read/grep แทน): " + " | ".join(job["denied"][:5]))
     for e in res["errors"][-3:]:
         print("ERROR:", e)
     if res["stderr"]:

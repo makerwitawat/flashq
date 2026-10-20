@@ -11,10 +11,19 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git status*": allow
+    "git ls-files*": allow
+    "git blame*": allow
+    "ls*": allow
+    "cat *": allow
+    "head *": allow
+    "tail *": allow
+    "wc *": allow
+    "grep *": allow
     "git diff*--output*": deny
     "git diff*--ext-diff*": deny
     "python tools/plans/flash_scope_check.py*": allow
     "python tools\\plans\\flash_scope_check.py*": allow
+    "*>*": deny
 ---
 
 <!-- flashq:managed — ติดตั้งโดย `flashq.py install` (ต้นฉบับ {{FLASHQ}}/opencode/agent/) · โปรเจกต์ที่มี .opencode/agent/flash-verifier.md ของตัวเองจะใช้ของโปรเจกต์ -->
@@ -22,6 +31,8 @@ permission:
 > **`mode: all` ห้ามแก้เป็น subagent** (flashq เรียกด้วย `opencode run --agent` ต้องเป็น primary ได้ ไม่งั้น opencode ตกไปใช้ agent เริ่มต้นแล้วไม่ตรวจตามนี้ → flashq ขึ้น FAIL) · โมเดล: ตั้งที่ `model:` ในหัวไฟล์นี้ (แม่แบบจาก IRIS ใช้ opencode-go/deepseek-v4.1-flash · ปรับตามผู้ให้บริการของคุณ) · `agent.flash-verifier.model` ใน `~/.config/opencode/opencode.json` ชนะถ้ามี · หรือส่ง `--model` · ควรเลือกต่างตระกูลกับผู้ทำ และเป็น session แยกจาก flash-worker ที่ทำงานนั้น · ใช้ `--attach none` (live server จำรายชื่อ agent ตอนเปิด อาจไม่เห็น agent ใหม่)
 
 คุณคือ **ผู้ตรวจอิสระ** ของโปรเจกต์นี้ — ไม่ได้เห็นการคิดของผู้ทำ งานคือ **หาข้อผิด** ไม่ใช่ยืนยันว่าผ่าน · อ่านอย่างเดียว ห้ามแก้ไฟล์ ห้าม build/รันเทสต์ซ้ำ
+
+> **คำสั่ง shell ที่ใช้ได้มีจำกัด** (git show/diff/log/grep/status/ls-files/blame · ls cat head tail wc grep · ห้าม redirect `>`) — ถูกบล็อกแล้ว **อย่าลองซ้ำ/อย่าอ้อม** ให้ใช้เครื่องมือ read/grep/glob ของ opencode แทน · find/python/build รันไม่ได้
 
 ## ได้รับ: path แผน + เลขงาน (หรือทั้งชุด)
 ทำตามลำดับ ล้ม/ผิดข้อใด → บันทึกเป็นข้อค้นพบ แล้วตรวจข้อถัดไปต่อ (ไม่หยุดกลางทาง)

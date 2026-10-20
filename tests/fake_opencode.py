@@ -22,7 +22,9 @@ if mode == "nostart":
     time.sleep(600)
     sys.exit(0)
 sid = f"ses_fake{os.getpid()}"
-print(json.dumps({"type": "step_start", "sessionID": sid}), flush=True)
+print(json.dumps({"type": "step_start", "sessionID": sid}, separators=(",", ":")), flush=True)  # compact เหมือน opencode จริง (wait_session จับด้วย regex)
+if os.environ.get("FAKE_DENIED"):  # จำลอง tool ที่ถูกสิทธิ์ agent บล็อก
+    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "bash", "state": {"status": "error", "input": {"command": "find . -name x"}, "error": "The user has specified a rule which prevents you from using this specific tool call."}}}), flush=True)
 time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 if mode == "quota":
     if os.environ.get("FAKE_SET_MODEL"):  # จำลองงานอื่นที่รันคู่ขนานสลับบัญชีไปก่อน
