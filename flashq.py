@@ -2476,6 +2476,49 @@ def _goal_load(root: Path, goal_arg: str) -> tuple[Path, Path, dict, dict]:
 GOALS_DIR = HOME / "goals"  # สำเนาสถานะเป้าหมายทุกโปรเจกต์ ให้ UI เห็น (ต้นฉบับอยู่ใน <project>/.tmp/flashq-goal/)
 
 
+_TITLE_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def claude_session_title(sid: str) -> str:
+    """ชื่อ session ใน Claude Code (ชื่อที่เห็นใน sidebar) จาก transcript ~/.claude/projects/*/<sid>.jsonl · หาไม่เจอ = ''"""
+    if not sid or not re.fullmatch(r"[\w-]+", sid):
+        return ""
+    try:
+        f = next((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl"), None)
+        if not f:
+            return ""
+        mt = f.stat().st_mtime
+        hit = _TITLE_CACHE.get(sid)
+        if hit and hit[0] == mt:
+            return hit[1]
+        with f.open("rb") as fh:
+            fh.seek(max(0, mt and f.stat().st_size - 400_000))
+            tail = fh.read().decode("utf-8", errors="replace")
+        title = ""
+        for line in reversed(tail.splitlines()):
+            if '"customTitle"' in line or ('"agentName"' in line and not title):
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                title = e.get("customTitle") or title or e.get("agentName") or ""
+                if e.get("customTitle"):
+                    break
+        _TITLE_CACHE[sid] = (mt, title)
+        return title
+    except Exception:
+        return ""
+
+
+def goal_owner() -> dict:
+    """session ที่สั่งคำสั่ง goal (Claude Code ใส่ CLAUDE_CODE_SESSION_ID ให้ทุกคำสั่ง shell) → ให้ UI บอกว่าต้องกลับไปที่ไหน"""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not sid:
+        return {}
+    return {"session": sid, "host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", ""), "cwd": os.getcwd(),
+            "app": os.environ.get("CLAUDE_CODE_ENTRYPOINT", ""), "title": claude_session_title(sid), "at": now()}
+
+
 def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max: int) -> None:
     """คัดลอกสถานะเป้าหมายไป ~/.flashq/goals/ (ย่อ: รอบเก่าเก็บแค่ผล · รอบล่าสุดเก็บท้าย output) — พังได้ ไม่ขวางงาน"""
     try:
@@ -2492,7 +2535,8 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
         write_json(GOALS_DIR / f"{key}.json", {
             "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
             "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
-            "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds})
+            "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds,
+            "owner": st.get("owner") or {}, "goal_abs": str(goal)})
     except Exception:
         pass
 
@@ -2526,7 +2570,10 @@ def ui_goals(running: list[dict]) -> list[dict]:
         res = (last or {}).get("results") or {}
         machine = [i for i in gl.get("items", []) if not i.get("human")]
         final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP")
-        out.append(dict(gl, verdict=verdict, age_sec=upd,
+        own = dict(gl.get("owner") or {})
+        if own.get("session"):
+            own["title"] = claude_session_title(own["session"]) or own.get("title", "")
+        out.append(dict(gl, owner=own, verdict=verdict, age_sec=upd,
                         elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
                         jobs=jobs_now, project_name=Path(gl.get("project", "")).name))
@@ -2627,9 +2674,10 @@ def cmd_goal(a) -> int:
             print("GOAL_CHECK=FAIL")
             return 1
         if not st or a.reset:
-            st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": []}
-            sp.parent.mkdir(parents=True, exist_ok=True)
-            write_json(sp, st)
+            st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": [], "owner": st.get("owner", {}) if st else {}}
+        st["owner"] = goal_owner() or st.get("owner") or {}
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        write_json(sp, st)
         goal_publish(root, goal, rel, g, st, rounds_max)
         print(f"GOAL_CHECK=OK เกณฑ์ {len(g['items'])} ข้อ (เครื่องตรวจ {sum(1 for i in g['items'] if i['cmd'])}) · "
               f"งบ {rounds_max} รอบ / {g['hours']:g} ชม. · ใช้ไปแล้ว {len(st['rounds'])} รอบ · base {st['base'][:9]}")
@@ -2688,6 +2736,7 @@ def cmd_goal(a) -> int:
         verdict = "STOP" if stop else "CONTINUE"
     st["rounds"].append({"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked,
                          "stop": stop, "human": human})
+    st["owner"] = goal_owner() or st.get("owner") or {}
     write_json(sp, st)
     goal_publish(root, goal, rel, g, st, rounds_max)
     if regress:

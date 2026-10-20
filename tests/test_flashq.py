@@ -1157,7 +1157,11 @@ class FlashqTest(unittest.TestCase):
         g = mod.ui_goals([])[0]
         self.assertEqual((g["verdict"], g["title"], g["machine"], g["rounds_max"]), ("START", "ค่าใหม่", 1, 3))
         self.assertEqual([i["human"] for i in g["items"]], ["", "เปิด src/a.txt"])
-        self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.run_q("goal", "verify", "docs/plans/GOAL_x.md", env={"CLAUDE_CODE_SESSION_ID": "sess-test-1", "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        own = mod.ui_goals([])[0]["owner"]  # session ที่สั่งล่าสุด → UI บอกว่าต้องกลับไปทำต่อที่ไหน
+        self.assertEqual((own["session"], own["app"], Path(own["cwd"]).resolve()), ("sess-test-1", "cli", self.proj.resolve()))
+        self.run_q("goal", "status", "docs/plans/GOAL_x.md", env={"CLAUDE_CODE_SESSION_ID": ""})
+        self.assertEqual(mod.ui_goals([])[0]["owner"]["session"], "sess-test-1")  # คำสั่งนอก Claude Code ไม่ลบที่มาเดิม
         run = {"id": "J1", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R2.md"}
         other = {"id": "J2", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_y_R2.md"}
         g = mod.ui_goals([run, other])[0]

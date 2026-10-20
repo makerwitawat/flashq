@@ -255,7 +255,9 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .goal-items pre { margin: 0.25rem 0 0.2rem 1.4rem; max-height: 11rem; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 0.35rem; padding: 0.4rem; font: 0.8rem/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .goal-items summary { cursor: pointer; }
 .goal-stop { color: var(--fail); font-weight: 600; margin: 0.35rem 0 0; padding-left: 1.1rem; }
-.goal-human { margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 0.35rem; background: color-mix(in srgb, var(--quota) 14%, transparent); }
+.goal-owner { margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 0.35rem; border: 1px dashed var(--line, #8884); font-size: 0.92em; }
+.goal-owner button { margin-left: 0.3rem; }
+.goal-human {margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 0.35rem; background: color-mix(in srgb, var(--quota) 14%, transparent); }
 .goal-rounds { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.35rem; font-size: 0.8rem; }
 .goal-rounds span { padding: 0 0.4rem; border-radius: 0.3rem; background: var(--line); }
 .of-goalt { fill: #dc2626; font-size: 11px; font-weight: 700; }
@@ -729,6 +731,14 @@ function goalHTML(g) {
     ? `<div class="goal-human">${g.verdict === "DONE_NEEDS_USER" ? "👀 <b>ถึงตาคุณตรวจ:</b>" : "👤 ข้อที่คุณต้องตรวจเองตอนจบ:"} ${human.map((i) => `<b>${esc(i.id)}</b> ${esc(i.human)}`).join(" · ")}</div>` : "";
   const runs = (state.running_list || []).filter((r) => r.goal && r.goal.id === g.id);
   const live = runs.length ? `<div class="of-line">🧑‍💻 Flash กำลังทำรอบ ${runs.map((r) => r.goal.round).join(", ")} · ช่อง ${runs.map((r) => r.slot || "?").join(", ")} <button data-oflog="${esc(runs[0].id)}">ดู log สด</button></div>` : "";
+  const o = g.owner || {}, resume = `/flash-goal ${g.goal_abs || g.goal}`;
+  const app = o.app === "claude-desktop" ? "แอป Claude (แท็บ Code)" : o.app === "cli" ? "Claude Code ใน terminal" : "Claude Code";
+  const where = o.session
+    ? `🧭 ทำใน session <b>«${esc(o.title || "ไม่มีชื่อ")}»</b> <span class="muted">· ${app} · โฟลเดอร์ <span class="mono">${esc(o.cwd || "-")}</span> · สั่งล่าสุด ${esc(o.at || "-")}</span>
+       <button data-copy="${esc(o.session)}" title="คัดลอก session id (ค้นใน sidebar ไม่เจอ → claude --resume <id> ในโฟลเดอร์นั้น)">📋 session id</button>`
+    : `🧭 <span class="muted">ยังไม่รู้ว่า session ไหนทำ (บันทึกเองตั้งแต่ goal check/verify ครั้งถัดไป)</span>`;
+  const own = `<div class="goal-owner">${where}<div class="muted">ทำต่อ: เปิด session นั้นแล้วสั่ง · หาไม่เจอ/ปิดไปแล้ว → เปิด session ใหม่ที่โปรเจกต์ ${esc(g.project_name)} แล้ววางคำสั่งนี้ (อ่านสถานะจากไฟล์ ทำต่อได้เลย)
+       <button data-copy="${esc(resume)}">📋 คัดลอกคำสั่งทำต่อ</button></div></div>`;
   const chips = n ? `<div class="goal-rounds">${g.rounds.map((r, k) => `<span title="${esc(r.at)}">รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}</span>`).join("")}</div>` : "";
   return `<article class="goal-card v-${esc(g.verdict)}">
     <div class="goal-h"><span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
@@ -736,7 +746,7 @@ function goalHTML(g) {
     <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
-    ${live}${stop}<ul class="goal-items">${items}</ul>${hum}${chips}</article>`;
+    ${live}${stop}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
 }
 function renderGoals() {
   const gs = state.goals || [];
