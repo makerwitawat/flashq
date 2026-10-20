@@ -129,6 +129,17 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 #submitMsg.err, #rnMsg.err { color: var(--fail); }
 .run-item { padding: 0.6rem 0; border-top: 1px solid var(--line); }
 .run-item:first-child { border-top: 0; padding-top: 0; }
+/* tooltip ของหน้า (แทนกล่อง title สีเทาของเบราว์เซอร์) — popover จึงลอยเหนือ dialog ได้ */
+#tip { position: fixed; inset: auto; left: 0; top: 0; margin: 0; z-index: 200; pointer-events: none; max-width: min(28rem, calc(100vw - 1rem));
+  padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 0.5rem; background: var(--panel); color: var(--text);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .22); font-size: 0.86rem; line-height: 1.45; overflow-wrap: anywhere; opacity: 0; transition: opacity .12s; }
+#tip.on { opacity: 1; }
+#tip .tp-h { font-weight: 700; }
+#tip .tp-h + div { margin-top: 0.3rem; padding-top: 0.3rem; border-top: 1px solid var(--line); }
+#tip .tp-l { color: var(--muted); }
+#tip .tp-l b { color: var(--text); font-weight: 600; }
+#tip .tp-l.dot { padding-left: 0.85rem; text-indent: -0.85rem; }
+#tip .tp-l.dot::before { content: "• "; color: var(--accent); }
 /* กล่องยืนยัน/ถาม (แทน confirm/prompt ของเบราว์เซอร์) */
 dialog.ask { width: min(30rem, calc(100vw - 2rem)); }
 dialog.ask[open] { animation: ask-in .16s ease-out; }
@@ -170,7 +181,7 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 @media (max-width: 720px) {  /* จอเล็ก: ฉากไม่ย่อจนตัวเล็กเกินอ่าน — กว้างขั้นต่ำแล้วเลื่อนซ้าย-ขวาได้ */
   .of-scene { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .of-scene::before { content: "↔ เลื่อนดูทั้งฉากได้"; display: block; position: sticky; left: 0; padding: 0.25rem 0.6rem; font-size: 0.72rem; color: var(--muted); }
-  .of-scene svg { width: 720px; max-width: none; max-height: none; }
+  .of-scene svg, .of-stage { width: 720px; max-width: none; max-height: none; }
 }
 .of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
@@ -254,9 +265,13 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 @keyframes of-wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 @keyframes of-zz { 0% { opacity: 0; transform: translate(0, 0); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(8px, -14px); } }
 @keyframes of-code { to { stroke-dashoffset: -24; } }
-@keyframes of-patrol { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(340px); } }
-.of-patrol { animation: of-patrol 18s ease-in-out infinite; }
-.of-patrol2 { animation-duration: 24s; animation-delay: -7s; }
+/* ตัวละครเดินลาดตระเวนอยู่ใน <svg class="of-walk"> ซ้อนบนฉาก แล้วเลื่อนทั้งชั้นด้วย transform (GPU วาด เลื่อนละเอียดกว่าพิกเซล)
+   — ถ้าเลื่อน <g> ในฉากหลัก เบราว์เซอร์ต้องวาด SVG ทั้งฉากใหม่ทุกเฟรมและปัดตำแหน่งเป็นพิกเซล เดินช้า ๆ จึงดูกระตุก · 34% = 340/SCENE_W */
+@keyframes of-patrol { 0%, 8%, 92%, 100% { transform: translate3d(0, 0, 0); } 46%, 54% { transform: translate3d(34%, 0, 0); } }
+.of-patrol { animation: of-patrol 20s ease-in-out infinite; }
+.of-patrol2 { animation-duration: 26s; animation-delay: -7s; }
+.of-stage { position: relative; }
+.of-scene svg.of-walk { position: absolute; left: 0; top: 0; width: 100%; height: 100% !important; max-height: none !important; pointer-events: none; will-change: transform; }
 @keyframes of-torch { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .of-torch path { animation: of-torch 2.4s ease-in-out infinite; }
 .of-blinkt { animation: pulse 1s steps(2) infinite; }
@@ -313,7 +328,8 @@ summary.goal-h button { margin-left: auto; }
 .of-gstop .of-flagc { animation: none; transform: skewY(8deg) scaleX(.85); }
 @keyframes of-flut { 0%, 100% { transform: skewY(0) scaleX(1); } 50% { transform: skewY(-6deg) scaleX(.92); } }
 .of-conf { animation: of-zz 1.6s ease-out infinite; }
-body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-paused .of-bar i { animation: none !important; }
+body.calm .of-scene *, body.calm .of-bar i { animation: none !important; }
+body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: paused !important; }  /* แท็บถูกซ่อน = หยุดค้างไว้ (ไม่ใช่ none ที่ทำให้กลับมาแล้วเริ่มใหม่ ตัวละครกระโดด) */
 @media (prefers-reduced-motion: reduce) { .of-scene *, .of-bar i { animation: none !important; } }
 </style>
 </head>
@@ -1572,7 +1588,8 @@ function sceneSVG(m) {
   const ox = DESK_X0 + Math.max(0, (areaW - cols * dw) / 2);
   const deskX = (i) => ox + (i % cols) * dw, deskY = (i) => DESK_Y0 + Math.floor(i / cols) * dh, deskPX = (i) => deskX(i) + 72 * ds;
   const stripY = DESK_Y0 + rows * dh + 6, H = Math.max(530, stripY + 196 + (m.goals.length ? 94 : 0));
-  const total = m.runs.length;
+  const total = m.runs.length, walk = [];
+  const walker = (cls, k, p) => { walk.push(`<svg class="of-walk ${k}" viewBox="0 0 ${SCENE_W} ${H}" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g class="${cls}">${p}</g></svg>`); return ""; };
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
     <rect class="of-floor" width="${SCENE_W}" height="${H}"/><rect class="of-wall" width="${SCENE_W}" height="58"/>
@@ -1590,7 +1607,7 @@ function sceneSVG(m) {
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const txt = inspText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ไม่ต้องวาดฉากใหม่)
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
-      <g class="${busy || fin ? "" : "of-patrol"}">${person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" })}</g>
+      ${((p) => (busy || fin ? p : walker("of-st-insp", "of-patrol", p)))(person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" }))}
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
       <text class="of-tm" id="ofInspT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
@@ -1601,7 +1618,7 @@ function sceneSVG(m) {
     const txt = guardSceneText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
       <rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
-      <g class="${sw || caught ? "" : "of-patrol of-patrol2"}">${person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" })}</g>
+      ${((p) => (sw || caught ? p : walker("of-st-guard", "of-patrol of-patrol2", p)))(person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" }))}
       ${alert ? `<text x="${(sw ? colX : DESK_X0 + 70) + 22}" y="${sy + 18}" font-size="16" class="of-blinkt">❗</text>` : ""}
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🛡 ยามเฝ้า shell</text>
       <text class="of-tm" id="ofGuardT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
@@ -1621,7 +1638,7 @@ function sceneSVG(m) {
       ${person({ seed: m.dead[0].id, hue: hueOf(m.dead[0].project_name), pose: "sleep", mood: "sleep", x: 54, y: H - 38, s: 0.62 })}
       <text class="of-qt" x="54" y="${H - 22}" text-anchor="middle" style="font-size:11px;font-weight:700">😴 process ตาย ${m.dead.length}</text></g>`;
   }
-  return g + `</svg>`;
+  return `<div class="of-stage">${g}</svg>${walk.join("")}</div>`;
 }
 
 /* เสาธงของเป้าหมาย: ธงขึ้นตามสัดส่วนเกณฑ์ที่ผ่าน · ผ่านครบ = ยอดเสา โบก+ฉลอง · รอคุณตรวจ = เหลือง · หยุด = แดงครึ่งเสา */
@@ -1895,6 +1912,74 @@ $("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.
 $("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
 $("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };
 document.addEventListener("visibilitychange", () => document.body.classList.toggle("of-paused", document.hidden));
+
+/* --- tooltip: อ่านจาก title="" (HTML) และ <title> (SVG) แล้วแสดงในกล่องของหน้า ---
+   ข้อความ: บรรทัดแรก = หัวเรื่อง (ตัวหนา) · บรรทัดยาวที่คั่นด้วย " · " แตกเป็นข้อ ๆ · "หัวข้อ: ค่า" ทำหัวข้อเป็นตัวหนา
+   กันกล่องของเบราว์เซอร์ซ้อน: ย้าย title ไป data-tip / ล้างข้อความ <title> ไว้ตอนชี้ (render รอบหน้า patchDOM คืนให้เอง) */
+const tip = Object.assign(document.createElement("div"), { id: "tip", role: "tooltip" });
+if (tip.showPopover) tip.popover = "manual";
+document.body.append(tip);
+let tipFor = null, tipTimer = 0, tipXY = null;
+function tipSource(el) {
+  for (let n = el; n && n !== document.body; n = n.parentNode) {
+    if (n.nodeType !== 1) continue;
+    if (n.dataset && n.dataset.tip && !n.hasAttribute("title")) return n;
+    if (n.hasAttribute("title") && n.getAttribute("title")) { n.dataset.tip = n.getAttribute("title"); n.removeAttribute("title"); return n; }
+    const t = n.namespaceURI === "http://www.w3.org/2000/svg" && [...n.children].find((c) => c.tagName === "title");
+    if (t) { const tx = t.firstChild; if (tx && tx.nodeValue) { n._tip = tx.nodeValue; tx.nodeValue = ""; } if (n._tip) return n; }
+  }
+  return null;
+}
+function tipHTML(text) {
+  const lines = String(text).split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return "";
+  const out = [], head = lines.length > 1 || lines[0].length > 70 ? lines.shift() : null;
+  const line = (l, dot) => { const m = /^([^:：=]{1,28})(\s*[:：=]\s+)(.+)$/.exec(l);
+    return `<div class="tp-l${dot ? " dot" : ""}">${m ? `<b>${esc(m[1])}</b>${esc(m[2])}${esc(m[3])}` : esc(l)}</div>`; };
+  const split = (l) => l.split(" · ").reduce((o, p) => { if (o.length && (p.length < 14 || o[o.length - 1].length < 14)) o[o.length - 1] += " · " + p; else o.push(p); return o; }, []);  // ชิ้นสั้น (ชื่อไฟล์/ตัวเลข) ไม่แตกบรรทัด
+  let headHTML = "";
+  if (head) {  // หัวเรื่องยาวที่มี " · " → ส่วนแรกเป็นหัว ที่เหลือเป็นข้อ ๆ
+    const parts = head.length > 60 ? split(head) : [head];
+    headHTML = `<div class="tp-h">${esc(parts.shift())}</div>`;
+    parts.forEach((p) => lines.unshift(p));
+  }
+  for (const l of lines) {
+    const parts = l.length > 60 ? split(l) : [l];
+    parts.forEach((p) => out.push(line(p, parts.length > 1 || lines.length > 2)));
+  }
+  return headHTML + (out.length ? `<div>${out.join("")}</div>` : "");
+}
+function tipPlace() {
+  if (!tipFor) return;
+  const r = tip.getBoundingClientRect(), vw = innerWidth, vh = innerHeight, gap = 14;
+  let x, y;
+  if (tipXY) { x = tipXY[0] + gap; y = tipXY[1] + gap + 4; if (x + r.width > vw - 6) x = tipXY[0] - r.width - gap; if (y + r.height > vh - 6) y = tipXY[1] - r.height - gap; }
+  else { const b = tipFor.getBoundingClientRect(); x = b.left; y = b.bottom + 8; if (y + r.height > vh - 6) y = b.top - r.height - 8; }
+  tip.style.left = Math.max(6, Math.min(x, vw - r.width - 6)) + "px";
+  tip.style.top = Math.max(6, y) + "px";
+}
+function tipShow(el) {
+  const html = tipHTML(el.dataset.tip || el._tip || "");
+  if (!html) return tipHide();
+  tipFor = el; tip.innerHTML = html;
+  try { if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover(); } catch (_) {}
+  tipPlace(); tip.classList.add("on");
+}
+function tipHide() {
+  clearTimeout(tipTimer); tipFor = null; tip.classList.remove("on");
+  try { if (tip.hidePopover && tip.matches(":popover-open")) tip.hidePopover(); } catch (_) {}
+}
+document.addEventListener("pointerover", (e) => {
+  const el = tipSource(e.target);
+  if (el === tipFor) return;
+  tipHide();
+  if (el) { tipXY = [e.clientX, e.clientY]; tipTimer = setTimeout(() => el.isConnected && tipShow(el), 280); }
+});
+document.addEventListener("pointermove", (e) => { tipXY = [e.clientX, e.clientY]; if (tipFor) { if (!tipFor.isConnected) tipHide(); else tipPlace(); } }, { passive: true });
+document.addEventListener("pointerout", (e) => { if (!e.relatedTarget) tipHide(); });
+document.addEventListener("focusin", (e) => { const el = e.target.matches && e.target.matches(":focus-visible") && tipSource(e.target); if (el) { tipXY = null; tipShow(el); } });
+document.addEventListener("focusout", tipHide);
+for (const ev of ["pointerdown", "keydown", "scroll", "wheel"]) document.addEventListener(ev, tipHide, { capture: true, passive: true });
 setInterval(() => { if (view === "office" && !document.hidden) officeUpdate(); }, 1000);
 
 setView(view);
