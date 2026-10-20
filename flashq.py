@@ -30,7 +30,8 @@
   python flashq.py review start <แผน> [<งาน>] | done <แผน> pass|fail [--note ...] | list   ป้ายให้หน้าออฟฟิศรู้ว่า Claude กำลังตรวจ (/flash-check)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
   python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
-ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|DENIED|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+  DENIED = opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ เช่น อ่านไฟล์นอกโปรเจกต์) งานไม่ได้ทำ → บรรทัด `DENIED:` บอก path + ทางแก้ (`external_dirs` ใน .flash.json หรือ permission ใน opencode.json)
 """
 import argparse
 import contextlib
@@ -64,6 +65,10 @@ START_LIMIT_SEC = 180
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
+# opencode โหมดไม่โต้ตอบ (`opencode run`) ตอบ "ไม่อนุญาต" ให้เองเมื่อกฎเป็น ask → stderr: `permission requested: <ชนิด> (<path>); auto-rejecting`
+PERM_REQ_RE = re.compile(r"permission requested:\s*([\w.-]+)\s*\((.*?)\)\s*;\s*auto-reject", re.I)
+# tool error ที่ตามมา (subagent ล้มเพราะถูกปฏิเสธ · ข้อความไทย/อังกฤษของ opencode)
+PERM_DENY_RE = re.compile(r"rejected permission|ปฏิเสธสิทธิ์|permission (?:was )?denied", re.I)
 DEFAULTS = {
     "main_branch": "master",          # branch ที่ opencode ต้องอยู่ + ที่แผนต้องถูก push ไป
     "remote": "origin",
@@ -240,6 +245,124 @@ def project_cfg(root: Path) -> dict:
             cfg["main_branch"] = detect_main_branch(root, own.get("remote") or cfg["remote"])
     cfg.update(own)
     return cfg
+
+
+# ---------- สิทธิ์นอกโปรเจกต์ (opencode permission.external_directory) ----------
+def _slash(s: str) -> str:
+    return s.replace("\\", "/")
+
+
+def _native(s: str) -> str:
+    """รูปแบบ path ที่ opencode รายงานบนเครื่องนี้ (Windows = \\) — ใช้ในข้อความแนะนำให้วางลง opencode.json ได้ตรงตัว"""
+    return s.replace("/", "\\") if os.name == "nt" else s
+
+
+def external_dirs(cfg: dict) -> list[str]:
+    """`external_dirs` ใน .flash.json: โฟลเดอร์นอกโปรเจกต์ที่งานต้องอ่าน/แก้ · ไม่มี * = เติม /* ให้ (opencode ขอสิทธิ์เป็น <โฟลเดอร์>\\*)"""
+    out = []
+    for d in cfg.get("external_dirs") or []:
+        d = _slash(str(d).strip())
+        if d:
+            out.append(d if "*" in d else d.rstrip("/") + "/*")
+    return out
+
+
+def perm_allows(perm, path: str) -> bool:
+    """opencode ตัดสินสิทธิ์: ช่องเป็น "allow"/"ask"/"deny" หรือ {รูปแบบ: การกระทำ} · * = ตัวอักษรใด ๆ (รวมตัวคั่นโฟลเดอร์)
+    เลือกกฎที่ตรงและเจาะจงสุด (ยาวสุดเมื่อตัด * ออก · เท่ากัน = อันหลัง) · เทียบโดยไม่สน \\ กับ / (ใส่ได้ทั้งสองแบบ)"""
+    if isinstance(perm, str):
+        return perm == "allow"
+    if not isinstance(perm, dict):
+        return False
+    best = None  # (ความเจาะจง, ลำดับ, การกระทำ)
+    for i, (pat, act) in enumerate(perm.items()):
+        rx = "^" + ".*".join(re.escape(p).replace(r"\?", ".") for p in _slash(str(pat)).split("*")) + "$"
+        if re.match(rx, _slash(path), re.S):
+            key = (len(str(pat).replace("*", "")), i)
+            if best is None or key > best[:2]:
+                best = (*key, act)
+    return bool(best) and best[2] == "allow"
+
+
+def perm_config_content(dirs: list[str]) -> str:
+    """ค่า OPENCODE_CONFIG_CONTENT (opencode รวมเข้ากับ config ของผู้ใช้ตอนเริ่ม · ไม่แตะไฟล์ opencode.json) — ใส่ทั้ง / และ \\ บน Windows กันตีความต่างกัน"""
+    rules = {}
+    for d in dirs:
+        rules[_slash(d)] = "allow"
+        if os.name == "nt":
+            rules[d.replace("/", "\\")] = "allow"
+    return json.dumps({"permission": {"external_directory": rules}}, ensure_ascii=False)
+
+
+def known_external_dirs(root: Path, extra: list[str] = ()) -> list[str]:
+    """external_dirs ของทุกโปรเจกต์ที่เคยส่งงาน + ของโปรเจกต์นี้ — ให้ server สด (เปิดครั้งเดียว ใช้ร่วมทุกโปรเจกต์) รู้สิทธิ์ตั้งแต่เปิด"""
+    out = list(extra)
+    seen = {str(root)}
+    for j in jobs():
+        p = j.get("project") or ""
+        if p and p not in seen:
+            seen.add(p)
+            out += external_dirs(read_json(Path(p) / ".flash.json"))
+    return list(dict.fromkeys(out))
+
+
+def server_permission(attach: str, root: Path):
+    """ช่อง permission.external_directory ตามที่ server opencode (--attach) ใช้จริง — server โหลด config ตอนเปิด จึงไม่เห็น env ของงาน · None = ถามไม่ได้"""
+    import urllib.parse
+    import urllib.request
+    try:
+        raw = urllib.request.urlopen(f"{attach.rstrip('/')}/config?" + urllib.parse.urlencode({"directory": str(root)}), timeout=3).read()
+        return (json.loads(raw).get("permission") or {}).get("external_directory")
+    except Exception:
+        return None
+
+
+def _perm_pairs(dirs: list[str]) -> str:
+    return ", ".join(json.dumps({_native(d): "allow"}, ensure_ascii=False)[1:-1] for d in dirs)
+
+
+def perm_precheck(dirs: list[str], attach: str, root: Path) -> list[str]:
+    """ก่อนรัน: opencode.json อ่านได้ไหม · external_dirs ถูกอนุญาตแล้วหรือยัง (ไฟล์ของผู้ใช้ / server สด) → บรรทัดแจ้ง/เตือน"""
+    out = []
+    oc = read_json(OC_CONFIG)
+    if not oc and OC_CONFIG.is_file():
+        out.append(f"WARN: อ่าน {OC_CONFIG} ไม่ได้ (JSON เสีย? เช่นลืมคอมมา) → opencode จะเปิดไม่ขึ้นหรือไม่ใช้สิทธิ์ที่ตั้งไว้ — ตรวจด้วย `opencode debug config`")
+    if not dirs:
+        return out
+    file_perm = (oc.get("permission") or {}).get("external_directory") if isinstance(oc.get("permission"), dict) else None
+    miss_file = [d for d in dirs if not perm_allows(file_perm, d)]
+    if attach.startswith("http"):
+        sp = server_permission(attach, root)
+        miss = [d for d in dirs if not perm_allows(sp if sp is not None else file_perm, d)]
+        if miss:
+            pidf = HOME / "live_server.pid"
+            pid = pidf.read_text(encoding="utf-8", errors="replace").strip() if pidf.exists() else "?"
+            out.append(f"WARN: server opencode ({attach}) ยังไม่อนุญาต external_dirs: {', '.join(miss)} → งานที่แตะโฟลเดอร์นี้จะถูกปฏิเสธสิทธิ์ (DENIED) "
+                       f"· server โหลด config ตอนเปิด ไม่เห็นสิทธิ์ที่ flashq ส่งต่อรอบ · แก้ทางใดทางหนึ่ง: ปิด server แล้วสั่งใหม่ (taskkill /PID {pid} /T /F — flashq เปิดใหม่พร้อมสิทธิ์จาก external_dirs) "
+                       f"· เพิ่มใน {OC_CONFIG} ช่อง permission.external_directory: {_perm_pairs(miss)} แล้วรีสตาร์ต server · หรือส่งด้วย --attach none")
+        else:
+            out.append(f"PERM: server opencode อนุญาต external_dirs แล้ว: {', '.join(dirs)}")
+    else:
+        out.append(f"PERM: ส่งสิทธิ์ external_dirs ให้ opencode รอบนี้ผ่าน OPENCODE_CONFIG_CONTENT: {', '.join(dirs)}"
+                   + (f" · {OC_CONFIG} ยังไม่มี allow ของ {', '.join(miss_file)} (ใส่ถาวรได้ที่ permission.external_directory: {_perm_pairs(miss_file)})" if miss_file else ""))
+    return out
+
+
+def perm_fix_lines(items: list[dict], partial: bool = False) -> list[str]:
+    """ข้อความสิทธิ์ที่ opencode ปฏิเสธ + ทางแก้ 2 ทาง (ใช้ร่วม run / wait / หน้าเว็บ) · partial = งานสำเร็จบางส่วน (คง OK แต่เตือน)"""
+    n = len(items)
+    out = [(f"WARN: opencode ปฏิเสธสิทธิ์ {n} รายการระหว่างทำงาน แต่มีงานสำเร็จบางส่วน (commit/DONE) → ตรวจว่างานไหนขาด:" if partial
+            else f"DENIED: opencode ปฏิเสธสิทธิ์ {n} รายการ (รันแบบไม่โต้ตอบ = ตอบ \"ไม่อนุญาต\" ให้เองทันที) — งานไม่ได้ทำ ไม่ต้องไล่หา commit:")]
+    out += [f"  - {it.get('kind') or 'tool'}: {it.get('path') or '?'}" for it in items[:8]]
+    ext = list(dict.fromkeys(it["path"] for it in items if it.get("kind") == "external_directory" and it.get("path")))
+    if ext:
+        out.append("ทางแก้ (เลือกทางเดียว แล้วส่งงานใหม่):")
+        out.append(f"  1) .flash.json ของโปรเจกต์ เพิ่ม \"external_dirs\": {json.dumps([_slash(p) for p in ext], ensure_ascii=False)} → flashq ส่งสิทธิ์ให้ opencode เองทุกครั้งที่รัน (ย่อให้กว้างขึ้นได้ เช่น \"D:/lib/*\")")
+        out.append(f"  2) {OC_CONFIG} ช่อง permission.external_directory เพิ่ม {_perm_pairs(ext)} (ถาวร · ใช้กับ opencode ที่เปิดเองด้วย)")
+    else:
+        kinds = sorted({it.get("kind") or "tool" for it in items})
+        out.append(f"ทางแก้: {OC_CONFIG} ช่อง permission ตั้ง {', '.join(json.dumps({k: 'allow'})[1:-1] for k in kinds)} แล้วส่งงานใหม่ (หรือรันด้วย --auto ถ้ายอมรับความเสี่ยง)")
+    return out
 
 
 def plan_rel(plan: str, root: Path, start: Path) -> str:
@@ -861,8 +984,9 @@ def overlap_report(target: dict) -> dict:
 
 
 # ---------- opencode ----------
-def ensure_live_server(exe: list[str]) -> bool:
-    """เปิด `opencode serve --port 4096` ค้างไว้ (ถ้ายังไม่มี) ให้ desktop ต่อดูสดได้ · cwd กลาง ไม่ผูกโปรเจกต์ (run ส่ง --dir เอง)"""
+def ensure_live_server(exe: list[str], ext_dirs: list[str] = ()) -> bool:
+    """เปิด `opencode serve --port 4096` ค้างไว้ (ถ้ายังไม่มี) ให้ desktop ต่อดูสดได้ · cwd กลาง ไม่ผูกโปรเจกต์ (run ส่ง --dir เอง)
+    ext_dirs = external_dirs ของทุกโปรเจกต์ที่รู้จัก → ส่งเป็น OPENCODE_CONFIG_CONTENT ตอนเปิด (server โหลด config ครั้งเดียว)"""
     import urllib.request
 
     def up() -> bool:
@@ -876,9 +1000,11 @@ def ensure_live_server(exe: list[str]) -> bool:
     flags = 0
     if os.name == "nt":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+    env = {k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"}
+    if ext_dirs:
+        env["OPENCODE_CONFIG_CONTENT"] = perm_config_content(list(ext_dirs))
     sp = subprocess.Popen([*exe, "serve", "--port", "4096", "--hostname", "127.0.0.1"], cwd=str(HOME),
-                          stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags,
-                          env={k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"})
+                          stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags, env=env)
     try:  # เก็บ pid ไว้ให้ปิดได้ (taskkill /PID <pid> /T /F) — server นี้เปิดค้างโดยตั้งใจ
         (HOME / "live_server.pid").write_text(str(sp.pid), encoding="utf-8")
     except OSError:
@@ -1090,7 +1216,7 @@ class ShellWatch:
 
 
 def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
-             shell_idle: float = 0) -> dict:
+             shell_idle: float = 0, env: dict | None = None) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -1098,8 +1224,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     print(f"START {job['id']} รอบ {attempt} title='{job['title']}' model={job.get('model') or '(ค่าเริ่มต้น config)'} "
           f"attach={attach or '-'} log={log}", flush=True)
     t0, status = time.time(), "OK"
+    head0 = _git(root, "rev-parse", "HEAD")  # มี commit ใหม่หลังรัน = งานสำเร็จบางส่วน (ใช้ตัดสิน DENIED กับ OK)
     with open(log, "wb") as fo, open(err, "wb") as fe:
-        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe)
+        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe, env=env)
         job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
         sid = wait_session(p, log)
@@ -1193,6 +1320,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                         break
 
     session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
+    tool_denied, task_out = [], []  # tool ที่ล้มเพราะ opencode ปฏิเสธสิทธิ์ · ผลที่ subagent (tool task) ส่งกลับ
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             ev = json.loads(line)
@@ -1209,12 +1337,19 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
             recent.append(f"{part.get('tool', '?')} {st.get('status', '')} " + str(inp.get("command") or inp.get("filePath") or inp.get("pattern") or "")[:90])
             if "prevents you from using" in str(st.get("error", "")):
                 denied.append(str(inp.get("command") or part.get("tool"))[:100])
+            elif PERM_DENY_RE.search(str(st.get("error", ""))):
+                tool_denied.append(f"{part.get('tool', '?')} {str(inp.get('description') or inp.get('command') or inp.get('filePath') or '')[:80]}".strip())
+            if part.get("tool") == "task" and isinstance(st.get("output"), str):
+                task_out.append(st["output"])
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
     errtxt = err.read_text(encoding="utf-8", errors="replace")
     last = texts[-1] if texts else ""
+    perm = perm_denials(errtxt, tool_denied)
     if status == "OK" and (rc != 0 or errors):
         status = "FAIL"
+    if status == "OK" and perm and not job_progressed(root, head0, texts + task_out):
+        status = "DENIED"  # opencode ตอบ "ไม่อนุญาต" ให้เอง งานจบ exit 0 โดยไม่ได้ทำอะไร — ไม่ใช่ OK
     if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
         status = "FAIL"
         errors.append("agent ที่ระบุใช้ไม่ได้ (เป็น subagent หรือหาไม่เจอ → opencode ตกไปใช้ agent เริ่มต้นที่แก้ไฟล์ได้) — ตั้ง mode: all/primary ติดตั้ง agent ให้ครบ หรือใช้ --attach none")
@@ -1224,7 +1359,27 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
         status = "QUOTA"
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools,
             "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
-            "denied": denied, "recent": recent[-5:]}
+            "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
+
+
+def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
+    """รายการสิทธิ์ที่ opencode ปฏิเสธเอง: จาก stderr (ชนิด + path) · ไม่มีใน stderr (เช่นถูกปฏิเสธใน subagent) = ใช้ tool error แทน"""
+    out = []
+    for m in PERM_REQ_RE.finditer(errtxt):
+        it = {"kind": m.group(1), "path": m.group(2).strip()}
+        if it not in out:
+            out.append(it)
+    if not out:
+        out = [{"kind": "tool", "path": t} for t in dict.fromkeys(tool_denied)]
+    return out[:20]
+
+
+def job_progressed(root: Path, head0: str, outputs: list[str]) -> bool:
+    """งานสำเร็จบางส่วนไหม: มี commit ใหม่ หรือ worker/subagent รายงาน DONE (flash.md ให้ worker ตอบ `DONE`/`FAIL`)"""
+    head1 = _git(root, "rev-parse", "HEAD")
+    if head0 and head1 and head0 != head1:
+        return True
+    return any(re.search(r"\bDONE\b", t) for t in outputs)
 
 
 # ---------- คำสั่ง ----------
@@ -1398,13 +1553,17 @@ def cmd_run(a) -> int:
         save_job(job)
         print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
         attach = LIVE_URL if a.attach == "live" else ("" if a.attach == "none" else a.attach)
-        if attach == LIVE_URL and not ensure_live_server(exe):
+        ext_dirs = external_dirs(cfg)
+        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext_dirs)} if ext_dirs else None
+        if attach == LIVE_URL and not ensure_live_server(exe, known_external_dirs(root, ext_dirs)):
             pidf = HOME / "live_server.pid"
             print(f"WARN: เปิด server 4096 ไม่ขึ้นใน 30 วิ → รันแยก (ดูสดไม่ได้) · log {HOME / 'live_server.log'} · pid "
                   f"{pidf.read_text(encoding='utf-8', errors='replace').strip() if pidf.exists() else '?'} (ค้าง = taskkill /PID <pid> /T /F แล้วสั่งใหม่)", flush=True)
             attach = ""
         job["attach"] = attach
         save_job(job)
+        for ln in perm_precheck(ext_dirs, attach, root):
+            print(ln, flush=True)
         timeout_min = a.timeout_min or (cfg["agent_timeout_min"] if kind in AGENT_KINDS else cfg["timeout_min"])
         snap0 = dirty_snapshot(root) if job["readonly"] else None
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
@@ -1429,9 +1588,11 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0))
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env)
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
+            if res.get("perm_denied"):
+                job["perm_denied"] = [x for x in (job.get("perm_denied") or []) + res["perm_denied"] if x][:20]
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
                 stall_retry -= 1
                 if not worker_like and job["model"]:  # ผู้ตรวจ/ผู้สืบ: ค้างที่ผู้ให้บริการนี้ → รอบใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี)
@@ -1502,8 +1663,11 @@ def cmd_run(a) -> int:
         print(f"REASON: {job.get('timeout_reason', '')}")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))
         print("แนะนำ: เปิด log ดูท้ายไฟล์ · บรีฟกว้างเกิน/ไฟล์ใหญ่เกิน → แบ่งงานให้เล็กลง · ผู้ให้บริการช้า → --model ตัวอื่น แล้วสั่งใหม่")
+    if job.get("perm_denied"):
+        for ln in perm_fix_lines(job["perm_denied"], partial=res["status"] != "DENIED"):
+            print(ln)
     if job.get("denied"):
-        print(f"DENIED: {len(job['denied'])} คำสั่งถูกสิทธิ์ของ agent บล็อก (ไม่ใช่งานล้มเหลว · agent ต้องใช้ read/grep แทน): " + " | ".join(job["denied"][:5]))
+        print(f"RULE_DENIED: {len(job['denied'])} คำสั่งถูกกฎของ agent บล็อก (ไม่ใช่งานล้มเหลว · agent ต้องใช้ read/grep แทน): " + " | ".join(job["denied"][:5]))
     for e in res["errors"][-3:]:
         print("ERROR:", e)
     if res["stderr"]:
@@ -1566,6 +1730,9 @@ def cmd_wait(a) -> int:
               + (f" session={j['session']}" if j.get("session") else ""))
         if res == "DEAD":
             print("  (process ของงานหายไปก่อนจบ — เครื่อง/terminal ปิด? ดู flashq log แล้วสั่งใหม่)")
+        if j.get("perm_denied"):
+            for ln in perm_fix_lines(j["perm_denied"], partial=res != "DENIED"):
+                print(ln)
         print("---- สรุปท้าย ----")
         print((j.get("last") or "(ไม่มีข้อความ)")[-1500:])
         if res != "OK":
@@ -2180,7 +2347,8 @@ def ui_state() -> dict:
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
-        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
+        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []),
+                   perm_denied=[f"{x.get('kind', '')}: {x.get('path', '')}" for x in j.get("perm_denied") or []][:5])
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
                        child_alive=pid_alive(j.get("child_pid") or 0),
@@ -2436,7 +2604,8 @@ def log_tail(j: dict, attempt: int, offset: int, limit: int = 256 * 1024) -> dic
     """อ่าน log ต่อจาก offset (ไบต์) เฉพาะบรรทัดที่จบแล้ว — ไม่อ่านทั้งไฟล์ซ้ำ"""
     logs = j.get("logs") or []
     out = {"attempts": len(logs), "attempt": 0, "offset": 0, "size": 0, "lines": [], "reset": False,
-           "state": live_state(j), "last": j.get("last", "")}
+           "state": live_state(j), "last": j.get("last", ""),
+           "denied_help": "\n".join(perm_fix_lines(j["perm_denied"], partial=j.get("result") != "DENIED")) if j.get("perm_denied") else ""}
     if not logs:
         return out
     idx = attempt - 1 if 1 <= attempt <= len(logs) else len(logs) - 1
