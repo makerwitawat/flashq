@@ -32,7 +32,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
 | ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min`) · สัญญาณรันเลย `run_now/` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
-| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
+| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
 | ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้ · `main_branch` `remote` `plan_dir` `rules`) |
 
 โปรเจกต์ที่มี `.opencode/command/flash.md` หรือ `.opencode/agent/flash-worker.md` ของตัวเอง (เช่น IRIS_CODE_1.2) → opencode ใช้ของโปรเจกต์ก่อน
@@ -66,6 +66,12 @@ python D:\MyCode\flashq\flashq.py config schedule auto|fifo                # จ
 python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # รันงานที่รอคิวทันที (ช่องพิเศษ)
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`
+
+### โหมดเป้าหมาย `/flash-goal` — ตั้งธงแล้ววนจนผ่าน
+- `/flash-goal <ความต้องการ>` → Claude เขียน `<plan_dir>/GOAL_<เรื่อง>.md` (แม่แบบ `templates/GOAL_TEMPLATE.md`): เกณฑ์ G-xx ที่วัดได้ (`ตรวจ:` คำสั่ง · `ต้องเห็น:` ข้อความ/`re:` · หรือ `คนตรวจ:`) + `goal-files:` ขอบเขต + `goal-locked:` เทสต์เกณฑ์ + งบรอบ/ชั่วโมง → user ยืนยันครั้งเดียว → วน: แผน (`/flash-plan`) → Flash ทำ → `/flash-check` → `flashq goal verify`
+- **ตัวตรวจข้อจำกัด** `flashq goal check <GOAL>` (ต้อง `GOAL_CHECK=OK` ก่อนเริ่ม): ไม่มีเกณฑ์ · เกณฑ์วัดไม่ได้ · คำสั่งที่ผ่านเสมอ (`echo` ฯลฯ) · ช่อง `<...>` ค้าง · ไม่มีขอบเขต · ทุกข้อคนตรวจ = ห้ามเริ่ม · คำลอยไม่มี `ต้องเห็น:` · ไม่มีไฟล์ล็อก · คำสั่งไม่อยู่ใน PATH · รอบเกินเพดาน 10 = เตือน · จด base commit + ลายนิ้วมือเกณฑ์ไว้ที่ `.tmp/flashq-goal/`
+- **ตัดสิน + เบรก** `flashq goal verify <GOAL>` → `GOAL=DONE` · `DONE_NEEDS_USER` (เหลือข้อคนตรวจ) · `CONTINUE` · `STOP` เมื่อ: พังซ้ำเรื่องเดิม 2 รอบ (output เหมือนเดิม) · ครบงบรอบ/เวลา · แก้ไฟล์นอก `goal-files` · แก้ไฟล์ล็อก (ผ่านแบบโกง) · เกณฑ์ถูกแก้หลังเริ่ม (ย้ายเสาประตู → ต้อง user ยืนยัน + `goal check --reset`) · บอกเกณฑ์ที่ "ถอยหลัง" ด้วย · คำสั่งเกณฑ์ค้างเกิน `goal-cmd-timeout-min` = ฆ่า
+- `flashq goal status <GOAL>` = ทำต่อหลัง session ปิด (`/flash-goal <path GOAL>`) · ข้อจำกัดที่ยังมี: ต้องเปิด Claude Code ค้างระหว่างวน · โควตา Claude ใช้ตอนวางแผน/ตรวจทุกรอบ (จึงมีงบรอบ) · คิวบังคับให้ push แผน → commit ของ Flash ใน branch หลักถูก push ไปด้วย
 
 ### งานตรวจ (verify) — ผู้ตรวจอิสระ
 ```

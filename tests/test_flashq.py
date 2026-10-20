@@ -1057,6 +1057,93 @@ class FlashqTest(unittest.TestCase):
         job = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
         self.assertEqual(len(job["shell_kills"]), 1)
 
+    def goal_repo(self, body: str) -> Path:
+        g = lambda *a: subprocess.run(["git", "-C", str(self.proj), *a], capture_output=True, check=True)  # noqa: E731
+        g("init", "-q")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        (self.proj / "src").mkdir()
+        (self.proj / "src" / "a.txt").write_text("old\n", encoding="utf-8")
+        (self.proj / "tests").mkdir()
+        (self.proj / "tests" / "acc.py").write_text("import sys\nt = open('src/a.txt').read()\nprint('VAL=' + t.strip())\nsys.exit(0 if 'new' in t else 1)\n", encoding="utf-8")
+        goal = self.proj / "docs" / "plans" / "GOAL_x.md"
+        goal.parent.mkdir(parents=True)
+        goal.write_text(body, encoding="utf-8")
+        g("add", "-A")
+        g("commit", "-qm", "base")
+        return goal
+
+    def test_goal_check_rejects_unmeasurable_flags(self):
+        """ตัวตรวจข้อจำกัด: ไม่มีเกณฑ์ · เกณฑ์ไม่มีทั้งตรวจ/คนตรวจ · คำสั่งที่ผ่านเสมอ · ช่อง <...> · ไม่มีขอบเขต · ทุกข้อคนตรวจ = FAIL
+        คำลอยไม่มี ต้องเห็น · ไม่มี goal-locked · ไม่ตั้งรอบ = เตือน"""
+        self.goal_repo("# GOAL\n")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CHECK=FAIL", r.stdout)
+        self.assertIn("ไม่มีเกณฑ์ยอมรับ", r.stdout)
+        bad = ("- [ ] G-01 หน้าเว็บสวยขึ้น\n- [ ] G-02 ผ่าน · ตรวจ: `echo ok`\n- [ ] G-03 x · ตรวจ: `<คำสั่ง>`\n")
+        (self.proj / "docs/plans/GOAL_x.md").write_text(bad, encoding="utf-8")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CHECK=FAIL", r.stdout)
+        for want in ("G-01: ไม่มี `ตรวจ:`", "G-02: คำสั่งตรวจ `echo ok` ผ่านเสมอ", "ช่องว่างจากแม่แบบ `<...>`: G-03", "ไม่มี `goal-files:`"):
+            self.assertIn(want, r.stdout)
+        (self.proj / "docs/plans/GOAL_x.md").write_text("- [ ] G-01 สวย · คนตรวจ: ดูหน้าแรก\ngoal-files: src/*\n", encoding="utf-8")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("ทุกเกณฑ์เป็น `คนตรวจ:`", r.stdout)
+        (self.proj / "docs/plans/GOAL_x.md").write_text(f"- [ ] G-01 ทำงานได้ · ตรวจ: `\"{sys.executable}\" tests/acc.py`\ngoal-files: src/*\n", encoding="utf-8")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CHECK=OK", r.stdout, r.stdout)
+        for want in ("คำว่า \"ทำงานได้\"", "ไม่มี `goal-locked:`", "ไม่ได้ตั้ง goal-max-rounds"):
+            self.assertIn(want, r.stdout)
+        self.assertTrue((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").is_file())
+
+    def test_goal_verify_loop_and_brakes(self):
+        """verify: ไม่ผ่าน = CONTINUE · พังซ้ำเหมือนเดิม 2 รอบ = STOP · ผ่าน + คนตรวจ = DONE_NEEDS_USER · แก้ไฟล์ล็อก/นอกขอบเขต = STOP
+        · แก้เกณฑ์หลังเริ่ม = STOP จนกว่า check --reset · ครบงบรอบ = STOP"""
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n- [ ] G-02 ข้อความอ่านง่าย · คนตรวจ: เปิด src/a.txt\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n")
+        goal = self.goal_repo(body)
+        v = lambda: self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # noqa: E731
+        self.assertIn("ยังไม่ได้รัน `goal check", v().stdout)
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md").stdout)
+        r = v()
+        self.assertIn("GOAL=CONTINUE รอบ 1/3 · ไม่ผ่าน G-01", r.stdout, r.stdout)
+        self.assertIn("VAL=old", r.stdout)  # ท้าย output ของเกณฑ์ที่ล้ม = หลักฐานให้แผนรอบหน้า
+        r = v()
+        self.assertIn("GOAL=STOP", r.stdout)
+        self.assertIn("พังซ้ำเรื่องเดิม 2 รอบติด", r.stdout)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md", "--reset").stdout)
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        r = v()
+        self.assertIn("GOAL=DONE_NEEDS_USER", r.stdout, r.stdout)
+        self.assertIn("G-02 ข้อความอ่านง่าย → เปิด src/a.txt", r.stdout)
+        # โกง: แก้เทสต์เกณฑ์ + แตะไฟล์นอกขอบเขต
+        (self.proj / "tests" / "acc.py").write_text("print('VAL=new')\n", encoding="utf-8")
+        (self.proj / "other.py").write_text("x\n", encoding="utf-8")
+        r = v()
+        self.assertIn("GOAL=STOP", r.stdout)
+        self.assertIn("ไฟล์ล็อก (เกณฑ์/เทสต์ตัดสิน) ถูกแก้: tests/acc.py", r.stdout)
+        self.assertIn("แก้ไฟล์นอกขอบเขต goal-files: other.py", r.stdout)
+        (self.proj / "other.py").unlink()
+        subprocess.run(["git", "-C", str(self.proj), "checkout", "--", "tests/acc.py"], check=True)
+        # ย้ายเสาประตู: ผ่อนเกณฑ์หลังเริ่ม
+        goal.write_text(body.replace("· ต้องเห็น: `VAL=new`", ""), encoding="utf-8")
+        r = v()
+        self.assertIn("ย้ายเสาประตู", r.stdout)
+        self.assertIn("ต้องแก้: เกณฑ์ต่างจากตอนเริ่ม", self.run_q("goal", "check", "docs/plans/GOAL_x.md").stdout)
+        # ครบงบรอบ
+        goal.write_text(body, encoding="utf-8")
+        self.run_q("goal", "check", "docs/plans/GOAL_x.md", "--reset")
+        (self.proj / "src" / "a.txt").write_text("v1\n", encoding="utf-8")
+        v()
+        (self.proj / "src" / "a.txt").write_text("v2\n", encoding="utf-8")  # ผลต่างกันทุกรอบ = ไม่ใช่พังซ้ำ
+        v()
+        (self.proj / "src" / "a.txt").write_text("v3\n", encoding="utf-8")
+        r = v()
+        self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
+        self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
+
     def test_cancel_does_not_kill_reused_child_pid(self):
         """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
         mod = self.load_mod("flashq_cancel")

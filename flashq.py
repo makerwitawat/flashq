@@ -27,11 +27,13 @@
   python flashq.py runnow <id> [--force]                                ให้งานที่รอคิวได้ช่องพิเศษทันที (คู่ขนาน)
   python flashq.py review start <แผน> [<งาน>] | done <แผน> pass|fail [--note ...] | list   ป้ายให้หน้าออฟฟิศรู้ว่า Claude กำลังตรวจ (/flash-check)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
+  python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
 ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
 """
 import argparse
 import contextlib
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -2373,6 +2375,223 @@ def cmd_ui(a) -> int:
     return 0
 
 
+# ---------- โหมดเป้าหมาย (/flash-goal): ตั้งธง → วางแผน → Flash ทำ → ตรวจกับเกณฑ์ → วนจนผ่าน หรือชนเบรก ----------
+GOAL_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*(G-\d+)\s*(.*)$")
+GOAL_VAGUE = ("สวย", "ดีขึ้น", "ดีกว่า", "ง่าย", "เร็วขึ้น", "เร็ว", "เหมาะสม", "ถูกต้อง", "สมบูรณ์", "เรียบร้อย", "ใช้งานได้", "ทำงานได้", "ไม่มีบั๊ก",
+              "ลื่น", "นิ่ง", "ครบถ้วน", "user-friendly", "nice", "better", "faster", "clean", "properly", "works")
+GOAL_TRIVIAL_RE = re.compile(r"^\s*(echo\b|true\s*$|exit\s+0\s*$|rem\b|:\s*$|cd\s*$|dir\s*$|ls\s*$|type\s+nul)", re.I)
+GOAL_DEFAULT_ROUNDS, GOAL_ROUNDS_CAP, GOAL_DEFAULT_HOURS = 5, 10, 6
+
+
+def goal_parse(path: Path) -> dict:
+    """อ่านไฟล์ GOAL: เกณฑ์ `- [ ] G-01 <คำอธิบาย> · ตรวจ: `<คำสั่ง>` · ต้องเห็น: `<ข้อความ|re:regex>`` หรือ `· คนตรวจ: <สิ่งที่ user ดู>`
+    + บรรทัด `goal-files:` (ขอบเขตที่ Flash แก้ได้) · `goal-locked:` (ห้ามแก้ เช่นเทสต์เกณฑ์) · `goal-max-rounds:` · `goal-max-hours:` · `goal-cmd-timeout-min:`"""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    items, meta, fence = [], {}, False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        m = re.match(r"^\s*(?:[-*]\s*)?(goal-[a-z-]+)\s*:\s*(.*)$", line)
+        if m:
+            meta[m.group(1)] = m.group(2).strip().strip("`")
+            continue
+        m = GOAL_ITEM_RE.match(line)
+        if not m:
+            continue
+        rest = m.group(2)
+        cmd = re.search(r"ตรวจ\s*:\s*`([^`]+)`", rest)
+        exp = re.search(r"ต้องเห็น\s*:\s*`([^`]+)`", rest)
+        human = re.search(r"คนตรวจ\s*:\s*(.+)$", rest)
+        desc = re.split(r"\s*·\s*(?:ตรวจ|ต้องเห็น|คนตรวจ)\s*:", rest)[0].strip()
+        items.append({"id": m.group(1), "desc": desc, "cmd": cmd.group(1).strip() if cmd else "",
+                      "expect": exp.group(1) if exp else "", "human": human.group(1).strip() if human and not cmd else ""})
+    globs = lambda k: [g.strip().replace("\\", "/") for g in meta.get(k, "").split(",") if g.strip()]  # noqa: E731
+    def num(k, d):
+        try:
+            return float(meta[k])
+        except (KeyError, ValueError):
+            return d
+    sig = json.dumps([[i["id"], i["cmd"], i["expect"], i["human"]] for i in items] + [globs("goal-files"), globs("goal-locked")], ensure_ascii=False)
+    return {"items": items, "files": globs("goal-files"), "locked": globs("goal-locked"), "rounds": int(num("goal-max-rounds", GOAL_DEFAULT_ROUNDS)),
+            "hours": num("goal-max-hours", GOAL_DEFAULT_HOURS), "cmd_timeout": num("goal-cmd-timeout-min", 10), "has_rounds": "goal-max-rounds" in meta,
+            "sig": hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]}
+
+
+def goal_lint(g: dict) -> tuple[list[str], list[str]]:
+    """ตัวตรวจข้อจำกัดของโหมดเป้าหมาย → (ข้อห้ามที่ต้องแก้ก่อนเริ่ม, คำเตือน)"""
+    errs, warns = [], []
+    items = g["items"]
+    if not items:
+        errs.append("ไม่มีเกณฑ์ยอมรับ (บรรทัด `- [ ] G-01 ... · ตรวจ: `คำสั่ง``) → ตัดสินไม่ได้ว่าเสร็จเมื่อไร")
+    machine = [i for i in items if i["cmd"]]
+    holes = [f"{i['id']}" for i in items if re.search(r"<[^<>\n]+>", i["desc"] + i["cmd"] + i["expect"] + i["human"])]
+    holes += [k for k in ("goal-files", "goal-locked") if any("<" in x for x in g["files" if k == "goal-files" else "locked"])]
+    if holes:
+        errs.append("ยังมีช่องว่างจากแม่แบบ `<...>`: " + ", ".join(holes))
+    for i in items:
+        low = i["desc"].lower()
+        vague = [w for w in GOAL_VAGUE if w in low]
+        if not i["cmd"] and not i["human"]:
+            errs.append(f"{i['id']}: ไม่มี `ตรวจ:` และไม่มี `คนตรวจ:` → ตรวจด้วยเครื่องไม่ได้ (ธงต้องวัดผลได้)")
+        elif i["cmd"] and GOAL_TRIVIAL_RE.match(i["cmd"]):
+            errs.append(f"{i['id']}: คำสั่งตรวจ `{i['cmd']}` ผ่านเสมอ ไม่ได้วัดอะไร")
+        elif i["cmd"] and vague and not i["expect"]:
+            warns.append(f"{i['id']}: คำว่า \"{vague[0]}\" วัดจาก exit 0 อย่างเดียวอาจไม่จริง → เพิ่ม `ต้องเห็น:` หรือแยกเป็น `คนตรวจ:`")
+        elif i["cmd"]:
+            exe = re.split(r"\s+", i["cmd"].strip())[0].strip("\"'")
+            if exe and not (shutil.which(exe) or Path(exe).exists() or exe.lower() in ("cd", "if", "set", "call", "for")):
+                warns.append(f"{i['id']}: ไม่พบโปรแกรม `{exe}` ใน PATH (รันจริงอาจล้มทุกรอบ)")
+    if items and not machine:
+        errs.append("ทุกเกณฑ์เป็น `คนตรวจ:` → วนอัตโนมัติไม่ได้ (ต้องมีเกณฑ์ที่เครื่องตรวจได้อย่างน้อย 1 ข้อ)")
+    elif machine and len(machine) * 2 < len(items):
+        warns.append(f"เกณฑ์ที่เครื่องตรวจได้มีแค่ {len(machine)}/{len(items)} ข้อ → ผ่านรอบอัตโนมัติแล้วยังต้องให้ user ดูอีกมาก")
+    if not g["files"]:
+        errs.append("ไม่มี `goal-files:` (ไฟล์/โฟลเดอร์ที่ Flash แก้ได้) → ตรวจไม่ได้ว่างานหลุดขอบเขต")
+    if g["rounds"] < 1:
+        errs.append("goal-max-rounds ต้อง ≥ 1")
+    elif g["rounds"] > GOAL_ROUNDS_CAP:
+        warns.append(f"goal-max-rounds {g['rounds']} เกินเพดาน → ใช้ {GOAL_ROUNDS_CAP} (กันกินโควตา Claude ตอนวางแผน/ตรวจ)")
+    if not g["has_rounds"]:
+        warns.append(f"ไม่ได้ตั้ง goal-max-rounds → ใช้ {GOAL_DEFAULT_ROUNDS}")
+    if machine and not g["locked"]:
+        warns.append("ไม่มี `goal-locked:` → Flash แก้ไฟล์เทสต์ที่ใช้ตัดสินได้ (ผ่านแบบโกง) · ใส่ path เทสต์เกณฑ์เพื่อล็อก")
+    return errs, warns
+
+
+def _goal_state_path(root: Path, goal: Path) -> Path:
+    return root / ".tmp" / "flashq-goal" / (goal.stem + ".json")
+
+
+def _goal_load(root: Path, goal_arg: str) -> tuple[Path, Path, dict, dict]:
+    goal = Path(goal_arg)
+    goal = goal if goal.is_absolute() else root / goal
+    return goal, _goal_state_path(root, goal), goal_parse(goal), read_json(_goal_state_path(root, goal))
+
+
+def _glob_hit(path: str, globs: list[str]) -> bool:
+    import fnmatch
+    return any(fnmatch.fnmatch(path, g) or (g.endswith("/") and path.startswith(g)) or path.startswith(g.rstrip("/") + "/") for g in globs)
+
+
+def goal_changed_files(root: Path, base: str) -> list[str]:
+    """ไฟล์ที่เปลี่ยนตั้งแต่ base (commit แล้ว + ค้างใน working tree + ไฟล์ใหม่ที่ยังไม่ track)"""
+    out = set(_git(root, "diff", "--name-only", base).splitlines()) if base else set()
+    out |= set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return sorted(p.strip() for p in out if p.strip())
+
+
+def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
+    p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        out, _ = p.communicate(timeout=timeout_min * 60)
+    except subprocess.TimeoutExpired:
+        kill_tree(p.pid)
+        out = (p.communicate()[0] or b"") + f"\n[flashq goal: เกิน {timeout_min:g} นาที → ฆ่าแล้ว]".encode("utf-8")
+        return 124, out.decode("utf-8", errors="replace")
+    return p.returncode, (out or b"").decode("utf-8", errors="replace")
+
+
+def cmd_goal(a) -> int:
+    """check = ตรวจไฟล์เป้าหมายก่อนเริ่ม (ธงวัดได้ไหม · ขอบเขต · งบรอบ) แล้วจด base commit + ลายนิ้วมือเกณฑ์
+    verify = รันเกณฑ์ทุกข้อ + ตรวจขอบเขต/ไฟล์ล็อก/เกณฑ์ถูกแก้ + เบรก (รอบ · เวลา · พังซ้ำ) → `GOAL=DONE|DONE_NEEDS_USER|CONTINUE|STOP`
+    status = ดูสถานะ (ใช้ต่อหลัง session ปิด)"""
+    root, is_git = project_root(Path(a.project or os.getcwd()))
+    goal, sp, g, st = _goal_load(root, a.goal)
+    if not goal.is_file():
+        print(f"GOAL_CHECK=FAIL\nไม่พบไฟล์เป้าหมาย: {goal}")
+        return 1
+    rel = goal.relative_to(root).as_posix() if goal.is_relative_to(root) else str(goal)
+    rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"]))
+    if a.action == "check":
+        errs, warns = goal_lint(g)
+        if not is_git:
+            errs.append("โปรเจกต์ไม่ใช่ git repo → ตรวจขอบเขต/ไฟล์ล็อกไม่ได้")
+        for w in warns:
+            print(f"เตือน: {w}")
+        for e in errs:
+            print(f"ต้องแก้: {e}")
+        if errs:
+            print("GOAL_CHECK=FAIL")
+            return 1
+        if st and st.get("sig") != g["sig"] and not a.reset:
+            print("ต้องแก้: เกณฑ์ต่างจากตอนเริ่ม (ย้ายเสาประตู) → ให้ user ยืนยันเกณฑ์ใหม่แล้วรัน `goal check --reset`")
+            print("GOAL_CHECK=FAIL")
+            return 1
+        if not st or a.reset:
+            st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": []}
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            write_json(sp, st)
+        print(f"GOAL_CHECK=OK เกณฑ์ {len(g['items'])} ข้อ (เครื่องตรวจ {sum(1 for i in g['items'] if i['cmd'])}) · "
+              f"งบ {rounds_max} รอบ / {g['hours']:g} ชม. · ใช้ไปแล้ว {len(st['rounds'])} รอบ · base {st['base'][:9]}")
+        return 0
+    if not st:
+        print(f"GOAL=STOP ยังไม่ได้รัน `goal check {rel}` (ต้องตรวจเป้าหมาย + จด base ก่อน)")
+        return 1
+    if a.action == "status":
+        last = st["rounds"][-1] if st["rounds"] else None
+        print(f"เป้าหมาย {rel} · เริ่ม {st['started']} (ผ่านไป {(_secs(st['started']) or 0) / 3600:.1f} ชม.) · รอบ {len(st['rounds'])}/{rounds_max} · base {st['base'][:9]}")
+        if last:
+            print(f"รอบล่าสุด {last['at']}: {last['verdict']} · ไม่ผ่าน {', '.join(last['fail']) or '-'}")
+        return 0
+    # verify
+    stop = []
+    if st.get("sig") != g["sig"]:
+        stop.append("เกณฑ์/ขอบเขตในไฟล์เป้าหมายถูกแก้หลังเริ่ม (ย้ายเสาประตู) → ให้ user ยืนยัน แล้ว `goal check --reset`")
+    results, fail, human = {}, [], []
+    for i in g["items"]:
+        if not i["cmd"]:
+            human.append(f"{i['id']} {i['desc']} → {i['human']}")
+            continue
+        rc, out = goal_run_cmd(root, i["cmd"], g["cmd_timeout"])
+        exp = i["expect"]
+        seen = (re.search(exp[3:], out, re.M) is not None) if exp.startswith("re:") else (exp in out) if exp else True
+        ok = rc == 0 and seen
+        results[i["id"]] = {"ok": ok, "rc": rc, "seen": seen, "tail": out.strip()[-600:]}
+        print(f"{'✅' if ok else '❌'} {i['id']} {i['desc']} · exit {rc}{'' if seen else ' · ไม่เห็น `' + exp + '`'}")
+        if not ok:
+            fail.append(i["id"])
+            print("   " + "\n   ".join(out.strip().splitlines()[-8:]))
+    changed = goal_changed_files(root, st["base"]) if is_git else []
+    cfg = project_cfg(root)
+    free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"]
+    out_scope = [f for f in changed if not _glob_hit(f, g["files"] + free)]
+    locked = [f for f in changed if g["locked"] and _glob_hit(f, g["locked"])]
+    if locked:
+        stop.append("ไฟล์ล็อก (เกณฑ์/เทสต์ตัดสิน) ถูกแก้: " + ", ".join(locked[:8]))
+    if out_scope:
+        stop.append("แก้ไฟล์นอกขอบเขต goal-files: " + ", ".join(out_scope[:8]) + (" …" if len(out_scope) > 8 else ""))
+    prev = st["rounds"][-1] if st["rounds"] else None
+    regress = [k for k, r in results.items() if not r["ok"] and prev and prev["results"].get(k, {}).get("ok")]
+    n = len(st["rounds"]) + 1
+    hrs = (_secs(st["started"]) or 0) / 3600
+    if not stop and not fail:
+        verdict = "DONE_NEEDS_USER" if human else "DONE"
+    elif stop:
+        verdict = "STOP"
+    else:
+        if prev and prev["fail"] == fail and all(prev["results"].get(k, {}).get("tail") == results[k]["tail"] for k in fail):
+            stop.append(f"พังซ้ำเรื่องเดิม 2 รอบติด ({', '.join(fail)} ผลเหมือนเดิมทุกตัวอักษร) → แผนแก้ไม่ถูกจุด ต้องให้ user/สืบต้นตอใหม่")
+        if n >= rounds_max:
+            stop.append(f"ครบงบ {rounds_max} รอบแล้วยังไม่ผ่าน")
+        if hrs >= g["hours"]:
+            stop.append(f"เกินงบเวลา {g['hours']:g} ชม. (ผ่านไป {hrs:.1f})")
+        verdict = "STOP" if stop else "CONTINUE"
+    st["rounds"].append({"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked})
+    write_json(sp, st)
+    if regress:
+        print(f"ถอยหลัง: {', '.join(regress)} เคยผ่านรอบก่อนแต่รอบนี้ไม่ผ่าน → แผนรอบหน้าต้องแก้ตัวนี้ก่อน")
+    for s in stop:
+        print(f"เบรก: {s}")
+    if human:
+        print("ให้ user ตรวจเอง:\n  " + "\n  ".join(human))
+    left = rounds_max - n
+    print(f"GOAL={verdict} รอบ {n}/{rounds_max} · ไม่ผ่าน {', '.join(fail) or '-'}" + (f" · เหลือ {left} รอบ" if verdict == "CONTINUE" else ""))
+    return 0 if verdict in ("DONE", "DONE_NEEDS_USER", "CONTINUE") else 1
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # pipe บน Windows = cp874 พังกับไทย/อีโมจิ
     HOME.mkdir(parents=True, exist_ok=True)
@@ -2455,6 +2674,12 @@ def main() -> int:
     rn.add_argument("id")
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
     rn.set_defaults(fn=cmd_runnow)
+    go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status")
+    go.add_argument("action", choices=["check", "verify", "status"])
+    go.add_argument("goal", help="ไฟล์เป้าหมาย เช่น docs/plans/GOAL_<เรื่อง>.md")
+    go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+    go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
+    go.set_defaults(fn=cmd_goal)
     ui = sp.add_parser("ui", help="หน้าเว็บ dashboard ในเครื่อง (127.0.0.1)")
     ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")
