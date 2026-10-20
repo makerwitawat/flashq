@@ -246,6 +246,51 @@ def other_providers(model: str, tried: set) -> list[str]:
     return [m for m in have if m not in tried]
 
 
+CITE_RE = re.compile(r"(?<![\w/.\\-])((?:[A-Za-z]:)?[\w./\\-]*[\w-]\.[A-Za-z0-9]{1,6}):(\d+)(?:[-–](\d+))?([^\n]*)")
+
+
+def check_citations(text: str, root: Path) -> dict:
+    """ตรวจ `file:line` ที่ผู้สืบอ้างในรายงาน: ไฟล์มีจริงใต้โปรเจกต์ · เลขบรรทัดไม่เกินไฟล์ · โค้ดที่คัดไว้ใน `...` อยู่ในบรรทัดนั้น (±3)
+    ตรวจได้แค่ "อ้างตรงโค้ดจริง" ไม่ได้ตรวจว่าเป็นต้นตอจริง (ยังเป็นหน้าที่ของ Claude)"""
+    root = root.resolve()
+    tracked: list[str] | None = None
+    ok, bad, seen = 0, [], set()
+    for m in CITE_RE.finditer(text):
+        rel, line = m.group(1).replace("\\", "/"), int(m.group(2))
+        if (rel, line) in seen:
+            continue
+        seen.add((rel, line))
+        f = (root / rel)
+        try:
+            inside = f.resolve().is_relative_to(root)
+        except OSError:
+            inside = False
+        if not (inside and f.is_file()):
+            if tracked is None:
+                tracked = _git(root, "ls-files").splitlines()
+            hits = [t for t in tracked if t == rel or t.endswith("/" + rel)]
+            f = root / hits[0] if len(hits) == 1 else None
+        if f is None or not f.is_file():
+            bad.append(f"{rel}:{line} — ไม่พบไฟล์")
+            continue
+        try:
+            lines = f.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            bad.append(f"{rel}:{line} — อ่านไฟล์ไม่ได้")
+            continue
+        if not 1 <= line <= len(lines):
+            bad.append(f"{rel}:{line} — เลขบรรทัดเกินไฟล์ (มี {len(lines)} บรรทัด)")
+            continue
+        snippets = [x.strip() for x in re.findall(r"`([^`]{4,})`", m.group(4)) if not x.strip().endswith(("()", "/"))]
+        window = re.sub(r"\s+", " ", " ".join(lines[max(0, line - 4):line + 3]))
+        miss = [x for x in snippets if re.sub(r"\s+", " ", x) not in window]
+        if snippets and len(miss) == len(snippets):
+            bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{miss[0][:60]}`")
+            continue
+        ok += 1
+    return {"ok": ok, "bad": bad}
+
+
 # ---------- คิว ----------
 def jobs() -> list[dict]:
     out = []
@@ -1003,6 +1048,13 @@ def cmd_run(a) -> int:
                     save_job(job)
                     continue
             break
+        if kind == "investigate" and res.get("last"):  # ตรวจเลขไฟล์:บรรทัดที่ผู้สืบอ้าง (กลไก · ไม่ใช่การตัดสินว่าเป็นต้นตอจริง)
+            cites = check_citations(res["last"], root)
+            job["citations"] = cites
+            if cites["ok"] or cites["bad"]:
+                print(f"CITATIONS: ตรง {cites['ok']} · ผิด {len(cites['bad'])}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด:"), flush=True)
+                for b in cites["bad"][:10]:
+                    print("  ✗", b, flush=True)
     finally:
         job.update(status=res["status"].lower(), result=res.get("status"), rc=res.get("rc"),
                    finished=now(), last=(res.get("last") or "")[-1500:])

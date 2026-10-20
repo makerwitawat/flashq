@@ -753,6 +753,25 @@ class FlashqTest(unittest.TestCase):
                    "--model", "commandcode/deepseek/deepseek-v4.1-flash", env={"FAKE_MODE": "quota"})
         self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_investigate_checks_citations(self):
+        """รายงานผู้สืบอ้าง file:line → flashq ตรวจว่าไฟล์/บรรทัด/โค้ดที่คัดไว้มีจริง · ผิดต้องถูกชี้"""
+        (self.proj / "src").mkdir()
+        (self.proj / "src" / "a.cpp").write_text(chr(10).join(["int x = 0;", "void Foo() {", "  y = CalcWorldMinZ(m);", "}", ""]), encoding="utf-8")
+        report = chr(10).join([
+            "หลักฐาน: src/a.cpp:3 — `y = CalcWorldMinZ(m);` เรียกผิด",
+            "หลักฐาน: src/a.cpp:2 — Foo เริ่มตรงนี้",
+            "หลักฐาน: src/a.cpp:99 — บรรทัดที่ไม่มี",
+            "หลักฐาน: src/ghost.cpp:1 — ไฟล์ที่ไม่มี",
+            "หลักฐาน: src/a.cpp:1 — `int z = 5;` คัดผิด",
+        ])
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": report})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("CITATIONS: ตรง 2 · ผิด 3", r.stdout)
+        for needle in ("เลขบรรทัดเกินไฟล์", "ไม่พบไฟล์", "ไม่อยู่ในบรรทัดนี้"):
+            self.assertIn(needle, r.stdout)
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertEqual((job["citations"]["ok"], len(job["citations"]["bad"])), (2, 3))
+
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
         with socket.socket() as s:

@@ -42,4 +42,4 @@ if mode == "subagent":  # opencode เตือนทาง stderr แล้ว�
 if mode == "fail":
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": "สถานะ: FAIL"}}), flush=True)
     sys.exit(1)
-print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": "PONG"}}), flush=True)
+print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "PONG")}}), flush=True)
