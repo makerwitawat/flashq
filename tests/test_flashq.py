@@ -971,6 +971,92 @@ class FlashqTest(unittest.TestCase):
         spec.loader.exec_module(mod)
         return mod
 
+    def test_shell_watch_kills_only_stuck_command(self):
+        """ตัวเฝ้า shell: โปรเซสขยับ = ไม่ฆ่า · นิ่งเกิน idle = ฆ่าเฉพาะรากของคำสั่ง · shell จบแต่ลูกกำพร้าถือ handle = ฆ่าเมื่อยืนยัน 2 รอบ
+        · โปรเซสอื่นของเครื่อง (กำพร้าเหมือนกันแต่ไม่เกี่ยว) ห้ามโดน · tool จบแล้วล้างสถานะ"""
+        mod = self.load_mod("flashq_shellwatch")
+        T = 1_000_000.0
+        tab = [{"pid": 1, "ppid": 0, "name": "opencode.exe", "cmd": "opencode serve", "created": T - 999, "act": 5},
+               {"pid": 10, "ppid": 1, "name": "powershell.exe", "cmd": 'powershell.EXE -NoLogo -Command "npm run build"', "created": T + 1, "act": 1},
+               {"pid": 11, "ppid": 10, "name": "node.exe", "cmd": "node build.js", "created": T + 2, "act": 100},
+               {"pid": 50, "ppid": 4444, "name": "chrome.exe", "cmd": "chrome.exe --type=renderer", "created": T + 3, "act": 7}]
+        killed = []
+        w = mod.ShellWatch(4, table=lambda: tab, killer=killed.append)
+        run = [{"tool": "bash", "cmd": "npm run build", "what": "npm run build", "since": T, "session": "s1"},
+               {"tool": "read", "cmd": "", "what": "x", "since": T, "session": "s1"}]
+        rep = w.check(run, now=T + 30)
+        self.assertEqual((rep["state"], rep["pids"]), ("active", 2))
+        tab[2]["act"] = 200  # ขยับ → นับเวลานิ่งใหม่
+        self.assertEqual(w.check(run, now=T + 200)["state"], "active")
+        self.assertEqual(w.check(run, now=T + 400)["state"], "quiet")  # นิ่ง 200 วิ ≥ ครึ่งของ idle
+        self.assertEqual(killed, [])
+        rep = w.check(run, now=T + 200 + 4 * 60)
+        self.assertEqual(rep["state"], "killed")
+        self.assertIn("นิ่งสนิท", rep["note"])
+        self.assertEqual(killed, [10])  # ฆ่าแค่ราก (kill_tree ตามลูกเอง) ไม่แตะ opencode / chrome
+        self.assertEqual(w.seen, {})
+
+        # shell ตายทันที (start /b) → ping กำพร้า ถือ pipe ไว้ · chrome กำพร้าที่เกิดเวลาเดียวกันแต่ไม่เกี่ยว ห้ามโดน
+        tab[:] = [tab[0], tab[3], {"pid": 20, "ppid": 77, "name": "PING.EXE", "cmd": "ping -n 300 127.0.0.1", "created": T + 1, "act": 3}]
+        killed.clear()
+        w = mod.ShellWatch(4, table=lambda: tab, killer=killed.append)
+        run = [{"tool": "bash", "cmd": "cmd /c start /b ping -n 300 127.0.0.1", "what": "", "since": T, "session": "s2"}]
+        rep = w.check(run, now=T + 30)
+        self.assertEqual((rep["state"], rep["names"]), ("active", "PING.EXE"))
+        rep = w.check(run, now=T + 60)
+        self.assertEqual(rep["state"], "killed")
+        self.assertIn("ถือ handle", rep["note"])
+        self.assertEqual(killed, [20])
+        # tool จบ (ไม่อยู่ใน running) → ล้าง · ไม่มี bash = ไม่อ่านตารางโปรเซสเลย
+        w.check(run, now=T + 61)
+        w.check([], now=T + 62)
+        self.assertEqual(w.seen, {})
+        w2 = mod.ShellWatch(4, table=lambda: self.fail("ไม่ควรอ่านตาราง"), killer=killed.append)
+        self.assertIsNone(w2.check([{"tool": "grep", "cmd": "", "since": T, "session": "s"}], now=T))
+
+    def test_shell_watch_live_kills_stuck_command_and_job_continues(self):
+        """--attach live + ตารางโปรเซสปลอม: server บอกว่า bash รันอยู่ · โปรเซสนิ่ง → ตัวเฝ้าฆ่าเฉพาะคำสั่ง (ไม่ฆ่างาน) แล้วงานจบ OK"""
+        import http.server
+        import threading
+        T = time.time()
+        procs = self.tmp / "procs.json"
+        procs.write_text(json.dumps([{"pid": 900001, "ppid": 1, "name": "powershell.exe", "cmd": "powershell -Command \"ping -n 999 x\"",
+                                      "created": T, "act": 1}]), encoding="utf-8")
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                path = self.path.partition("?")[0]
+                obj = {}
+                if path.endswith("/children"):
+                    obj = []
+                elif path.endswith("/message"):
+                    obj = [{"info": {"time": {"created": 1000}}, "parts": [
+                        {"type": "tool", "tool": "bash", "state": {"status": "running", "input": {"command": "ping -n 999 x"},
+                                                                   "time": {"start": int(T * 1000)}}}]}]
+                body = json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                self.do_GET()
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        (self.proj / ".flash.json").write_text(json.dumps({"shell_idle_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
+        env = {"FLASHQ_LIVE_URL": f"http://127.0.0.1:{srv.server_address[1]}", "FAKE_SLEEP": "12",
+               "FLASHQ_FAKE_PROCS": str(procs), "FLASHQ_SHELL_POLL_SEC": "1"}
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
+        self.assertIn("SHELL_WATCH: ฆ่าคำสั่งค้าง", r.stdout)
+        self.assertEqual(Path(str(procs) + ".killed").read_text(encoding="utf-8").split(), ["900001"])
+        job = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(len(job["shell_kills"]), 1)
+
     def test_cancel_does_not_kill_reused_child_pid(self):
         """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
         mod = self.load_mod("flashq_cancel")

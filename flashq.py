@@ -71,7 +71,11 @@ DEFAULTS = {
     "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
     "agent_stall_floor_min": 4,
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
+    "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
+SHELL_POLL_SEC = float(os.environ.get("FLASHQ_SHELL_POLL_SEC") or 30)  # ถามสถานะ tool + วัดโปรเซสถี่แค่ไหนตอน log เงียบ
+SHELL_NAMES = {"powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "sh.exe"}
+SHELL_WORDS = {"cmd", "start", "powershell", "pwsh", "bash", "exe", "nologo", "noprofile", "noninteractive", "command", "null", "out-null"}
 
 
 # ---------- ทั่วไป ----------
@@ -945,7 +949,123 @@ def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
         return None
 
 
-def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0) -> dict:
+def proc_table() -> list[dict] | None:
+    """โปรเซสทั้งเครื่อง: pid · ppid · name · cmd · created (epoch วินาที) · act (CPU 100ns + ไบต์ I/O สะสม — ตัวนับที่ไม่ขยับ = นิ่งสนิท)
+    Windows เท่านั้น (อื่น ๆ = None → ตัวเฝ้า shell ปิด) · เทสต์: FLASHQ_FAKE_PROCS=<ไฟล์ JSON> แทนตารางจริง"""
+    fake = os.environ.get("FLASHQ_FAKE_PROCS")
+    if fake:
+        try:
+            return json.loads(Path(fake).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    if os.name != "nt":
+        return None
+    ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; $e=[datetime]'1970-01-01'; "
+          "@(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{pid=$_.ProcessId; ppid=$_.ParentProcessId; name=$_.Name; cmd=$_.CommandLine; "
+          "created=$(if ($_.CreationDate) { ($_.CreationDate.ToUniversalTime() - $e).TotalSeconds } else { 0 }); "
+          "act=[double]$_.KernelModeTime + $_.UserModeTime + $_.ReadTransferCount + $_.WriteTransferCount + $_.OtherTransferCount } }) | ConvertTo-Json -Compress")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        rows = json.loads(r.stdout.decode("utf-8", errors="replace") or "[]")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    return [{"pid": int(d.get("pid") or 0), "ppid": int(d.get("ppid") or 0), "name": str(d.get("name") or ""), "cmd": str(d.get("cmd") or ""),
+             "created": float(d.get("created") or 0), "act": float(d.get("act") or 0)} for d in (rows if isinstance(rows, list) else [rows])]
+
+
+def shell_kill(pid: int) -> None:
+    fake = os.environ.get("FLASHQ_FAKE_PROCS")
+    if fake:  # เทสต์: จดว่าฆ่าตัวไหน + เอาออกจากตาราง (ห้ามฆ่า pid จริงของเครื่อง)
+        rows = [p for p in json.loads(Path(fake).read_text(encoding="utf-8")) if p["pid"] != pid]
+        Path(fake).write_text(json.dumps(rows), encoding="utf-8")
+        with open(fake + ".killed", "a", encoding="utf-8") as f:
+            f.write(f"{pid}\n")
+        return
+    kill_tree(pid)
+
+
+def _cmd_norm(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[\"'`^]", "", s)).strip().lower()
+
+
+class ShellWatch:
+    """ตัวเฝ้า shell — opencode รันคำสั่งแล้วรอเฉย ๆ ไม่รู้ว่าโปรเซสตายหรือยังทำงาน · ตัวนี้หาโปรเซสของคำสั่ง (shell ที่ command line ตรง + ลูกหลาน)
+    แล้ววัด CPU+I/O ทุกรอบ: ขยับ = ปล่อยไป (และกันไม่ให้เกณฑ์ log เงียบฆ่างาน build ยาวที่ทำงานจริง) · นิ่งสนิทเกิน idle_min = ฆ่าเฉพาะคำสั่งนั้น
+    · shell จบแล้วแต่โปรเซสลูก (เช่น `start /b`, `&`, server) ยังถือ handle → tool ไม่คืนค่า = ฆ่าลูกนั้นทันทีที่ยืนยันได้ 2 รอบ
+    ฆ่าแล้ว tool คืน error → โมเดลทำงานต่อจากจุดเดิม (ไม่ต้องฆ่าทั้งงานแล้วเริ่มใหม่)"""
+
+    def __init__(self, idle_min: float, table=None, killer=None):
+        self.idle = idle_min * 60
+        self.table = table or proc_table
+        self.killer = killer or shell_kill
+        self.seen: dict = {}
+
+    def check(self, running: list[dict], now: float | None = None) -> dict | None:
+        now = now or time.time()
+        bash = [r for r in running if r.get("tool") == "bash" and r.get("cmd")]
+        for k in [k for k in self.seen if k not in {(r["session"], r["since"]) for r in bash}]:
+            del self.seen[k]  # tool จบแล้ว
+        if not bash:
+            return None
+        tab = self.table()
+        if tab is None:
+            return None
+        by = {p["pid"]: p for p in tab}
+        kids: dict = {}
+        for p in tab:
+            kids.setdefault(p["ppid"], []).append(p)
+
+        def tree(roots):
+            out, stack = {}, list(roots)
+            while stack and len(out) < 300:
+                p = stack.pop()
+                if p["pid"] not in out:
+                    out[p["pid"]] = p
+                    stack += [c for c in kids.get(p["pid"], []) if c["created"] >= p["created"] - 1]  # ppid ของ Windows อาจชี้ pid ที่ถูกใช้ซ้ำ
+            return out
+        best = None
+        for r in bash:
+            w = self.seen.setdefault((r["session"], r["since"]), {"pids": {}, "act": None, "chg": now, "gone": 0, "start": now})
+            key = _cmd_norm(r["cmd"])[:60]
+            shells = [p for p in tab if p["name"].lower() in SHELL_NAMES and r["since"] - 5 <= p["created"] <= r["since"] + 60
+                      and key and key in _cmd_norm(p["cmd"])]
+            if shells:
+                group, w["gone"] = tree(shells), 0
+            else:  # shell จบแล้ว: ลูกที่เคยเห็น + ลูกกำพร้า (parent ตาย) ที่เกิดหลัง tool เริ่ม และเป็นลูกของ shell ที่เคยเห็นหรือ command line มีคำจากคำสั่ง
+                prev = [by[i] for i, c in w["pids"].items() if i in by and abs(by[i]["created"] - c) < 2]
+                toks = [t for t in re.findall(r"[a-z0-9_.-]{3,}", _cmd_norm(r["cmd"])) if t not in SHELL_WORDS]
+                orph = [p for p in tab if p["ppid"] not in by and r["since"] - 2 <= p["created"] <= now
+                        and (p["ppid"] in w["pids"] or any(t in _cmd_norm(p["cmd"]) for t in toks))]
+                group = tree(prev + orph)
+                w["gone"] += 1
+            for i, p in group.items():
+                w["pids"][i] = p["created"]
+            act = sum(p["act"] for p in group.values())
+            if act != w["act"]:
+                w["act"], w["chg"] = act, now
+            names = ", ".join(sorted({p["name"] for p in group.values()}))[:80]
+            rep = {"cmd": r["what"] or r["cmd"][:100], "session": r["session"], "since": r["since"], "pids": len(group), "names": names,
+                   "quiet_sec": round(now - w["chg"]), "run_sec": round(now - r["since"]), "state": "none" if not group else "active", "note": ""}
+            if group and not shells and w["gone"] >= 2:
+                rep.update(state="killed", note=f"shell จบแล้วแต่โปรเซสลูกยังถือ handle ไว้ ({names}) → tool ไม่คืนค่า")
+            elif group and self.idle and now - w["chg"] >= self.idle:
+                rep.update(state="killed", note=f"โปรเซสนิ่งสนิท (CPU/I/O ไม่ขยับ) {(now - w['chg']) / 60:.1f} นาที ({names})")
+            elif group and now - w["chg"] >= max(SHELL_POLL_SEC * 2, self.idle / 2):
+                rep["state"] = "quiet"
+            if rep["state"] == "killed":
+                for p in group.values():
+                    if p["ppid"] not in group:
+                        self.killer(p["pid"])
+                del self.seen[(r["session"], r["since"])]
+            rank = {"killed": 3, "quiet": 2, "active": 1, "none": 0}
+            if best is None or rank[rep["state"]] > rank[best["state"]]:
+                best = rep
+        return best
+
+
+def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
+             shell_idle: float = 0) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -970,9 +1090,11 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                     open_in_desktop(sid, attach)
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
-            while True:  # เฝ้า 2 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ
+            watch = ShellWatch(shell_idle) if shell_idle and attach.startswith("http") and (os.name == "nt" or os.environ.get("FLASHQ_FAKE_PROCS")) else None
+            busy_until = 0.0  # ตัวเฝ้า shell เห็นโปรเซสขยับล่าสุด (กันเกณฑ์ log เงียบฆ่างาน build ยาวที่ยังทำงานจริง)
+            while True:  # เฝ้า 3 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ · คำสั่ง shell ค้าง → ฆ่าเฉพาะคำสั่ง
                 try:
-                    rc = p.wait(timeout=max(1, min(15 if stall_min >= 1 else 1, timeout_min * 60 - (time.time() - t0))))
+                    rc = p.wait(timeout=max(1, min(15 if stall_min >= 1 and SHELL_POLL_SEC >= 15 else 1, timeout_min * 60 - (time.time() - t0))))
                     break
                 except subprocess.TimeoutExpired:
                     why = ""
@@ -988,18 +1110,33 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                         except OSError:
                             m = last_m
                         if m != last_m:
+                            if job.get("shell_watch"):  # log ขยับ = tool จบแล้ว → ล้างป้ายตัวเฝ้า
+                                job["shell_watch"] = None
+                                save_job(job)
                             if last_m:
                                 maxgap = max(maxgap, time.time() - last_chg)
                             last_m, last_chg = m, time.time()
                         limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
                         act = None
                         can_ask = attach.startswith("http") and bool(job.get("session"))
-                        if limit and can_ask and (idle >= limit or (idle >= limit / 2 and time.time() - last_poll >= 20)):
+                        if can_ask and ((limit and (idle >= limit or (idle >= limit / 2 and time.time() - last_poll >= 20)))
+                                        or (watch and idle >= SHELL_POLL_SEC and time.time() - last_poll >= SHELL_POLL_SEC)):
                             # log เงียบแล้ว → ถามเซิร์ฟเวอร์ว่า subagent/tool ยังขยับไหม (ไม่ถามทุกรอบ แต่ถามสดเสมอก่อนตัดสินฆ่า)
                             last_poll = time.time()
                             act = server_activity(attach, job["session"], str(root))
                             if act and act["updated"]:
                                 idle = min(idle, time.time() - act["updated"])
+                            if act is not None and watch:
+                                rep = watch.check(act["running"])
+                                job["shell_watch"] = dict(rep, at=now()) if rep else None
+                                if rep and rep["state"] == "killed":
+                                    job.setdefault("shell_kills", []).append({"at": now(), "cmd": rep["cmd"], "note": rep["note"], "run_sec": rep["run_sec"]})
+                                    print(f"SHELL_WATCH: ฆ่าคำสั่งค้าง `{rep['cmd'][:80]}` (รันมา {rep['run_sec'] / 60:.1f} นาที) · {rep['note']} → tool คืน error แล้วงานทำต่อ", flush=True)
+                                elif rep and rep["state"] == "active":
+                                    busy_until = time.time() - rep["quiet_sec"]
+                                save_job(job)
+                        if busy_until:
+                            idle = min(idle, time.time() - busy_until)
                         if limit and idle >= limit:
                             why = f"STALL: ไม่มีความเคลื่อนไหว {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
                             if act is not None:
@@ -1175,7 +1312,7 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor)
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0))
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
@@ -1741,9 +1878,10 @@ def ui_state() -> dict:
     held = held_slots()
     sch = schedule(held)
     slot_of = {h.get("id"): h for h in held}
-    running, queued, history, dead = [], [], [], []
+    running, queued, history, dead, kills = [], [], [], [], []
     for j in jobs():
         st = live_state(j)
+        kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
         row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
@@ -1756,7 +1894,8 @@ def ui_state() -> dict:
         if st == "running":
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
-                       log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j))
+                       log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j), shell_watch=j.get("shell_watch"),
+                       shell_kills=len(j.get("shell_kills") or []))
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
@@ -1782,7 +1921,8 @@ def ui_state() -> dict:
             "history_total": len(history), "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
-            "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done}
+            "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
+            "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]}}
 
 
 def job_stats(history: list[dict]) -> dict:
