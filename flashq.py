@@ -64,6 +64,7 @@ DEFAULTS = {
     "require_plan_in_remote": True,   # แผนต้องอยู่ใน <remote>/<main_branch> ก่อนส่ง
     "command": "flash",               # คำสั่ง opencode ที่เรียก (โปรเจกต์มีของตัวเองใน .opencode/command ได้)
     "timeout_min": 480,
+    "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
 }
 
 
@@ -254,7 +255,7 @@ def check_citations(text: str, root: Path) -> dict:
     ตรวจได้แค่ "อ้างตรงโค้ดจริง" ไม่ได้ตรวจว่าเป็นต้นตอจริง (ยังเป็นหน้าที่ของ Claude)"""
     root = root.resolve()
     tracked: list[str] | None = None
-    ok, bad, seen = 0, [], set()
+    ok, code, bad, seen = 0, 0, [], set()
     for m in CITE_RE.finditer(text):
         rel, line = m.group(1).replace("\\", "/"), int(m.group(2))
         if (rel, line) in seen:
@@ -288,7 +289,32 @@ def check_citations(text: str, root: Path) -> dict:
             bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{miss[0][:60]}`")
             continue
         ok += 1
-    return {"ok": ok, "bad": bad}
+        code += 1 if snippets else 0  # ตรงถึงตัวโค้ด (มีข้อความคัดและตรง) ต่างจากตรงแค่ไฟล์/เลขบรรทัด
+    return {"ok": ok, "ok_code": code, "bad": bad}
+
+
+def dirty_snapshot(root: Path) -> dict | None:
+    """ไฟล์ที่ git เห็นว่าเปลี่ยน → (ขนาด, เวลาแก้) · None = ไม่ใช่ git/อ่านไม่ได้ · ใช้ตรวจว่างาน readonly ไม่แตะไฟล์"""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    snap = {}
+    for line in r.stdout.splitlines():
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        try:
+            st = (root / path).stat()
+            snap[path] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            snap[path] = None  # ถูกลบ
+    return snap
+
+
+def snapshot_changes(before: dict, after: dict) -> list[str]:
+    return sorted({p for p in after if after[p] != before.get(p)} | {p for p in before if p not in after})
 
 
 # ---------- คิว ----------
@@ -1000,7 +1026,8 @@ def cmd_run(a) -> int:
             attach = ""
         job["attach"] = attach
         save_job(job)
-        timeout_min = a.timeout_min or cfg["timeout_min"]
+        timeout_min = a.timeout_min or (cfg["agent_timeout_min"] if kind in AGENT_KINDS else cfg["timeout_min"])
+        snap0 = dirty_snapshot(root) if job["readonly"] else None
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
         tried_models: set = set()
         while True:
@@ -1048,11 +1075,21 @@ def cmd_run(a) -> int:
                     save_job(job)
                     continue
             break
+        if snap0 is not None:
+            after = dirty_snapshot(root)
+            changed = snapshot_changes(snap0, after) if after is not None else []
+            if changed:
+                others = [j["id"] for j in jobs() if j.get("id") != jid and j.get("project") == str(root) and not j.get("readonly")
+                          and live_state(j) == "running"]
+                job["modified"] = changed[:50]
+                print(f"WARN: งานอ่านอย่างเดียวนี้ไฟล์ในโปรเจกต์เปลี่ยน {len(changed)} ไฟล์: " + ", ".join(changed[:8])
+                      + (f" · มีงานอื่นรันในโปรเจกต์เดียวกัน ({', '.join(others)}) อาจเป็นของงานนั้น — ตรวจ git diff ก่อนเชื่อผล" if others
+                         else " · ไม่มีงานอื่นในโปรเจกต์นี้ → agent อาจแก้ไฟล์เอง ห้ามเชื่อผล ตรวจ git diff ทันที"), flush=True)
         if kind == "investigate" and res.get("last"):  # ตรวจเลขไฟล์:บรรทัดที่ผู้สืบอ้าง (กลไก · ไม่ใช่การตัดสินว่าเป็นต้นตอจริง)
             cites = check_citations(res["last"], root)
             job["citations"] = cites
             if cites["ok"] or cites["bad"]:
-                print(f"CITATIONS: ตรง {cites['ok']} · ผิด {len(cites['bad'])}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด:"), flush=True)
+                print(f"CITATIONS: ตรงถึงโค้ด {cites['ok_code']} · ตรงแค่ไฟล์/บรรทัด {cites['ok'] - cites['ok_code']} · ผิด {len(cites['bad'])}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด:"), flush=True)
                 for b in cites["bad"][:10]:
                     print("  ✗", b, flush=True)
     finally:
@@ -1927,6 +1964,7 @@ def make_ui_server(port: int = 4097):
 
     class S(ThreadingHTTPServer):
         daemon_threads = True
+        request_queue_size = 128  # ค่าเริ่มต้น 5 → คำขอพร้อมกันเยอะ (เบราว์เซอร์ poll หลายแท็บ/เทสต์) โดน reset บน Windows
         # Windows: SO_REUSEADDR ทำให้เปิด 2 ตัวบนพอร์ตเดียวกันได้ (ตัวที่สองแย่งคำขอ) → ปิด แล้วจองแบบ exclusive
         allow_reuse_address = os.name != "nt"
 

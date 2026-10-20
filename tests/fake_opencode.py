@@ -15,6 +15,9 @@ if os.environ.get("FAKE_ARGS_OUT"):
     with open(os.environ["FAKE_ARGS_OUT"], "a", encoding="utf-8") as f:
         f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\n")
 mode = os.environ.get("FAKE_MODE", "ok")
+if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agent ที่แอบแก้ไฟล์ในโปรเจกต์
+    with open(os.path.join(sys.argv[sys.argv.index("--dir") + 1], os.environ["FAKE_WRITE"]), "w", encoding="utf-8") as _f:
+        _f.write("x")
 if mode == "nostart":
     time.sleep(600)
     sys.exit(0)

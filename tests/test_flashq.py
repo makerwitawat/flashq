@@ -766,11 +766,30 @@ class FlashqTest(unittest.TestCase):
         ])
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": report})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("CITATIONS: ตรง 2 · ผิด 3", r.stdout)
+        self.assertIn("CITATIONS: ตรงถึงโค้ด 1 · ตรงแค่ไฟล์/บรรทัด 1 · ผิด 3", r.stdout)
         for needle in ("เลขบรรทัดเกินไฟล์", "ไม่พบไฟล์", "ไม่อยู่ในบรรทัดนี้"):
             self.assertIn(needle, r.stdout)
         job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
         self.assertEqual((job["citations"]["ok"], len(job["citations"]["bad"])), (2, 3))
+
+    def test_readonly_job_warns_when_files_change_and_agent_timeout(self):
+        """งาน readonly แล้วไฟล์ในโปรเจกต์เปลี่ยน → WARN · ไม่เปลี่ยน → เงียบ · ผู้สืบ/ผู้ตรวจ timeout ค่าเริ่มต้นสั้นกว่างานทำจริง"""
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.proj, check=True)
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_WRITE": "sneaky.txt"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("WARN: งานอ่านอย่างเดียวนี้ไฟล์ในโปรเจกต์เปลี่ยน 1 ไฟล์: sneaky.txt", r.stdout)
+        self.assertIn("ห้ามเชื่อผล", r.stdout)
+        job = max((json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json")), key=lambda j: j["id"])
+        self.assertEqual(job["modified"], ["sneaky.txt"])
+        r = self.run_q("investigate", "--no-open", "สืบอีกที")  # sneaky.txt ค้างอยู่แล้วแต่ไม่เปลี่ยนรอบนี้
+        self.assertNotIn("WARN: งานอ่านอย่างเดียว", r.stdout)
+        r = self.run_q("verify", "PLAN.md", "T-01", "--no-open", env={"FAKE_WRITE": "sneaky2.txt"})
+        self.assertIn("sneaky2.txt", r.stdout)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("flashq_t", FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.DEFAULTS["agent_timeout_min"], 30)
 
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
