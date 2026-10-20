@@ -751,6 +751,53 @@ class FlashqTest(unittest.TestCase):
         for needle in ("agentField", "isVerify", "checker"):
             self.assertIn(needle, html)
 
+    def test_investigate_runs_agent_readonly_no_plan(self):
+        """investigate: ไม่ต้องมีแผน · ส่งบรีฟเป็น prompt ให้ flash-investigator · readonly · attach none เป็นค่าเริ่มต้น · นับชนิดของตัวเอง"""
+        r = self.run_q("investigate", "--no-open", "ทำไม", "T-01", "ล้ม", "--", "-x")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "flash-investigator")
+        self.assertNotIn("--command", argv)
+        self.assertNotIn("--attach", argv)  # รันแยก ไม่ต่อ live server
+        self.assertEqual(argv[-1], "ทำไม T-01 ล้ม -x")
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertEqual((job["kind"], job["agent"], job["readonly"]), ("investigate", "flash-investigator", True))
+        self.assertTrue(job["title"].startswith("flash-investigate "))
+        self.assertIn("[สืบ]", self.run_q("list", "--all").stdout)
+
+    def test_investigate_subagent_fails_and_never_conflicts(self):
+        r = self.run_q("investigate", "--no-open", "สืบหน่อย", env={"FAKE_MODE": "subagent"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("FAIL", r.stdout + r.stderr)
+
+    def test_ui_submit_and_retry_keep_investigate_kind(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.env["FLASHQ_LIVE_URL"] = f"http://127.0.0.1:{s.getsockname()[1]}"
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        good = {"project": str(self.proj), "kind": "investigate", "message": "-บรีฟขึ้นต้นด้วยขีด", "no_open": True}
+        self.assertEqual(self.http(base + "/api/submit", json.dumps({**good, "message": ""}).encode(), hdr)[0], 400)
+        code, body = self.http(base + "/api/submit", json.dumps(good).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid = json.loads(body)["job"]
+        self.wait_job(jid)
+        code, body = self.http(base + "/api/retry", json.dumps({"id": jid, "no_open": True}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid2 = json.loads(body)["job"]
+        self.wait_job(jid2)
+        job2 = json.loads((self.home / "jobs" / f"{jid2}.json").read_text(encoding="utf-8"))
+        self.assertEqual((job2["kind"], job2["agent"], job2["readonly"], job2["message"]),
+                         ("investigate", "flash-investigator", True, "-บรีฟขึ้นต้นด้วยขีด"))
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(argv[-1], "-บรีฟขึ้นต้นด้วยขีด")
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["stats"]["by_project"], [])
+        self.assertEqual([(g["name"], g["n"]) for g in st["stats"]["by_kind"]], [("investigate", 2)])
+        html = self.http(base + "/")[1]
+        for needle in ('value="investigate"', "msgMode"):
+            self.assertIn(needle, html)
+
     def test_auto_skip_conflict_and_overlap_waits(self):
         """auto: งานที่ไฟล์ซ้อนต้องรอ (เหตุผลบอกไฟล์) · งานถัดไปที่ไม่ชนได้เริ่มก่อน (ข้ามงานที่ชน)"""
         self.auto_plan()

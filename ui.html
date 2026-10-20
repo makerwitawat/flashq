@@ -394,6 +394,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
     <div class="row">
       <label><input type="radio" name="mode" value="plan" checked> ตามแผน (/flash)</label>
       <label><input type="radio" name="mode" value="verify"> ตรวจ (ผู้ตรวจ · อ่านอย่างเดียว)</label>
+      <label><input type="radio" name="mode" value="investigate"> สืบ (ผู้สืบ · อ่านอย่างเดียว)</label>
       <label><input type="radio" name="mode" value="message"> ข้อความทดสอบ</label>
     </div>
     <div id="planFields" class="grid2">
@@ -455,7 +456,7 @@ const dur = (s) => {
 };
 const kindOf = (j) => j.kind || (j.message ? "test" : "work");
 const isSleuth = (j) => /investigator/i.test(j.agent || "");  // ผู้สืบ (flash-investigator · อ่านอย่างเดียว) — แสดงเป็นตัวละครแว่นเหมือนผู้ตรวจ
-const isVerify = (j) => kindOf(j) === "verify" || isSleuth(j);
+const isVerify = (j) => kindOf(j) === "verify" || kindOf(j) === "investigate" || isSleuth(j);
 const roleOf = (j) => (isSleuth(j) ? "sleuth" : isVerify(j) ? "check" : "");  // รูปลักษณ์ตัวละคร: ผู้ตรวจ = เสื้อกาวน์ขาว+เนคไท · ผู้สืบ = โค้ทเบจ+หมวกนักสืบ
 const roleTag = (j) => (isSleuth(j) ? "🕵️ สืบ " : "🔍 ตรวจ ");
 const what = (j) => j.message && !isSleuth(j) ? `ข้อความ: ${j.message}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 60) : (j.plan || "-") + " " + (j.tasks || "")}`;
@@ -597,7 +598,7 @@ function render() {
     ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
       <td>${pct}%</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
   const st = s.stats || { by_project: [], by_model: [], by_kind: [] };
-  const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", test: "ทดสอบ" };
+  const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", investigate: "🕵️ สืบ", test: "ทดสอบ" };
   const kindRows = (st.by_kind || []).map((g) => ({ ...g, name: KIND_TH[g.name] || g.name }));
   $("stats").innerHTML = st.by_project.length || kindRows.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
       + (kindRows.length > 1 ? `<div style="height:0.6rem"></div>` + statTable("ชนิดงาน", kindRows) : "")
@@ -765,21 +766,25 @@ $("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffse
 const dlg = $("submitDlg");
 const prefs = Object.assign({ project: "", switch_on_quota: 0, timeout_min: 0, attach: "live", no_open: false, auto: false }, store.get("submit", {}));
 function mode() { return document.querySelector('input[name="mode"]:checked').value; }
-const planMode = () => mode() !== "message";
+const planMode = () => mode() === "plan" || mode() === "verify";
+const msgMode = () => mode() === "message" || mode() === "investigate";
 function formBody() {
   return { project: $("fProject").value.trim(), plan: planMode() ? $("fPlan").value.trim() : "", tasks: planMode() ? $("fTasks").value.trim() : "",
-    kind: mode() === "verify" ? "verify" : "", agent: mode() === "verify" ? $("fAgent").value.trim() : "",
-    message: mode() === "message" ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
+    kind: mode() === "verify" || mode() === "investigate" ? mode() : "", agent: mode() === "verify" || mode() === "investigate" ? $("fAgent").value.trim() : "",
+    message: msgMode() ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
     attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked };
 }
 function runOpts(b) { return { switch_on_quota: b.switch_on_quota, timeout_min: b.timeout_min, attach: b.attach, no_open: b.no_open, auto: b.auto }; }
 function preview() {
   const b = formBody(), quote = (x) => /\s/.test(x) ? `"${x}"` : x;
-  const parts = [b.kind ? "flashq.py verify" : "flashq.py run", ...(b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
+  const parts = [b.kind ? "flashq.py " + b.kind : "flashq.py run", ...(b.kind === "investigate" ? [quote(b.message || "<บรีฟ>")] : b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
     "--project", quote(b.project || "<โปรเจกต์>"), "--switch-on-quota", b.switch_on_quota, ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : []),
     "--attach", b.attach, ...(b.agent ? ["--agent", quote(b.agent)] : []), ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : [])];
   $("cmdPreview").textContent = parts.join(" ");
-  $("planFields").hidden = !planMode(); $("msgField").hidden = mode() !== "message"; $("agentField").hidden = mode() !== "verify";
+  $("planFields").hidden = !planMode(); $("msgField").hidden = !msgMode(); $("agentField").hidden = !(mode() === "verify" || mode() === "investigate");
+  $("msgField").querySelector("span").textContent = mode() === "investigate" ? "บรีฟ (อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ให้คืน)" : "ข้อความ";
+  if (mode() === "investigate" && $("fMessage").value === "ตอบแค่คำว่า PONG") $("fMessage").value = "";
+  $("agentField").querySelector("span").textContent = mode() === "investigate" ? "agent ผู้สืบ (ว่าง = flash-investigator)" : "agent ผู้ตรวจ (ว่าง = flash-verifier)";
 }
 let planTimer = null, planFor = null;
 async function loadPlans() {

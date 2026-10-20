@@ -55,6 +55,7 @@ SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 START_LIMIT_SEC = 180
+AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
 DEFAULTS = {
@@ -849,6 +850,8 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
 
 # ---------- คำสั่ง ----------
 def cmd_run(a) -> int:
+    if isinstance(a.message, list):  # investigate รับบรีฟเป็นหลายคำ
+        a.message = " ".join(a.message).strip()
     if not a.message and not (a.plan and a.tasks):
         print("ต้องมี <plan> <tasks> หรือ --message")
         return 1
@@ -895,19 +898,25 @@ def cmd_run(a) -> int:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     jid = f"{ts}_{os.getpid()}"
     kind = a.kind or ("test" if a.message else "work")  # work = ลงมือตามแผน · verify = ผู้ตรวจ (อ่านอย่างเดียว) · test = --message
-    agent = a.agent or ("flash-verifier" if kind == "verify" else "")
-    prompt = (a.prompt or f"ตรวจแผน {plan} งาน {a.tasks} ตามหน้าที่ของคุณ แล้วรายงานผลสั้น ๆ") if kind == "verify" else ""
+    agent = a.agent or AGENT_KINDS.get(kind, "")
+    prompt = ""
+    if kind == "verify":
+        prompt = a.prompt or f"ตรวจแผน {plan} งาน {a.tasks} ตามหน้าที่ของคุณ แล้วรายงานผลสั้น ๆ"
+    elif kind == "investigate":
+        prompt = a.message
     if a.title:
         title = a.title
     elif kind == "verify":
         title = f"flash-verify {Path(plan).stem} {a.tasks}"
+    elif kind == "investigate":
+        title = f"flash-investigate {a.message[:40]}"
     else:
         title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
     worker_like = agent in ("", "flash-worker")
     # agent อื่น (ผู้ตรวจ/ผู้สำรวจ) ใช้โมเดลที่ตั้งไว้ใน agent นั้นเอง — ไม่ทับด้วยโมเดลของ flash-worker
     model = a.model or (configured_model() if worker_like else agent_model(agent))
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
-           "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind == "verify"),
+           "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind in AGENT_KINDS),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION}
     save_job(job)
@@ -944,7 +953,7 @@ def cmd_run(a) -> int:
                 cmd += ["--auto"]
             if agent:
                 cmd += ["--agent", agent]
-            if kind == "verify":
+            if kind in AGENT_KINDS:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
@@ -985,7 +994,7 @@ def cmd_run(a) -> int:
 
 
 def kind_tag(j: dict) -> str:
-    return "[ตรวจ] " if j.get("kind") == "verify" else ""
+    return {"verify": "[ตรวจ] ", "investigate": "[สืบ] "}.get(j.get("kind"), "")
 
 
 def cmd_list(a) -> int:
@@ -1460,8 +1469,8 @@ def job_stats(history: list[dict]) -> dict:
     def kind(r) -> str:
         return r.get("kind") or ("test" if r.get("message") else "work")
 
-    def not_verify(r) -> bool:  # งานตรวจสั้นกว่ามาก → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
-        return kind(r) != "verify"
+    def not_verify(r) -> bool:  # งานตรวจ/สืบสั้นกว่ามาก → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
+        return kind(r) not in AGENT_KINDS
     return {"by_project": group(lambda r: r["project_name"], not_verify), "by_model": group(lambda r: r["model"], not_verify),
             "by_kind": group(kind)}
 
@@ -1502,10 +1511,17 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         project = str(body.get("project") or "").strip().strip('"')
         if not project or not Path(project).is_absolute() or not Path(project).is_dir():
             return [], "โปรเจกต์ต้องเป็น path โฟลเดอร์แบบเต็มที่มีอยู่จริง"
-        kind = "verify" if body.get("kind") == "verify" else ""
-        argv = [sys.executable, str(REPO / "flashq.py"), "verify" if kind else "run"]
+        kind = body.get("kind") if body.get("kind") in AGENT_KINDS else ""
+        argv = [sys.executable, str(REPO / "flashq.py"), kind or "run"]
         message = str(body.get("message") or "").strip()
-        if message and not kind:
+        tail: list[str] = []  # บรีฟของ investigate ต่อท้ายสุดหลัง "--" (ขึ้นต้นด้วย - ก็ไม่ถูกตีเป็นตัวเลือก)
+        if kind == "investigate":
+            if not message:
+                return [], "ต้องระบุบรีฟ (อาการ/สิ่งที่ให้ไปสืบ)"
+            if len(message) > 4000:
+                return [], "บรีฟยาวเกิน 4000 ตัวอักษร"
+            tail = ["--", message]
+        elif message and not kind:
             if len(message) > 2000:
                 return [], "ข้อความยาวเกิน 2000 ตัวอักษร"
             argv.append(f"--message={message}")  # รูป --x=ค่า กัน argparse ตีความข้อความที่ขึ้นต้นด้วย - เป็นตัวเลือก
@@ -1528,7 +1544,7 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         timeout_min = num("timeout_min", 0, 1440)
         if timeout_min:
             argv += ["--timeout-min", str(timeout_min)]
-        attach = str(body.get("attach") or "live")
+        attach = str(body.get("attach") or ("none" if kind else "live"))  # agent ใหม่ live server อาจไม่เห็น → ค่าเริ่มต้น none
         if attach not in ("live", "none"):
             return [], "attach ต้องเป็น live หรือ none"
         argv += ["--attach", attach]
@@ -1539,11 +1555,14 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
             argv.append(f"--agent={agent}")
         if body.get("readonly") and not kind:
             argv.append("--readonly")
+        prompt = str(body.get("prompt") or "").strip()
+        if prompt and kind == "verify":
+            argv.append(f"--prompt={prompt}")
         if body.get("no_open"):
             argv.append("--no-open")
         if body.get("auto"):
             argv.append("--auto")
-        return argv, ""
+        return argv + tail, ""
     except ValueError as e:
         return [], str(e)
 
@@ -1790,7 +1809,7 @@ def make_ui_server(port: int = 4097):
                     return self._send(409, {"ok": False, "message": "งานนี้ยังรอคิว/กำลังทำอยู่"})
                 spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
                         "tasks": j.get("tasks", ""), "message": j.get("message", ""), "kind": j.get("kind", ""),
-                        "agent": j.get("agent", ""), "readonly": j.get("readonly", False)}
+                        "agent": j.get("agent", ""), "readonly": j.get("readonly", False), "prompt": j.get("prompt", "")}
                 argv, err = build_run_argv(spec)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
@@ -1885,12 +1904,15 @@ def main() -> int:
     vf.add_argument("tasks")
     vf.add_argument("--prompt", help="ข้อความสั่งผู้ตรวจ (ค่าเริ่มต้น = ตรวจแผน/งานนี้ตามหน้าที่)")
     vf.set_defaults(kind="verify", message="")
-    for r in (r, vf):  # ตัวเลือกร่วมของ run/verify
+    inv = sp.add_parser("investigate", help="ส่งผู้สืบ (agent อ่านอย่างเดียว) ไปไล่หาต้นตอบั๊กตามบรีฟ · ไม่ชนงานอื่น")
+    inv.add_argument("message", nargs="+", help="บรีฟ: อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ต้องคืน")
+    inv.set_defaults(kind="investigate", plan="", tasks="", prompt="")
+    for r in (r, vf, inv):  # ตัวเลือกร่วมของ run/verify/investigate
         r.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
-        r.add_argument("--agent", default="", help="agent ของ opencode ที่ใช้ (verify ค่าเริ่มต้น flash-verifier)")
+        r.add_argument("--agent", default="", help="agent ของ opencode ที่ใช้ (verify = flash-verifier · investigate = flash-investigator)")
         r.add_argument("--title", default="", help="ชื่อ session ใน opencode")
-        r.add_argument("--readonly", action="store_true", help="งานอ่านอย่างเดียว ไม่ชนงานอื่นในตัวจัดคิว (verify เปิดให้เสมอ)")
-        r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้น) = server 4096 ให้ desktop ดูสด · none = รันแยก · หรือ url")
+        r.add_argument("--readonly", action="store_true", help="งานอ่านอย่างเดียว ไม่ชนงานอื่นในตัวจัดคิว (verify/investigate เปิดให้เสมอ)")
+        r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้นของ run) = server 4096 ให้ desktop ดูสด · none = รันแยก (ค่าเริ่มต้นของ verify/investigate) · หรือ url")
         r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
         r.add_argument("--variant")
         r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
@@ -1901,6 +1923,8 @@ def main() -> int:
         r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
         r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
         r.set_defaults(fn=cmd_run)
+    vf.set_defaults(attach="none")  # agent ที่เพิ่งติดตั้ง live server 4096 อาจยังไม่เห็น → รันแยกเป็นค่าเริ่มต้น
+    inv.set_defaults(attach="none")
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)
     li = sp.add_parser("list", help="รายการงาน")
     li.add_argument("--all", action="store_true")
