@@ -1919,7 +1919,7 @@ def ui_state() -> dict:
     history_total = len(history)
     rv_act, rv_done = ui_reviews()
     history = history[::-1][:300]
-    goals = ui_goals(running, history)
+    goals = ui_goals(running, history, queued)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history,
@@ -2482,6 +2482,7 @@ GOALS_DIR = HOME / "goals"  # สำเนาสถานะเป้าหม�
 
 
 _TITLE_CACHE: dict[str, tuple[float, str]] = {}
+CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"  # transcript ของ Claude Code (<โปรเจกต์>/<session>.jsonl · <session>/subagents/agent-*.jsonl)
 
 
 def claude_session_title(sid: str) -> str:
@@ -2489,7 +2490,7 @@ def claude_session_title(sid: str) -> str:
     if not sid or not re.fullmatch(r"[\w-]+", sid):
         return ""
     try:
-        f = next((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl"), None)
+        f = next(CLAUDE_PROJECTS.glob(f"*/{sid}.jsonl"), None)
         if not f:
             return ""
         mt = f.stat().st_mtime
@@ -2513,6 +2514,165 @@ def claude_session_title(sid: str) -> str:
         return title
     except Exception:
         return ""
+
+
+_TR_CACHE: dict[str, tuple] = {}
+
+
+def _tool_desc(name: str, inp: dict) -> str:
+    """เครื่องมือที่ Claude เรียกล่าสุด → ข้อความสั้นให้คนอ่าน"""
+    name = name.split("__")[-1]
+    if name in ("Bash", "PowerShell"):
+        d = inp.get("description") or inp.get("command", "")
+    elif name in ("Read", "Edit", "Write", "NotebookEdit"):
+        d = Path(str(inp.get("file_path", ""))).name
+    elif name in ("Grep", "Glob"):
+        d = inp.get("pattern", "")
+    elif name == "AskUserQuestion":
+        d = ((inp.get("questions") or [{}])[0] or {}).get("question", "")
+    else:
+        d = inp.get("description") or inp.get("title") or ""
+    d = " ".join(str(d).split())
+    return f"{name}: {d[:100]}" if d else name
+
+
+def transcript_state(f: Path) -> dict:
+    """สถานะล่าสุดของ transcript Claude Code: state = work (กำลังทำ) | ask (รอคุณตอบ/อนุมัติแผน) | end (จบเทิร์นแล้ว)
+    doing = เครื่องมือล่าสุดที่เรียก · ago_sec จาก mtime (เขียนทุกครั้งที่มีความเคลื่อนไหว) · cache ตาม mtime+ขนาด"""
+    try:
+        st = f.stat()
+    except OSError:
+        return {}
+    hit = _TR_CACHE.get(str(f))
+    if not hit or hit[0] != (st.st_mtime, st.st_size):
+        res = {"state": "work", "doing": ""}
+        try:
+            with f.open("rb") as fh:
+                fh.seek(max(0, st.st_size - 262_144))
+                tail = fh.read().decode("utf-8", errors="replace").splitlines()
+        except OSError:
+            tail = []
+        found = False
+        for line in reversed(tail):
+            if '"assistant"' not in line and '"user"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("type") not in ("assistant", "user"):
+                continue
+            m = e.get("message") or {}
+            parts = m.get("content") if isinstance(m.get("content"), list) else []
+            tools = [p for p in parts if isinstance(p, dict) and p.get("type") == "tool_use"]
+            if not found:  # รายการล่าสุด = สถานะตอนนี้
+                found = True
+                if e["type"] == "assistant":
+                    if tools and tools[-1].get("name") in ("AskUserQuestion", "ExitPlanMode"):
+                        res["state"] = "ask"
+                    elif not tools and m.get("stop_reason") == "end_turn":
+                        res["state"] = "end"
+            if tools:
+                res["doing"] = _tool_desc(tools[-1].get("name", ""), tools[-1].get("input") or {})
+                break
+        hit = ((st.st_mtime, st.st_size), res)
+        _TR_CACHE[str(f)] = hit
+    return dict(hit[1], ago_sec=max(0, int(time.time() - st.st_mtime)))
+
+
+def claude_activity(sid: str) -> dict:
+    """ความเคลื่อนไหวของ session Claude Code (รวม subagent ที่ยังทำงาน) — ให้การ์ดบอกว่าไม่ได้ค้าง · หาไม่เจอ = {}"""
+    if not sid or not re.fullmatch(r"[\w-]+", sid):
+        return {}
+    try:
+        f = next(CLAUDE_PROJECTS.glob(f"*/{sid}.jsonl"), None)
+        if not f:
+            return {}
+        main = transcript_state(f)
+        subs = []
+        for sf in (f.parent / sid / "subagents").glob("agent-*.jsonl"):
+            s = transcript_state(sf)
+            if not s or s["state"] == "end" or s["ago_sec"] > 7200:  # จบแล้ว / เงียบเกิน 2 ชม. = ไม่นับว่าทำงานอยู่
+                continue
+            meta = read_json(sf.with_suffix(".meta.json"))
+            subs.append(dict(s, desc=meta.get("description") or sf.stem))
+        subs.sort(key=lambda s: s["ago_sec"])
+        return dict(main, subs=subs[:4], ago_sec=min([main["ago_sec"]] + [s["ago_sec"] for s in subs]), main_ago_sec=main["ago_sec"])
+    except Exception:
+        return {}
+
+
+def goal_next_plan(gl: dict, n: int) -> dict:
+    """แผนรอบ n (PLAN_FLASH_<เรื่อง>_R<n>.md) เขียนเสร็จหรือยัง — ดูโฟลเดอร์แผนของโปรเจกต์ + โฟลเดอร์ของ session ที่ทำ (worktree)"""
+    proj = Path(gl.get("project", ""))
+    rel_dir = Path(gl.get("goal", "")).parent
+    dirs = []
+    for base in (proj, Path((gl.get("owner") or {}).get("cwd") or proj)):
+        for d in (base / rel_dir, base / (project_cfg(proj).get("plan_dir") or "docs/plans")):
+            if d.is_dir() and all(os.path.normcase(str(d.resolve())) != os.path.normcase(str(x.resolve())) for x in dirs):
+                dirs.append(d)
+    topic = goal_topic(gl.get("stem", ""))
+    for d in dirs:
+        for p in d.glob("PLAN_FLASH_*.md"):
+            m = re.search(r"_R(\d+)\.md$", p.name, re.I)
+            if m and int(m.group(1)) == n and goal_topic(p.name) == topic:
+                return {"path": str(p), "ago_sec": max(0, int(time.time() - p.stat().st_mtime))}
+    return {}
+
+
+def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list[dict], queued: list[dict],
+               last_job: dict, act: dict) -> dict:
+    """ขั้นย่อยตอนนี้ของเป้าหมาย: step = flag · plan · flash · review · verify · result + ข้อความ + เคลื่อนไหวล่าสุดกี่วินาที
+    notes = สิ่งที่ session/subagent กำลังทำ (ให้รู้ว่าไม่ได้ค้าง) · warn = นิ่งนาน/รอคุณ"""
+    n_next = len(gl.get("rounds") or []) + 1
+    notes = []
+    if act:
+        st = act.get("state")
+        main = ("❓ รอคุณตอบคำถาม/อนุมัติใน session นั้น" if st == "ask"
+                else "💤 จบเทิร์นแล้ว" + (" — รอ subagent ทำงานเบื้องหลัง" if act.get("subs") else " (รอคุณสั่งต่อ?)") if st == "end"
+                else "⚙️ กำลังทำงาน")
+        notes.append({"t": f"🧭 session: {main}" + (f" · ล่าสุด {act['doing']}" if act.get("doing") and st != "end" else ""),
+                      "ago_sec": act.get("main_ago_sec"), "warn": st == "ask"})
+        for s in act.get("subs") or []:
+            notes.append({"t": f"🤖 subagent «{s['desc']}» กำลังทำ" + (f" · {s['doing']}" if s.get("doing") else ""), "ago_sec": s["ago_sec"]})
+    sess_ago = act.get("ago_sec") if act else None
+    sess_warn = bool(act) and (act.get("state") == "ask" or (act.get("state") == "end" and not act.get("subs")) or (sess_ago or 0) > 1800)
+    fresh = last_job and last_job.get("finished", "") > ((last or {}).get("at") or gl.get("started", ""))
+
+    def ph(step, label, ago=None, what="เคลื่อนไหวล่าสุด", warn=False, **kw):
+        return dict(step=step, label=label, ago_sec=ago, ago_what=what, warn=warn, notes=notes, round=n_next, **kw)
+
+    if busy.get("what") == "verify":
+        return ph("verify", "🔍 กำลังรันเกณฑ์ตรวจทุกข้อ (goal verify)", _secs(busy.get("at", "")), "เริ่ม")
+    if busy.get("what") == "claude":
+        return ph("plan", "🤖 Claude กำลังทำต่อในหน้าต่าง terminal ที่เปิดไว้", _secs(busy.get("at", "")), "เริ่ม")
+    if runs:
+        idle = min(r.get("log_idle_sec") or 0 for r in runs)
+        return ph("flash", f"🧑‍💻 Flash กำลังทำรอบ {', '.join(str(r['goal']['round']) for r in runs)} · ช่อง {', '.join(str(r.get('slot') or '?') for r in runs)}",
+                  idle, "log เคลื่อนไหวล่าสุด", idle > 1200, job=runs[0]["id"])
+    if queued:
+        q = queued[0]
+        why = q.get("wait_reason") or ""
+        return ph("flash", f"⏳ แผนรอบ {q['goal']['round']} อยู่ในคิว ลำดับ {q.get('position', '?')}" + (f" · {why}" if why else ""),
+                  q.get("wait_sec"), "เข้าคิวมา")
+    if fresh and verdict != "DONE":
+        return ph("review", f"📥 Flash ทำรอบ {last_job['round']} เสร็จแล้ว — รอ Claude ตรวจ (goal verify)",
+                  sess_ago if act else last_job.get("ago_sec"), "เคลื่อนไหวล่าสุด" if act else "Flash เสร็จมา", sess_warn or (not act and (last_job.get("ago_sec") or 0) > 1800))
+    age = _secs(gl.get("updated", "")) or 0
+    if verdict == "DONE":
+        return ph("result", "✅ ผ่านครบทุกเกณฑ์", age, "เมื่อ")
+    if verdict == "DONE_NEEDS_USER":
+        return ph("result", "👀 เครื่องตรวจผ่านหมด — ถึงตาคุณตรวจข้อ 👤", age, "รอมา", age > 1800)
+    if verdict == "STOP":
+        return ph("result", "⛔ ติดเบรก — รอคุณตัดสินใจ", age, "รอมา", True)
+    plan = goal_next_plan(gl, n_next)
+    if plan:
+        return ph("plan", f"📤 แผนรอบ {n_next} เขียนเสร็จแล้ว ({Path(plan['path']).name}) — รอ Claude ส่งเข้าคิว",
+                  sess_ago if act else plan["ago_sec"], "เคลื่อนไหวล่าสุด" if act else "แผนเสร็จมา", sess_warn, plan=plan["path"])
+    if not act:
+        return ph("plan", f"✍️ ขั้นเขียนแผนรอบ {n_next} — หา session ที่ทำไม่เจอ (ปิดไปแล้ว/ไม่ใช่ Claude Code)", age, "นิ่งมา", age > 1800)
+    return ph("plan", f"✍️ Claude กำลังเขียนแผนรอบ {n_next}" if not sess_warn else f"✍️ ขั้นเขียนแผนรอบ {n_next} — session นั้นไม่ได้ทำงานอยู่",
+              sess_ago, "เคลื่อนไหวล่าสุด", sess_warn)
 
 
 def goal_owner() -> dict:
@@ -2553,10 +2713,11 @@ def goal_topic(name: str) -> str:
     return re.sub(r"_R\d+$", "", s, flags=re.I).lower()
 
 
-def ui_goals(running: list[dict], history: list[dict] | None = None) -> list[dict]:
+def ui_goals(running: list[dict], history: list[dict] | None = None, queued: list[dict] | None = None) -> list[dict]:
     """เป้าหมายสำหรับ UI: สถานะ + ผูกงานที่รันอยู่ (แผน _R<n> ในโปรเจกต์เดียวกัน) · ซ่อนที่จบ/หยุดเกิน 3 วัน
     ติดป้ายงาน (รันอยู่ + ประวัติ): r["goal"] = รอบของเป้าหมาย · r["fix_round"] = แผนแก้ซ้ำ _R<n> ธรรมดาที่ไม่มีเป้าหมาย (กันสับสนว่าธงหาย)"""
-    out, rows = [], running + (history or [])
+    queued = queued or []
+    out, rows = [], running + queued + (history or [])
     rn = {}
     for r in rows:
         m = re.search(r"_R(\d+)\.md$", r.get("plan") or "", re.I)
@@ -2569,13 +2730,16 @@ def ui_goals(running: list[dict], history: list[dict] | None = None) -> list[dic
         if not gl.get("id"):
             continue
         proj, topic = os.path.normcase(gl.get("project", "")), goal_topic(gl.get("stem", ""))
-        jobs_now, last_job = [], {}
+        jobs_now, runs, qs, last_job = [], [], [], {}
         for r in rows:
             if id(r) in rn and os.path.normcase(r.get("project", "")) == proj and goal_topic(r["plan"]) == topic:
                 if not r.get("goal") or not gl.get("archived"):  # เรื่องเดียวกันหลายไฟล์ = ไฟล์ที่ไม่ได้เก็บชนะ
                     r["goal"] = {"id": gl["id"], "round": rn[id(r)], "rounds_max": gl.get("rounds_max", 0), "title": gl.get("title", "")}
                 if any(r is x for x in running):
                     jobs_now.append(r["id"])
+                    runs.append(r)
+                elif any(r is x for x in queued):
+                    qs.append(r)
                 elif r.get("finished") and r["finished"] > last_job.get("finished", ""):  # งาน Flash ล่าสุดที่จบ → การ์ดบอกว่ารอใครอยู่
                     last_job = {"id": r["id"], "state": r.get("state", ""), "finished": r["finished"], "round": r["goal"]["round"]}
         if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
@@ -2593,10 +2757,12 @@ def ui_goals(running: list[dict], history: list[dict] | None = None) -> list[dic
             own["title"] = claude_session_title(own["session"]) or own.get("title", "")
         bz = read_json(GOALS_DIR / f"{gl['id']}.busy.json")
         busy = bz if bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0)) else {}
+        lj = dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {}
+        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict != "DONE" else {})
         out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
                         elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
-                        jobs=jobs_now, last_job=dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {},
+                        jobs=jobs_now, last_job=lj, phase=phase,
                         project_name=Path(gl.get("project", "")).name))
     for r in rows:
         if id(r) in rn and not r.get("goal"):

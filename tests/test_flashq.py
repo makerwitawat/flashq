@@ -1166,10 +1166,53 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual((own["session"], own["app"], Path(own["cwd"]).resolve()), ("sess-test-1", "cli", self.proj.resolve()))
         self.run_q("goal", "status", "docs/plans/GOAL_x.md", env={"CLAUDE_CODE_SESSION_ID": ""})
         self.assertEqual(mod.ui_goals([])[0]["owner"]["session"], "sess-test-1")  # คำสั่งนอก Claude Code ไม่ลบที่มาเดิม
+        # ขั้นย่อย: เขียนแผน (อ่านความเคลื่อนไหวของ session เจ้าของ + subagent จาก transcript) → คิว → Flash ทำ → รอตรวจ → ผล
+        mod.CLAUDE_PROJECTS = self.home / "cp"
+        tr = mod.CLAUDE_PROJECTS / "D--proj" / "sess-test-1.jsonl"
+        sub = tr.parent / "sess-test-1" / "subagents" / "agent-a1.jsonl"
+        sub.parent.mkdir(parents=True)
+
+        def jl(f, *entries):
+            f.write_text("".join(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n" for e in entries), encoding="utf-8")
+
+        def tool(name, inp):
+            return {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use", "content": [{"type": "tool_use", "name": name, "input": inp}]}}
+        end = {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "ส่ง subagent แล้ว"}]}}
+        self.assertIn("หา session ที่ทำไม่เจอ", mod.ui_goals([])[0]["phase"]["label"])
+        jl(tr, tool("Agent", {"description": "เขียนแผน"}), end)
+        jl(sub, tool("Read", {"file_path": "C:/x/plan.md"}))
+        (sub.parent / "agent-a1.meta.json").write_text(json.dumps({"description": "เขียนแผน R2"}), encoding="utf-8")
+        ph = mod.ui_goals([])[0]["phase"]
+        self.assertEqual((ph["step"], ph["round"], ph["warn"]), ("plan", 2, False))
+        self.assertIn("กำลังเขียนแผนรอบ 2", ph["label"])
+        self.assertIn("รอ subagent", ph["notes"][0]["t"])
+        self.assertIn("«เขียนแผน R2» กำลังทำ · Read: plan.md", ph["notes"][1]["t"])
+        jl(sub, tool("Read", {"file_path": "C:/x/plan.md"}), end)  # subagent จบ + session จบเทิร์น = ไม่มีใครทำ → เตือน
+        ph = mod.ui_goals([])[0]["phase"]
+        self.assertEqual((ph["warn"], len(ph["notes"])), (True, 1))
+        self.assertIn("ไม่ได้ทำงานอยู่", ph["label"])
+        jl(tr, tool("AskUserQuestion", {"questions": [{"question": "เริ่มวนไหม"}]}))
+        ph = mod.ui_goals([])[0]["phase"]
+        self.assertTrue(ph["notes"][0]["warn"])
+        self.assertIn("รอคุณตอบ", ph["notes"][0]["t"])
+        self.assertIn("เริ่มวนไหม", ph["notes"][0]["t"])
+        jl(tr, tool("Bash", {"command": "x", "description": "รันเทสต์"}))
+        plan = self.proj / "docs" / "plans" / "PLAN_FLASH_x_R2.md"
+        plan.write_text("# แผน\n", encoding="utf-8")
+        ph = mod.ui_goals([])[0]["phase"]
+        self.assertEqual(ph["step"], "plan")
+        self.assertIn("📤 แผนรอบ 2 เขียนเสร็จแล้ว", ph["label"])
+        self.assertIn("กำลังทำงาน · ล่าสุด Bash: รันเทสต์", ph["notes"][0]["t"])
+        q = {"id": "Q1", "project": str(self.proj), "plan": "docs/plans/PLAN_FLASH_x_R2.md", "position": 1, "wait_sec": 5}
+        ph = mod.ui_goals([], [], [q])[0]["phase"]
+        self.assertEqual((ph["step"], q["goal"]["round"]), ("flash", 2))
+        self.assertIn("อยู่ในคิว ลำดับ 1", ph["label"])
+        plan.unlink()
         run = {"id": "J1", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R2.md"}
         other = {"id": "J2", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_y_R2.md"}
         g = mod.ui_goals([run, other])[0]
         self.assertEqual((g["verdict"], g["passed"], g["jobs"]), ("CONTINUE", 0, ["J1"]))
+        self.assertEqual((g["phase"]["step"], g["phase"]["job"]), ("flash", "J1"))
         self.assertEqual(run["goal"], {"id": g["id"], "round": 2, "rounds_max": 3, "title": "ค่าใหม่"})
         self.assertNotIn("goal", other)
         self.assertEqual(other["fix_round"], 2)  # แผน _R<n> ธรรมดาที่ไม่มีเป้าหมาย = ป้าย 🔁 แก้รอบ ไม่ใช่ 🚩
@@ -1177,11 +1220,13 @@ class FlashqTest(unittest.TestCase):
         g = mod.ui_goals([], [done])[0]  # งานที่จบแล้วในประวัติก็ติด 🚩 + การ์ดรู้ว่า Flash ทำรอบไหนเสร็จล่าสุด
         self.assertEqual((done["goal"]["round"], g["last_job"]["id"], g["last_job"]["round"]), (1, "J0", 1))
         self.assertEqual(g["rounds"][-1]["flash"], 0)  # รอบนี้ไม่มีงาน Flash = ตรวจอย่างเดียว
+        self.assertEqual(g["phase"]["step"], "review")  # Flash จบหลังตรวจล่าสุด = รอ Claude ตรวจ
         self.assertIn("VAL=old", g["rounds"][-1]["results"]["G-01"]["tail"])
         (self.proj / "src" / "b.txt").write_text("x\n", encoding="utf-8")
         self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # มีงานใหม่แต่ผลเดิมซ้ำ = STOP
         g = mod.ui_goals([])[0]
         self.assertEqual(g["verdict"], "STOP")
+        self.assertEqual((g["phase"]["step"], g["phase"]["warn"]), ("result", True))
         self.assertIn("พังซ้ำเรื่องเดิม", g["rounds"][-1]["stop"][0])
         self.assertNotIn("results", g["rounds"][0])  # รอบเก่าเก็บแค่ผลย่อ
 

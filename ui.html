@@ -286,6 +286,12 @@ summary.goal-h button { margin-left: auto; }
 .goal-rounds span.re { opacity: 0.75; }
 .goal-idle { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.92em; background: color-mix(in srgb, var(--line) 55%, transparent); }
 .goal-idle.long { background: color-mix(in srgb, var(--quota) 18%, transparent); }
+.goal-steps { display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.4rem 0 0; font-size: 0.8rem; }
+.goal-steps span { padding: 0.05rem 0.45rem; border-radius: 0.3rem; background: var(--line); opacity: 0.55; white-space: nowrap; }
+.goal-steps span.done { opacity: 0.85; } .goal-steps span.done::before { content: "✓ "; }
+.goal-steps span.cur { opacity: 1; font-weight: 700; background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.goal-steps span.cur.warn { background: color-mix(in srgb, var(--quota) 35%, transparent); }
+.goal-phase ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.92em; } .goal-phase li.warn { font-weight: 600; }
 .goal-warn { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.9em; border: 1px dashed var(--quota); }
 .rtag { font-size: 0.78rem; padding: 0 0.35rem; border-radius: 0.3rem; margin-left: 0.3rem; white-space: nowrap; font-family: inherit; }
 .rtag.goal { background: color-mix(in srgb, var(--accent) 16%, transparent); } .rtag.fix { background: var(--line); }
@@ -777,7 +783,6 @@ function goalHTML(g) {
   const hum = human.length && g.verdict !== "DONE" && g.verdict !== "STOP"
     ? `<div class="goal-human">${g.verdict === "DONE_NEEDS_USER" ? "👀 <b>ถึงตาคุณตรวจ:</b>" : "👤 ข้อที่คุณต้องตรวจเองตอนจบ:"} ${human.map((i) => `<b>${esc(i.id)}</b> ${esc(i.human)}`).join(" · ")}</div>` : "";
   const runs = (state.running_list || []).filter((r) => r.goal && r.goal.id === g.id);
-  const live = runs.length ? `<div class="of-line">🧑‍💻 Flash กำลังทำรอบ ${runs.map((r) => r.goal.round).join(", ")} · ช่อง ${runs.map((r) => r.slot || "?").join(", ")} <button data-oflog="${esc(runs[0].id)}">ดู log สด</button></div>` : "";
   const o = g.owner || {}, resume = `/flash-goal ${g.goal_abs || g.goal}`;
   const app = o.app === "claude-desktop" ? "แอป Claude (แท็บ Code)" : o.app === "cli" ? "Claude Code ใน terminal" : "Claude Code";
   const where = o.session
@@ -810,11 +815,7 @@ function goalHTML(g) {
   };
   const chips = n ? `<div class="goal-rounds" title="🧑‍💻 = Flash ทำงานในรอบนั้น · 🔍 = ตรวจอย่างเดียว · 🔁n = ตรวจซ้ำโดยไม่มีงานใหม่ (ไม่นับรอบ)">${g.rounds.map(chip).join("")}</div>` : "";
   const warn = last && last.warn && last.warn.length ? `<div class="goal-warn">⚠️ ไฟล์นอกขอบเขตที่<b>อาจเป็นของ session อื่น</b> (ไม่ได้มาจากงาน Flash ของเป้าหมายนี้ชัด ๆ · ไม่เบรก — ตรวจดูเอง): <span class="mono">${esc(last.warn.slice(0, 8).join(", "))}${last.warn.length > 8 ? " …" : ""}</span></div>` : "";
-  const lj = g.last_job || {}, fresh = lj.finished && lj.finished > (last ? last.at : g.started || "");
-  const quiet = g.age_sec || 0, waitWho = g.verdict === "DONE_NEEDS_USER" ? "รอคุณตรวจ" : g.verdict === "STOP" ? "รอคุณตัดสินใจ" : "รอ Claude ส่งรอบถัดไป";
-  const idle = lock || g.verdict === "DONE" ? ""
-    : fresh ? `<div class="goal-idle${(lj.ago_sec || 0) > 1800 ? " long" : ""}">📥 Flash ทำรอบ ${lj.round} เสร็จแล้ว ${esc(ago(lj.ago_sec))} ที่แล้ว (${esc((STATUS[lj.state] || [lj.state])[0])}) — <b>รอ Claude ตรวจ (goal verify)</b> · session นั้นปิดไปแล้ว → กด 🔄 ตรวจใหม่</div>`
-    : `<div class="goal-idle${quiet > 1800 ? " long" : ""}">⏸ ${waitWho} — นิ่งมา <b>${esc(ago(quiet))}</b> <span class="muted">(อัปเดตล่าสุด ${esc(g.updated || "-")})</span></div>`;
+  const phase = phaseHTML(g);
   const head = `<span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
       <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span>`;
   if (g.verdict === "DONE") {  // ผ่านแล้ว = ย่อเหลือบรรทัดเดียว (กดเพื่อกางดู) + ✖ เก็บ
@@ -829,7 +830,20 @@ function goalHTML(g) {
     <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
     <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
     <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
-    ${live}${idle}${acts}${stop}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
+    ${phase}${acts}${stop}${warn}<ul class="goal-items">${items}</ul>${hum}${own}${chips}</article>`;
+}
+/* ขั้นย่อยของรอบ: 🚩 ตั้งธง → ✍️ เขียนแผน → 🧑‍💻 Flash ทำ → 📥 รอตรวจ → 🔍 ตรวจ → 🏁 ผล · ทุกขั้นบอกเคลื่อนไหวล่าสุด (ไม่ต้องเดาว่าค้าง) */
+const GOAL_STEPS = [["flag", "🚩 ตั้งธง"], ["plan", "✍️ เขียนแผน"], ["flash", "🧑‍💻 Flash ทำ"], ["review", "📥 รอตรวจ"], ["verify", "🔍 ตรวจ"], ["result", "🏁 ผล"]];
+function phaseHTML(g) {
+  const p = g.phase;
+  if (!p || !p.step) return "";
+  const cur = GOAL_STEPS.findIndex(([k]) => k === p.step);
+  const steps = GOAL_STEPS.map(([k, t], i) => `<span class="${i < cur ? "done" : i === cur ? "cur" + (p.warn ? " warn" : "") : ""}">${t}${k === "plan" && p.step !== "result" ? ` รอบ ${p.round}` : ""}</span>`).join("");
+  const when = p.ago_sec == null ? "" : ` · ${esc(p.ago_what)} <b>${esc(ago(p.ago_sec))}</b>${/มา$/.test(p.ago_what) ? "" : " ที่แล้ว"}`;
+  const log = p.job ? ` <button data-oflog="${esc(p.job)}">ดู log สด</button>` : "";
+  const notes = (p.notes || []).length && p.step !== "result" ? `<ul>${p.notes.map((x) => `<li class="${x.warn ? "warn" : ""}">${esc(x.t)}${x.ago_sec == null ? "" : ` <span class="muted">· เคลื่อนไหว ${esc(ago(x.ago_sec))} ที่แล้ว</span>`}</li>`).join("")}</ul>` : "";
+  const hint = p.warn && p.step !== "result" ? `<div class="muted">นิ่งนาน/รอคุณ → กด ↩ เปิด session นั้นดู · ปิดไปแล้ว → กด 🤖 ให้ Claude ทำต่อ</div>` : "";
+  return `<div class="goal-steps">${steps}</div><div class="goal-idle goal-phase${p.warn ? " long" : ""}">${esc(p.label)}${when}${log}${notes}${hint}</div>`;
 }
 function renderGoals() {
   const gs = state.goals || [];
