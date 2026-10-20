@@ -542,6 +542,14 @@ const dur = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h} ชม. ${m} นาที` : m ? `${m} นาที ${x} วิ` : `${x} วิ`;
 };
+// ยามเฝ้า shell: สงสัยอะไร · รออีกเท่าไรถึงจะฆ่า (จบเองก่อน = ปล่อยไป)
+const guardText = (sw) => {
+  const left = sw.kill_in != null ? Math.max(0, Math.round(sw.kill_in - (sw.at ? (Date.now() - new Date(sw.at.replace(" ", "T")).getTime()) / 1000 : 0))) : null;
+  const wait = left != null ? ` — ถ้ายังไม่จบอีก ~${dur(left)} จะฆ่า (จบเองก่อน = ปล่อยไป)` : "";
+  return sw.state === "suspect" ? `⚠ สงสัย: ${sw.note}${wait}`
+    : sw.state === "quiet" ? `⚠ คำสั่งนิ่ง ${dur(sw.quiet_sec)}: ${sw.note || ""}${wait}`
+    : sw.state === "killed" ? `ฆ่าคำสั่งค้างแล้ว (${sw.note || ""})` : "คำสั่งยังทำงาน (CPU/I/O ขยับ)";
+};
 const ago = (s) => (s == null ? "-" : s < 60 ? "ไม่ถึง 1 นาที" : dur(s).replace(/ \d+ วิ$/, ""));
 const roundTag = (j) => (j.goal ? `<span class="rtag goal" title="รอบหนึ่งของเป้าหมาย «${esc(j.goal.title || "")}» (/flash-goal)">🚩 รอบ ${j.goal.round}/${j.goal.rounds_max}</span>`
   : j.fix_round ? `<span class="rtag fix" title="แผนแก้ซ้ำ (_R${j.fix_round}) ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย ไม่มีธง">🔁 แก้รอบ ${j.fix_round}</span>` : "");
@@ -1420,7 +1428,7 @@ function officeModel() {
   cele.forEach((c) => { if (c.desk < N && !desks[c.desk]) celeAt[c.desk] = c; });
   const el = (r) => (r.done_sec || 0) + (now - stateAt) / 1000;
   const reviews = state.reviews || [], reviewFin = (state.reviews_done || []).find((r) => el(r) <= 20) || null;
-  const GR = { killed: 3, quiet: 2, active: 1 };
+  const GR = { killed: 4, suspect: 3, quiet: 2, active: 1 };
   const watched = runs.filter((r) => r.shell_watch && GR[r.shell_watch.state]).sort((a, b) => GR[b.shell_watch.state] - GR[a.shell_watch.state]);
   const kill = ((state.guard || {}).kills || []).find((k) => k.age_sec != null && k.age_sec + (now - stateAt) / 1000 <= 90) || null;
   return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [], reviews, reviewFin, watched, kill, goals: state.goals || [] };
@@ -1523,9 +1531,9 @@ function sceneSVG(m) {
   {  // ยามเฝ้า shell: ว่าง = เดินส่องไฟฉาย · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
     const sy = stripY + 102, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
     const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? ox + (di % 4) * DW + 72 : DESK_X0 + 70;
-    const caught = !!k && !(sw && sw.state === "quiet"), alert = sw && sw.state === "quiet";
+    const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
     const txt = caught ? `🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`
-      : alert ? `⚠ คำสั่งนิ่ง ${dur(sw.quiet_sec)} · ${trunc(sw.cmd, 30)} (ช่อง ${di + 1}) — นิ่งถึง ${state.guard?.idle_min ?? 4} นาทีจะฆ่า`
+      : alert ? `${guardText(sw)} · ${trunc(sw.cmd, 24)} (ช่อง ${di + 1})`
       : sw ? `เฝ้าคำสั่ง ${trunc(sw.cmd, 34)} (ช่อง ${di + 1}) · โปรเซสยังขยับ`
       : "ว่าง · เดินตรวจ shell รอบออฟฟิศ";
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
@@ -1661,8 +1669,9 @@ function officeUpdate() {
     const warn = quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}` : "";
     setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${warn ? " · " + warn : ""}` : warn);
     const sw = r.shell_watch;
-    setText("ofCG" + k, (sw && sw.state !== "none" ? `🛡 ยามเฝ้า: ${sw.state === "quiet" ? "⚠ คำสั่งนิ่ง " + dur(sw.quiet_sec) : sw.state === "killed" ? "ฆ่าคำสั่งค้างแล้ว" : "คำสั่งยังทำงาน"} · ${trunc(sw.cmd, 50)} (${sw.pids} โปรเซส)` : "")
-      + (r.shell_kills ? `${sw && sw.state !== "none" ? " · " : "🛡 "}ฆ่าคำสั่งค้างไปแล้ว ${r.shell_kills} ครั้ง` : ""));
+    setText("ofCG" + k, (sw && sw.state !== "none" ? `🛡 ยามเฝ้า: ${guardText(sw)} · ${trunc(sw.cmd, 50)} (${sw.pids} โปรเซส)` : "")
+      + (r.shell_kills ? `${sw && sw.state !== "none" ? " · " : "🛡 "}ฆ่าคำสั่งค้างไปแล้ว ${r.shell_kills} ครั้ง` : "")
+      + (r.shell_released ? `${(sw && sw.state !== "none") || r.shell_kills ? " · " : "🛡 "}สงสัยแต่จบเองทัน ปล่อยไป ${r.shell_released} ครั้ง` : ""));
     const card = $("ofC" + k); if (card) card.classList.toggle("quiet", !!quiet || ri.severe);
     const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
     if (i >= 0) {

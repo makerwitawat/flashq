@@ -1020,15 +1020,26 @@ class FlashqTest(unittest.TestCase):
         w = mod.ShellWatch(4, table=lambda: tab, killer=killed.append)
         run = [{"tool": "bash", "cmd": "cmd /c start /b ping -n 300 127.0.0.1", "what": "", "since": T, "session": "s2"}]
         rep = w.check(run, now=T + 30)
-        self.assertEqual((rep["state"], rep["names"]), ("active", "PING.EXE"))
-        rep = w.check(run, now=T + 60)
+        self.assertEqual((rep["state"], rep["names"], rep["kill_in"]), ("suspect", "PING.EXE", 2 * mod.SHELL_POLL_SEC))
+        self.assertIn("1/3", rep["note"])
+        self.assertEqual(w.check(run, now=T + 60)["state"], "suspect")
+        rep = w.check(run, now=T + 90)
         self.assertEqual(rep["state"], "killed")
         self.assertIn("ถือ handle", rep["note"])
         self.assertEqual(killed, [20])
+        self.assertEqual(rep["victims"][0]["name"], "PING.EXE")
+        self.assertEqual(w.released, [])  # ฆ่าแล้วไม่นับเป็นปล่อยไป
         # tool จบ (ไม่อยู่ใน running) → ล้าง · ไม่มี bash = ไม่อ่านตารางโปรเซสเลย
-        w.check(run, now=T + 61)
-        w.check([], now=T + 62)
+        w.check(run, now=T + 91)
+        w.check([], now=T + 92)
         self.assertEqual(w.seen, {})
+        # สงสัยแล้วแต่ tool จบเองก่อนครบรอบยืนยัน = ปล่อยไป (ไม่ฆ่า)
+        killed.clear()
+        w = mod.ShellWatch(4, table=lambda: tab, killer=killed.append)
+        w.check(run, now=T + 30)
+        w.check([], now=T + 40)
+        self.assertEqual((killed, len(w.released)), ([], 1))
+        self.assertIn("PING.EXE", w.released[0]["note"])
         # เคสจริง 2026-10-20: opencode หนี \" ใน command line ของ shell → ต้องจับคู่ได้ (เดิมเข้าใจผิดว่า shell จบ แล้วฆ่า python/timeout ของเทสต์ที่ยังทำงาน)
         # + กำพร้าที่ตรงคำเดียวบังเอิญ (tools) ห้ามโดน
         cmd = r'powershell -NoProfile -ExecutionPolicy Bypass -File "D:\o\run-long.ps1" -Command "regression_all.ps1 -Tier quick"'

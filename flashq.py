@@ -76,6 +76,7 @@ DEFAULTS = {
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
 SHELL_POLL_SEC = float(os.environ.get("FLASHQ_SHELL_POLL_SEC") or 30)  # ถามสถานะ tool + วัดโปรเซสถี่แค่ไหนตอน log เงียบ
+SHELL_CONFIRM = 3  # หา shell ไม่เจอแต่ลูกยังอยู่ ต้องเห็นซ้ำกี่รอบ (รอบละ SHELL_POLL_SEC) ก่อนฆ่า
 SHELL_NAMES = {"powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "sh.exe"}
 SHELL_WORDS = {"cmd", "start", "powershell", "pwsh", "bash", "exe", "nologo", "noprofile", "noninteractive", "command", "null", "out-null",
                "executionpolicy", "bypass", "-file", "file", "-command", "-noprofile", "-executionpolicy"}
@@ -1003,11 +1004,14 @@ class ShellWatch:
         self.table = table or proc_table
         self.killer = killer or shell_kill
         self.seen: dict = {}
+        self.released: list = []  # สงสัยแล้วแต่ tool จบเอง (ผู้เรียกดึงไปบันทึกแล้วล้าง)
 
     def check(self, running: list[dict], now: float | None = None) -> dict | None:
         now = now or time.time()
         bash = [r for r in running if r.get("tool") == "bash" and r.get("cmd")]
         for k in [k for k in self.seen if k not in {(r["session"], r["since"]) for r in bash}]:
+            if self.seen[k].get("warn"):  # tool จบเองระหว่างที่ยามสงสัย
+                self.released.append({"cmd": self.seen[k]["cmd"], "note": self.seen[k]["warn"]})
             del self.seen[k]  # tool จบแล้ว
         if not bash:
             return None
@@ -1049,19 +1053,24 @@ class ShellWatch:
                 w["act"], w["chg"] = act, now
             names = ", ".join(sorted({p["name"] for p in group.values()}))[:80]
             rep = {"cmd": r["what"] or r["cmd"][:100], "session": r["session"], "since": r["since"], "pids": len(group), "names": names,
-                   "quiet_sec": round(now - w["chg"]), "run_sec": round(now - r["since"]), "state": "none" if not group else "active", "note": ""}
-            if group and not shells and w["gone"] >= 2:
+                   "quiet_sec": round(now - w["chg"]), "run_sec": round(now - r["since"]), "state": "none" if not group else "active", "note": "",
+                   "kill_in": None}
+            if group and not shells and w["gone"] >= SHELL_CONFIRM:
                 rep.update(state="killed", note=f"shell จบแล้วแต่โปรเซสลูกยังถือ handle ไว้ ({names}) → tool ไม่คืนค่า")
+            elif group and not shells:  # ยังไม่แน่ใจ → บอกว่าสงสัยอะไร รออีกกี่วิ · tool จบเองก่อน = ปล่อยไป
+                rep.update(state="suspect", note=f"หา shell ของคำสั่งไม่เจอ (อาจจบแล้ว) แต่ยังมีโปรเซสลูก ({names}) — ยืนยัน {w['gone']}/{SHELL_CONFIRM} รอบ",
+                           kill_in=round((SHELL_CONFIRM - w["gone"]) * SHELL_POLL_SEC))
             elif group and self.idle and now - w["chg"] >= self.idle:
                 rep.update(state="killed", note=f"โปรเซสนิ่งสนิท (CPU/I/O ไม่ขยับ) {(now - w['chg']) / 60:.1f} นาที ({names})")
             elif group and now - w["chg"] >= max(SHELL_POLL_SEC * 2, self.idle / 2):
-                rep["state"] = "quiet"
+                rep.update(state="quiet", note=f"โปรเซส ({names}) CPU/I/O ไม่ขยับ", kill_in=round(self.idle - (now - w["chg"])) if self.idle else None)
+            w["cmd"], w["warn"] = rep["cmd"], rep["note"] if rep["state"] in ("suspect", "quiet") else ""
             if rep["state"] == "killed":
-                for p in group.values():
-                    if p["ppid"] not in group:
-                        self.killer(p["pid"])
+                rep["victims"] = [{"pid": p["pid"], "name": p["name"], "cmd": p["cmd"][:160]} for p in group.values() if p["ppid"] not in group]
+                for v in rep["victims"]:
+                    self.killer(v["pid"])
                 del self.seen[(r["session"], r["since"])]
-            rank = {"killed": 3, "quiet": 2, "active": 1, "none": 0}
+            rank = {"killed": 4, "suspect": 3, "quiet": 2, "active": 1, "none": 0}
             if best is None or rank[rep["state"]] > rank[best["state"]]:
                 best = rep
         return best
@@ -1133,10 +1142,15 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                                 rep = watch.check(act["running"])
                                 job["shell_watch"] = dict(rep, at=now()) if rep else None
                                 if rep and rep["state"] == "killed":
-                                    job.setdefault("shell_kills", []).append({"at": now(), "cmd": rep["cmd"], "note": rep["note"], "run_sec": rep["run_sec"]})
+                                    job.setdefault("shell_kills", []).append({"at": now(), "cmd": rep["cmd"], "note": rep["note"], "run_sec": rep["run_sec"],
+                                                                              "victims": rep.get("victims", [])})
                                     print(f"SHELL_WATCH: ฆ่าคำสั่งค้าง `{rep['cmd'][:80]}` (รันมา {rep['run_sec'] / 60:.1f} นาที) · {rep['note']} → tool คืน error แล้วงานทำต่อ", flush=True)
                                 elif rep and rep["state"] == "active":
                                     busy_until = time.time() - rep["quiet_sec"]
+                                for x in watch.released:  # สงสัยแล้วแต่คำสั่งจบเองก่อนครบเวลา = ปล่อยไป
+                                    job.setdefault("shell_released", []).append(dict(x, at=now()))
+                                    print(f"SHELL_WATCH: ปล่อยไป `{x['cmd'][:80]}` จบเองก่อนครบเวลา (เคยสงสัย: {x['note']})", flush=True)
+                                watch.released.clear()
                                 save_job(job)
                         if busy_until:
                             idle = min(idle, time.time() - busy_until)
@@ -1930,7 +1944,7 @@ def ui_state() -> dict:
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
                        log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j), shell_watch=j.get("shell_watch"),
-                       shell_kills=len(j.get("shell_kills") or []))
+                       shell_kills=len(j.get("shell_kills") or []), shell_released=len(j.get("shell_released") or []))
             running.append(row)
         elif st == "queued":
             row.update(wait_sec=_secs(j.get("created", "")), legacy=j.get("qv", 0) < QUEUE_VERSION,
