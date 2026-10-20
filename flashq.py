@@ -2323,6 +2323,9 @@ def make_ui_server(port: int = 4097):
                     open_in_desktop(j["session"], j.get("attach", LIVE_URL))
                 out = buf.getvalue().strip() or "ไม่พบ node — เปิดไม่ได้"
                 return self._send(200, {"ok": "=OK" in out, "message": out})
+            if path == "/api/goal":  # ปุ่มบนการ์ดเป้าหมาย
+                code, d = goal_ui_action(str(body.get("id") or ""), str(body.get("action") or ""), body)
+                return self._send(code, d)
             if path == "/api/switch":
                 import contextlib
                 import io
@@ -2527,7 +2530,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             if line.startswith("# "):
                 title = re.sub(r"^#\s*GOAL\s*:\s*", "", line).strip()
                 break
-        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human")} for r in st.get("rounds", [])]
+        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res")} for r in st.get("rounds", [])]
         if rounds:
             rounds[-1]["results"] = st["rounds"][-1].get("results", {})
         GOALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -2552,6 +2555,8 @@ def ui_goals(running: list[dict]) -> list[dict]:
     """เป้าหมายสำหรับ UI: สถานะ + ผูกงานที่รันอยู่ (แผน _R<n> ในโปรเจกต์เดียวกัน) · ซ่อนที่จบ/หยุดเกิน 3 วัน"""
     out = []
     for f in GOALS_DIR.glob("*.json") if GOALS_DIR.is_dir() else []:
+        if f.name.endswith(".busy.json"):
+            continue
         gl = read_json(f)
         if not gl.get("id"):
             continue
@@ -2573,7 +2578,9 @@ def ui_goals(running: list[dict]) -> list[dict]:
         own = dict(gl.get("owner") or {})
         if own.get("session"):
             own["title"] = claude_session_title(own["session"]) or own.get("title", "")
-        out.append(dict(gl, owner=own, verdict=verdict, age_sec=upd,
+        bz = read_json(GOALS_DIR / f"{gl['id']}.busy.json")
+        busy = bz if bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0)) else {}
+        out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
                         elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
                         jobs=jobs_now, project_name=Path(gl.get("project", "")).name))
@@ -2636,6 +2643,94 @@ def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[
     return sorted(out)
 
 
+def goal_human(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, rounds_max: int, a) -> int:
+    """บันทึกผลข้อ `คนตรวจ:` ของรอบล่าสุด (จากหน้าเว็บหรือ Claude) · ผ่านครบ = DONE · มีข้อไม่ผ่าน = คง DONE_NEEDS_USER รอ Claude แปลงเหตุเป็นเกณฑ์"""
+    last = st["rounds"][-1] if st.get("rounds") else None
+    if not last or last["verdict"] not in ("DONE_NEEDS_USER", "DONE"):
+        print("GOAL_HUMAN=FAIL ตรวจข้อคนตรวจได้เฉพาะเมื่อเครื่องตรวจผ่านครบแล้ว (GOAL=DONE_NEEDS_USER)")
+        return 1
+    hum = [i["id"] for i in g["items"] if not i["cmd"]]
+    if a.item not in hum:
+        print(f"GOAL_HUMAN=FAIL {a.item or '(ว่าง)'} ไม่ใช่ข้อคนตรวจ (มี: {', '.join(hum) or '-'})")
+        return 1
+    if not a.passed and not (a.fail or "").strip():
+        print('GOAL_HUMAN=FAIL ต้องระบุ --pass หรือ --fail "เหตุ"')
+        return 1
+    res = last.setdefault("human_res", {})
+    res[a.item] = {"ok": bool(a.passed), "reason": "" if a.passed else a.fail.strip(), "at": now()}
+    bad = [k for k in hum if k in res and not res[k]["ok"]]
+    last["verdict"] = "DONE" if all(res.get(k, {}).get("ok") for k in hum) else "DONE_NEEDS_USER"
+    write_json(sp, st)
+    goal_publish(root, goal, rel, g, st, rounds_max)
+    if bad:
+        print("ไม่ผ่าน: " + " · ".join(f"{k} {res[k]['reason']}" for k in bad) + " → ให้ Claude แปลงเหตุเป็นเกณฑ์ที่วัดได้ แล้ว `goal check --reset` วนต่อ")
+    left = [k for k in hum if k not in res]
+    print(f"GOAL={last['verdict']} คนตรวจผ่าน {sum(1 for k in hum if res.get(k, {}).get('ok'))}/{len(hum)}" + (f" · ยังไม่ตรวจ {', '.join(left)}" if left else ""))
+    return 0
+
+
+def claude_exe() -> str:
+    """claude CLI: ใน PATH ก่อน · ไม่มี → ตัวที่แอป Claude desktop ติดตั้งไว้ (รุ่นใหม่สุด)"""
+    w = shutil.which("claude")
+    if w:
+        return w
+    base = Path(os.environ.get("APPDATA", "")) / "Claude" / "claude-code"
+    exes = sorted(base.glob("*/*/claude.exe"), key=lambda x: x.stat().st_mtime, reverse=True) if base.is_dir() else []
+    return str(exes[0]) if exes else ""
+
+
+def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
+    """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์) · claude (เปิด Claude Code ทำต่อ)
+    path ทุกตัวมาจากสำเนาสถานะใน ~/.flashq/goals เท่านั้น ไม่รับ path จากหน้าเว็บ"""
+    if not re.fullmatch(r"[0-9a-f]{12}", gid or ""):
+        return 400, {"ok": False, "message": "id ไม่ถูกต้อง"}
+    gl = read_json(GOALS_DIR / f"{gid}.json")
+    if not gl.get("project"):
+        return 404, {"ok": False, "message": "ไม่พบเป้าหมาย"}
+    root = Path(gl["project"])
+    goal = Path(gl.get("goal_abs") or root / gl["goal"])
+    own_cwd = Path((gl.get("owner") or {}).get("cwd") or root)
+    cwd = own_cwd if own_cwd.is_dir() else root
+    bp = GOALS_DIR / f"{gid}.busy.json"
+    bz = read_json(bp)
+    busy = bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0))
+    me = [sys.executable, str(REPO / "flashq.py"), "goal"]
+    if action == "open":
+        target = goal if body.get("what") == "goal" else cwd
+        if not target.exists():
+            return 404, {"ok": False, "message": f"ไม่พบ {target}"}
+        if os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", str(target)] if target.is_file() else ["explorer", str(target)])
+        return 200, {"ok": True, "message": f"เปิด {target}"}
+    if action == "human":
+        r = subprocess.run(me + ["human", str(goal), str(body.get("item") or ""), "--project", str(root)]
+                           + (["--pass"] if body.get("ok") else ["--fail", str(body.get("reason") or "")]),
+                           cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+    if action in ("verify", "claude"):
+        if busy:
+            return 409, {"ok": False, "message": f"กำลัง{'ตรวจใหม่' if bz.get('what') == 'verify' else 'เปิด Claude ทำต่อ'}อยู่แล้ว (เริ่ม {bz.get('at')})"}
+        topic, proj = goal_topic(gl.get("stem", "")), os.path.normcase(str(root))
+        if any(live_state(j) == "running" and os.path.normcase(j.get("project", "")) == proj and re.search(r"_R\d+\.md$", j.get("plan") or "", re.I)
+               and goal_topic(j["plan"]) == topic for j in jobs()):
+            return 409, {"ok": False, "message": "Flash กำลังทำรอบของเป้าหมายนี้อยู่ — รอจบก่อน"}
+        log = GOALS_DIR / f"{gid}.{action}.log"
+        if action == "verify":
+            with log.open("wb") as fh:
+                p = subprocess.Popen(me + ["verify", str(goal), "--project", str(root)], cwd=str(root),
+                                     stdout=fh, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            exe = claude_exe()
+            if not exe:
+                return 404, {"ok": False, "message": "ไม่พบ claude CLI (ไม่มีใน PATH และไม่พบตัวของแอป Claude) → ใช้ปุ่มคัดลอกคำสั่งแทน"}
+            p = subprocess.Popen([exe, f"/flash-goal {goal}"], cwd=str(cwd), creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        write_json(bp, {"what": action, "pid": p.pid, "pid_start": proc_start(p.pid), "at": now(), "log": str(log) if action == "verify" else ""})
+        msg = ("เริ่มตรวจใหม่แล้ว (รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที) — การ์ดจะอัปเดตเองเมื่อเสร็จ" if action == "verify" else
+               f"เปิดหน้าต่าง Claude Code ที่ {cwd} พร้อมคำสั่ง /flash-goal แล้ว — ดูและอนุญาตคำสั่งในหน้าต่างนั้น")
+        return 200, {"ok": True, "message": msg}
+    return 400, {"ok": False, "message": "action ไม่รู้จัก"}
+
+
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -2690,7 +2785,11 @@ def cmd_goal(a) -> int:
         print(f"เป้าหมาย {rel} · เริ่ม {st['started']} (ผ่านไป {(_secs(st['started']) or 0) / 3600:.1f} ชม.) · รอบ {len(st['rounds'])}/{rounds_max} · base {st['base'][:9]}")
         if last:
             print(f"รอบล่าสุด {last['at']}: {last['verdict']} · ไม่ผ่าน {', '.join(last['fail']) or '-'}")
+            for k, v in (last.get("human_res") or {}).items():
+                print(f"คนตรวจ {k}: {'ผ่าน' if v['ok'] else 'ไม่ผ่าน — ' + v.get('reason', '')} ({v['at']})")
         return 0
+    if a.action == "human":
+        return goal_human(root, goal, rel, g, st, sp, rounds_max, a)
     # verify
     stop = []
     if st.get("sig") != g["sig"]:
@@ -2833,8 +2932,11 @@ def main() -> int:
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
     rn.set_defaults(fn=cmd_runnow)
     go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status")
-    go.add_argument("action", choices=["check", "verify", "status"])
+    go.add_argument("action", choices=["check", "verify", "status", "human"])
     go.add_argument("goal", help="ไฟล์เป้าหมาย เช่น docs/plans/GOAL_<เรื่อง>.md")
+    go.add_argument("item", nargs="?", default="", help="human: ข้อคนตรวจ เช่น G-07")
+    go.add_argument("--pass", dest="passed", action="store_true", help="human: ข้อนี้ผ่าน")
+    go.add_argument("--fail", default="", help='human: ข้อนี้ไม่ผ่าน + เหตุ')
     go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
     go.set_defaults(fn=cmd_goal)

@@ -1175,6 +1175,34 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("พังซ้ำเรื่องเดิม", g["rounds"][-1]["stop"][0])
         self.assertNotIn("results", g["rounds"][0])  # รอบเก่าเก็บแค่ผลย่อ
 
+    def test_goal_human_marks_from_ui(self):
+        """ข้อคนตรวจ: goal human --pass/--fail (ปุ่ม ✅/❌ ในหน้าเว็บ) · ผ่านครบ = DONE · ไม่ผ่านเก็บเหตุ · ปุ่มเว็บรับเฉพาะ id ของเป้าหมาย"""
+        py = f'"{sys.executable}"'
+        self.goal_repo(f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                       "- [ ] G-02 อ่านง่าย · คนตรวจ: เปิด src/a.txt\ngoal-files: src/*\ngoal-locked: tests/*\n")
+        self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        r = self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")
+        self.assertIn("GOAL_HUMAN=FAIL", r.stdout)  # ยังไม่มีรอบ / เครื่องยังไม่ผ่าน
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        self.assertIn("GOAL=DONE_NEEDS_USER", self.run_q("goal", "verify", "docs/plans/GOAL_x.md").stdout)
+        self.assertIn("ไม่ใช่ข้อคนตรวจ", self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-01", "--pass").stdout)
+        r = self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--fail", "ตัวอักษรเล็กไป")
+        self.assertIn("GOAL=DONE_NEEDS_USER", r.stdout, r.stdout)
+        mod = self.load_mod("flashq_goalhuman")
+        mod.GOALS_DIR = self.home / "goals"
+        g = mod.ui_goals([])[0]
+        self.assertEqual(g["rounds"][-1]["human_res"]["G-02"]["reason"], "ตัวอักษรเล็กไป")
+        self.assertIn("ไม่ผ่าน — ตัวอักษรเล็กไป", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
+        r = self.run_q("goal", "human", "docs/plans/GOAL_x.md", "G-02", "--pass")
+        self.assertIn("GOAL=DONE คนตรวจผ่าน 1/1", r.stdout, r.stdout)
+        self.assertEqual(mod.ui_goals([])[0]["verdict"], "DONE")
+        (mod.GOALS_DIR / f"{g['id']}.busy.json").write_text(json.dumps({"what": "verify", "pid": os.getpid(), "at": "x"}), encoding="utf-8")
+        gs = mod.ui_goals([])
+        self.assertEqual((len(gs), gs[0]["busy"]["what"]), (1, "verify"))  # ไฟล์ busy ไม่นับเป็นเป้าหมาย · pid ยังอยู่ = กำลังทำ
+        self.assertEqual(mod.goal_ui_action("../../x", "open", {})[0], 400)
+        self.assertEqual(mod.goal_ui_action("0" * 12, "open", {})[0], 404)
+        self.assertEqual(mod.goal_ui_action(g["id"], "verify", {})[0], 409)  # กำลังตรวจอยู่ = ไม่เริ่มซ้ำ
+
     def test_goal_scope_counts_only_flash_windows(self):
         """ไม่ STOP ผิด: เทสต์เกณฑ์ commit หลัง check · ไฟล์ขยะไม่ track ที่มีมาก่อน · มีงาน Flash ของเป้าหมาย = นับเฉพาะที่แก้ระหว่างงานรัน"""
         py = f'"{sys.executable}"'
