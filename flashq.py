@@ -1075,7 +1075,7 @@ def cmd_run(a) -> int:
             res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min)
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
-            if res["status"] == "TIMEOUT" and kind in AGENT_KINDS and stall_retry > 0:  # ผู้ตรวจ/ผู้สืบอ่านอย่างเดียว → ลองใหม่ได้ปลอดภัย (งานทำจริงไม่ลองเอง เพราะอาจแก้ไฟล์ค้างไว้)
+            if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
                 stall_retry -= 1
                 print(f"TIMEOUT ({job.get('timeout_reason', '')}) → ลองใหม่อัตโนมัติ 1 ครั้ง · ก่อนหน้าทำถึง: " + " | ".join(res.get("recent") or ["(ไม่มี tool)"]), flush=True)
                 continue

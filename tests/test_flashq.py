@@ -837,7 +837,7 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("[สืบ]", self.run_q("list", "--all").stdout)
 
     def test_stalled_agent_job_is_killed_retried_once_and_explained(self):
-        """log เงียบเกิน agent_stall_min → ฆ่า · TIMEOUT พร้อมเหตุ · ผู้สืบลองใหม่ 1 ครั้งเอง · งานทำจริงไม่ลองเอง"""
+        """log เงียบเกิน agent_stall_min → ฆ่า · TIMEOUT พร้อมเหตุ · ลองใหม่ 1 ครั้งเอง (ทั้งผู้สืบและงานทำจริง)"""
         (self.proj / ".flash.json").write_text(json.dumps({"agent_stall_min": 0.05, "stall_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
         r = self.run_q("investigate", "--no-open", "ค้างไหม", env={"FAKE_SLEEP": "60"})
         out = r.stdout + r.stderr
@@ -846,9 +846,9 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("STALL", out)
         self.assertIn("ลองใหม่อัตโนมัติ", out)
         self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 2)
-        r = self.run_q(*self.base(), env={"FAKE_SLEEP": "60"})
+        r = self.run_q(*self.base(), env={"FAKE_SLEEP": "60"})  # งานทำจริงก็ลองใหม่หนึ่งครั้ง (ข้ามงานที่ติ๊กแล้ว) แล้วจบ TIMEOUT
         self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
-        self.assertNotIn("ลองใหม่อัตโนมัติ", r.stdout)
+        self.assertEqual(r.stdout.count("ลองใหม่อัตโนมัติ"), 1)
 
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
