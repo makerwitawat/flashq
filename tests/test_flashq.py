@@ -1202,6 +1202,25 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(mod.goal_ui_action("../../x", "open", {})[0], 400)
         self.assertEqual(mod.goal_ui_action("0" * 12, "open", {})[0], 404)
         self.assertEqual(mod.goal_ui_action(g["id"], "verify", {})[0], 409)  # กำลังตรวจอยู่ = ไม่เริ่มซ้ำ
+        (mod.GOALS_DIR / f"{g['id']}.busy.json").unlink()
+        opened, gp = [], mod.GOALS_DIR / f"{g['id']}.json"
+        mod.open_link = opened.append  # ไม่เปิดแอปจริงระหว่างเทสต์
+        mod.claude_app_link = lambda path, params: f"claude://code/{path}?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)  # ทำเหมือนเครื่องมีแอป
+        code, r = mod.goal_ui_action(g["id"], "claude", {})  # มีแอป Claude desktop = session ใหม่ในแอป พิมพ์ /flash-goal รอไว้
+        self.assertEqual(code, 200, r)
+        self.assertTrue(opened[-1].startswith("claude://code/new?q=%2Fflash-goal%20"), opened)
+        self.assertIn("&folder=", opened[-1])
+        self.assertFalse((mod.GOALS_DIR / f"{g['id']}.busy.json").exists())  # แอปไม่มี pid ให้เฝ้า = ไม่ล็อกปุ่ม
+        data = json.loads(gp.read_text(encoding="utf-8"))
+        data["owner"] = {"session": "s1", "host": "local_abc-1"}
+        gp.write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(mod.goal_ui_action(g["id"], "session", {})[0], 200)
+        self.assertEqual(opened[-1], "claude://code/continue?session=local_abc-1")
+        data["owner"] = {"session": "s1", "host": "local_x&y=1"}  # host แปลก = ไม่สร้างลิงก์
+        gp.write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual(mod.goal_ui_action(g["id"], "session", {})[0], 404)
+        link = self.load_mod("flashq_goallink").claude_app_link("new", {"q": "a b"})
+        self.assertIn(link, ("", "claude://code/new?q=a%20b"))  # "" = เครื่องนี้ไม่มีแอป Claude desktop
 
     def test_goal_scope_counts_only_flash_windows(self):
         """ไม่ STOP ผิด: เทสต์เกณฑ์ commit หลัง check · ไฟล์ขยะไม่ track ที่มีมาก่อน · มีงาน Flash ของเป้าหมาย = นับเฉพาะที่แก้ระหว่างงานรัน"""

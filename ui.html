@@ -745,6 +745,7 @@ function goalHTML(g) {
   const app = o.app === "claude-desktop" ? "แอป Claude (แท็บ Code)" : o.app === "cli" ? "Claude Code ใน terminal" : "Claude Code";
   const where = o.session
     ? `🧭 ทำใน session <b>«${esc(o.title || "ไม่มีชื่อ")}»</b> <span class="muted">· ${app} · โฟลเดอร์ <span class="mono">${esc(o.cwd || "-")}</span> · สั่งล่าสุด ${esc(o.at || "-")}</span>
+       ${/^local_/.test(o.host || "") ? `<button data-gact="session" data-gid="${esc(g.id)}" title="เปิด session นี้ในแอป Claude (แท็บ Code)">↩ เปิด session นี้</button>` : ""}
        <button data-copy="${esc(o.session)}" title="คัดลอก session id (ค้นใน sidebar ไม่เจอ → claude --resume <id> ในโฟลเดอร์นั้น)">📋 session id</button>`
     : `🧭 <span class="muted">ยังไม่รู้ว่า session ไหนทำ (บันทึกเองตั้งแต่ goal check/verify ครั้งถัดไป)</span>`;
   const own = `<div class="goal-owner">${where}<div class="muted">ทำต่อ: เปิด session นั้นแล้วสั่ง · หาไม่เจอ/ปิดไปแล้ว → เปิด session ใหม่ที่โปรเจกต์ ${esc(g.project_name)} แล้ววางคำสั่งนี้ (อ่านสถานะจากไฟล์ ทำต่อได้เลย)
@@ -761,7 +762,7 @@ function goalHTML(g) {
   const dis = lock ? " disabled" : "";
   const acts = `<div class="goal-acts"><div>${next}</div><div class="goal-btns">
       <button data-gact="verify" data-gid="${esc(g.id)}"${dis} title="รัน goal verify ใหม่ (รันเกณฑ์ทุกข้อ · นับเป็นรอบใหม่)">🔄 ตรวจใหม่</button>
-      <button data-gact="claude" data-gid="${esc(g.id)}"${dis || (g.verdict === "DONE" ? " disabled" : "")} title="เปิดหน้าต่าง Claude Code พร้อม /flash-goal ให้วนต่อ">🤖 ให้ Claude ทำต่อ</button>
+      <button data-gact="claude" data-gid="${esc(g.id)}"${dis || (g.verdict === "DONE" ? " disabled" : "")} title="เปิด session ใหม่ในแอป Claude (แท็บ Code) พิมพ์ /flash-goal รอไว้ · ไม่มีแอป → หน้าต่าง CLI">🤖 ให้ Claude ทำต่อ</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="goal">📄 ไฟล์เป้าหมาย</button>
       <button data-gact="open" data-gid="${esc(g.id)}" data-what="dir">📂 โฟลเดอร์</button></div></div>`;
   const chips = n ? `<div class="goal-rounds">${g.rounds.map((r, k) => `<span title="${esc(r.at)}">รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}</span>`).join("")}</div>` : "";
@@ -1623,7 +1624,7 @@ document.addEventListener("click", async (e) => {
   e.stopPropagation();
   const d = b.dataset, body = { id: d.gid, action: d.gact };
   if (d.gact === "verify" && !confirm("ตรวจใหม่: รันเกณฑ์ทุกข้อของเป้าหมายนี้ (นับเป็นรอบใหม่ · ใช้เวลาหลายนาที) ?")) return;
-  if (d.gact === "claude" && !confirm("เปิดหน้าต่าง Claude Code ใหม่พร้อมคำสั่ง /flash-goal ให้วนต่อ ?\n(ใช้โควตา Claude · ต้องคอยดู/อนุญาตคำสั่งในหน้าต่างนั้น)")) return;
+  if (d.gact === "claude" && !confirm("เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ ?\n(กด Enter ในแอปเพื่อเริ่ม · ใช้โควตา Claude · ไม่มีแอป → เปิดหน้าต่าง CLI แทน)")) return;
   if (d.gact === "open") body.what = d.what;
   if (d.gact === "human") {
     body.item = d.item; body.ok = !!d.ok;

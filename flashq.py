@@ -2679,8 +2679,31 @@ def claude_exe() -> str:
     return str(exes[0]) if exes else ""
 
 
+def claude_app_link(path: str, params: dict) -> str:
+    """ลิงก์ claude:// ของแอป Claude desktop (แท็บ Code) · "" = เครื่องนี้ไม่มีแอป (ไม่ได้ลงทะเบียน claude://)
+    code/new?q=&folder= = session ใหม่ พิมพ์ข้อความรอไว้ (แอปแปลงโฟลเดอร์ worktree กลับเป็น repo เอง) · code/continue?session=local_… = เปิด session เดิม"""
+    import urllib.parse
+    if os.name == "nt":
+        try:
+            import winreg
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\claude"))
+        except OSError:
+            return ""
+    elif not shutil.which("open"):
+        return ""
+    return f"claude://code/{path}?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+
+
+def open_link(url: str) -> None:
+    if os.name == "nt":
+        os.startfile(url)  # noqa: S606 — ลิงก์ claude:// ที่สร้างเองเท่านั้น
+    else:
+        subprocess.Popen(["open", url])
+
+
 def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
-    """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์) · claude (เปิด Claude Code ทำต่อ)
+    """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์)
+    claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป)
     path ทุกตัวมาจากสำเนาสถานะใน ~/.flashq/goals เท่านั้น ไม่รับ path จากหน้าเว็บ"""
     if not re.fullmatch(r"[0-9a-f]{12}", gid or ""):
         return 400, {"ok": False, "message": "id ไม่ถูกต้อง"}
@@ -2707,6 +2730,13 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
                            + (["--pass"] if body.get("ok") else ["--fail", str(body.get("reason") or "")]),
                            cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+    if action == "session":
+        host = (gl.get("owner") or {}).get("host") or ""
+        url = claude_app_link("continue", {"session": host}) if re.fullmatch(r"local_[A-Za-z0-9-]{1,64}", host) else ""
+        if not url:
+            return 404, {"ok": False, "message": "ไม่มี session ของแอป Claude desktop ให้เปิด (สั่งจาก CLI หรือเครื่องไม่มีแอป) → ใช้ปุ่มให้ Claude ทำต่อ"}
+        open_link(url)
+        return 200, {"ok": True, "message": "เปิด session เดิมในแอป Claude แล้ว (ถ้า session ถูกลบ/เก็บถาวร แอปจะไปหน้ารวม)"}
     if action in ("verify", "claude"):
         if busy:
             return 409, {"ok": False, "message": f"กำลัง{'ตรวจใหม่' if bz.get('what') == 'verify' else 'เปิด Claude ทำต่อ'}อยู่แล้ว (เริ่ม {bz.get('at')})"}
@@ -2714,6 +2744,10 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         if any(live_state(j) == "running" and os.path.normcase(j.get("project", "")) == proj and re.search(r"_R\d+\.md$", j.get("plan") or "", re.I)
                and goal_topic(j["plan"]) == topic for j in jobs()):
             return 409, {"ok": False, "message": "Flash กำลังทำรอบของเป้าหมายนี้อยู่ — รอจบก่อน"}
+        url = "" if action != "claude" or body.get("cli") else claude_app_link("new", {"q": f"/flash-goal {goal}", "folder": str(cwd)})
+        if url:
+            open_link(url)
+            return 200, {"ok": True, "message": f"เปิด session ใหม่ในแอป Claude (แท็บ Code) ที่ {cwd} พิมพ์ /flash-goal รอไว้แล้ว — กด Enter ในแอปเพื่อเริ่ม"}
         log = GOALS_DIR / f"{gid}.{action}.log"
         if action == "verify":
             with log.open("wb") as fh:
