@@ -39,7 +39,7 @@ description: >-
 - ขาด/ไม่ตรง/เก่ากว่า → `❌ หลักฐานไม่ครบ → T-xxR` (ไม่รันเอง)
 
 ## 4. บันทึก + ปิด
-- เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (ก่อน/หลัง/ยืนยัน ตรงตัว) · **ห้าม revert/reset เอง**
+- เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (จุดเล็ก = ก่อน/หลังตรงตัว · ใหญ่ = สเปก ตาม `/flash-plan` §2 · ยืนยัน) · **ห้าม revert/reset เอง**
 - **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → จบแล้ว `/flash-check` ซ้ำ · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
 - ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user
 - สรุปให้ user: ผ่าน/ไม่ผ่านกี่งาน · รอบแก้ที่ส่งไปแล้ว

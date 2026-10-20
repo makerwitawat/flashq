@@ -66,6 +66,24 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("ไม่พบไฟล์แผน", r.stdout)
 
+    def test_big_plan_warn_and_reject(self):
+        """แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash: เกินเพดานอ่อน = เตือนแต่ส่ง · เกินเพดานแข็ง = ปฏิเสธ (เว้นแต่ --big-plan) · นับ fence ~~~~ ด้วย"""
+        code = lambda n, f="```": f + "python\n" + "x = 1\n" * n + f + "\n"
+        (self.proj / "BIG.md").write_text("# แผน\n" + code(450, "~~~~"), encoding="utf-8")
+        r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("แผนใหญ่เกิน", r.stdout)
+        self.assertIn("โค้ดใน ``` 450 บรรทัด", r.stdout)
+        r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open", "--big-plan")
+        self.assertNotIn("แผนใหญ่เกิน", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        (self.proj / "MID.md").write_text("# แผน\n" + code(250), encoding="utf-8")
+        r = self.run_q("run", "MID.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("WARN: แผนใหญ่", r.stdout)
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open")
+        self.assertNotIn("แผนใหญ่", r.stdout)
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)

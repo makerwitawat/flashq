@@ -1197,6 +1197,24 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
 
 
 # ---------- คำสั่ง ----------
+PLAN_SOFT = (400, 200)  # (บรรทัดทั้งแผน, บรรทัดโค้ดใน ```) เกิน = เตือน
+PLAN_HARD = (800, 400)  # เกิน = ปฏิเสธ (แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว · ต้องแบ่งแผน หรือ --big-plan)
+
+
+def plan_size(text: str) -> tuple[int, int]:
+    """(จำนวนบรรทัดทั้งแผน, จำนวนบรรทัดใน code block ``` / ~~~ — fence ปิดต้องเป็นตัวเดียวกันและยาวไม่น้อยกว่า)"""
+    lines, code, fence = text.splitlines(), 0, ""
+    for ln in lines:
+        m = re.match(r"\s*(`{3,}|~{3,})", ln)
+        if not fence and m:
+            fence = m.group(1)
+        elif fence and m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not ln.strip()[len(m.group(1)):].strip():
+            fence = ""
+        elif fence:
+            code += 1
+    return len(lines), code
+
+
 def cmd_run(a) -> int:
     if isinstance(a.message, list):  # investigate รับบรีฟเป็นหลายคำ
         a.message = " ".join(a.message).strip()
@@ -1234,6 +1252,20 @@ def cmd_run(a) -> int:
         elif not (root / plan).exists():
             print(f"FLASH_RUN=FAIL ไม่พบไฟล์แผน: {root / plan}")
             return 1
+        if (a.kind or "work") == "work":
+            try:
+                body = ((root / plan).read_text(encoding="utf-8", errors="replace") if (root / plan).exists()
+                        else _git(root, "show", f"{cfg['remote']}/{cfg['main_branch']}:{plan}"))
+            except OSError:
+                body = ""
+            n, code = plan_size(body or "")
+            why = f"แผน {n} บรรทัด · โค้ดใน ``` {code} บรรทัด"
+            if (n > PLAN_HARD[0] or code > PLAN_HARD[1]) and not getattr(a, "big_plan", False):
+                print(f"FLASH_RUN=FAIL แผนใหญ่เกิน ({why} · เพดาน {PLAN_HARD[0]}/{PLAN_HARD[1]}) = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว "
+                      f"→ เปลี่ยนโค้ดยาวเป็นสเปก (/flash-plan §2) หรือแบ่งเป็นหลายแผน · user อนุญาตแล้ว → ใส่ --big-plan")
+                return 1
+            if n > PLAN_SOFT[0] or code > PLAN_SOFT[1]:
+                print(f"WARN: แผนใหญ่ ({why} · แนะนำ ≤{PLAN_SOFT[0]}/{PLAN_SOFT[1]}) — โค้ดยาวควรเป็นสเปกให้ Flash เขียนเอง", flush=True)
         if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
             br = subprocess.run(["git", "-C", str(root), "branch", "--show-current"],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
@@ -3137,6 +3169,7 @@ def main() -> int:
     r.add_argument("plan", nargs="?")
     r.add_argument("tasks", nargs="?")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
+    r.add_argument("--big-plan", action="store_true", help=f"ยอมรับแผนที่ใหญ่เกินเพดาน ({PLAN_HARD[0]} บรรทัด / โค้ด {PLAN_HARD[1]} บรรทัด) — ใช้เมื่อ user อนุญาต")
     r.set_defaults(kind="", prompt="")
     vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
     vf.add_argument("plan")
