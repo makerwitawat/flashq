@@ -1144,6 +1144,33 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_published_for_ui(self):
+        """check/verify คัดลอกสถานะไป ~/.flashq/goals · ui_goals: ผ่านกี่ข้อ · ผูกงานแผน _R<n> · เก็บเหตุเบรกของรอบ"""
+        py = f'"{sys.executable}"'
+        self.goal_repo(f"# GOAL: ค่าใหม่\n- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                       "- [ ] G-02 อ่านง่าย · คนตรวจ: เปิด src/a.txt\ngoal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n")
+        self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        files = list((self.home / "goals").glob("*.json"))
+        self.assertEqual(len(files), 1)
+        mod = self.load_mod("flashq_goalui")
+        mod.GOALS_DIR = self.home / "goals"
+        g = mod.ui_goals([])[0]
+        self.assertEqual((g["verdict"], g["title"], g["machine"], g["rounds_max"]), ("START", "ค่าใหม่", 1, 3))
+        self.assertEqual([i["human"] for i in g["items"]], ["", "เปิด src/a.txt"])
+        self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        run = {"id": "J1", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R2.md"}
+        other = {"id": "J2", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_y_R2.md"}
+        g = mod.ui_goals([run, other])[0]
+        self.assertEqual((g["verdict"], g["passed"], g["jobs"]), ("CONTINUE", 0, ["J1"]))
+        self.assertEqual(run["goal"], {"id": g["id"], "round": 2, "rounds_max": 3})
+        self.assertNotIn("goal", other)
+        self.assertIn("VAL=old", g["rounds"][-1]["results"]["G-01"]["tail"])
+        self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # ผลเดิมซ้ำ = STOP
+        g = mod.ui_goals([])[0]
+        self.assertEqual(g["verdict"], "STOP")
+        self.assertIn("พังซ้ำเรื่องเดิม", g["rounds"][-1]["stop"][0])
+        self.assertNotIn("results", g["rounds"][0])  # รอบเก่าเก็บแค่ผลย่อ
+
     def test_cancel_does_not_kill_reused_child_pid(self):
         """child_pid ของรอบก่อนที่ถูกโปรแกรมอื่นนำไปใช้ซ้ำ (เวลาเริ่มไม่ตรง) ต้องไม่ถูกฆ่าตอนยกเลิกงาน"""
         mod = self.load_mod("flashq_cancel")

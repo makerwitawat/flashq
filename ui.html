@@ -241,6 +241,31 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .of-busy .of-lens { animation: of-scan 1.1s ease-in-out infinite; transform-box: fill-box; transform-origin: 20% 25%; }
 .of-ring { fill: none; stroke: #7c3aed; stroke-width: 2.5; stroke-dasharray: 7 5; animation: of-code 1.2s linear infinite; }
 @keyframes of-slide { from { left: -35%; } to { left: 100%; } }
+/* เป้าหมาย (/flash-goal): การ์ดแผง + ธงที่โต๊ะ + เสาธงในออฟฟิศ */
+.goal-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 0.5rem; padding: 0.55rem 0.7rem; margin-bottom: 0.6rem; }
+.goal-card.v-DONE { border-left-color: var(--ok); } .goal-card.v-STOP { border-left-color: var(--fail); }
+.goal-card.v-DONE_NEEDS_USER { border-left-color: var(--quota); } .goal-card.v-CONTINUE, .goal-card.v-START { border-left-color: var(--accent); }
+.goal-h { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; }
+.goal-st { font-weight: 700; padding: 0 0.5rem; border-radius: 1rem; font-size: 0.82rem; color: #fff; background: var(--accent); white-space: nowrap; }
+.goal-st.v-DONE { background: var(--ok); } .goal-st.v-STOP { background: var(--fail); } .goal-st.v-DONE_NEEDS_USER { background: var(--quota); }
+.goal-bar { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: 0.45rem; align-items: center; font-size: 0.88rem; margin-top: 0.3rem; }
+.goal-bar .t { height: 0.5rem; background: var(--line); border-radius: 0.25rem; overflow: hidden; }
+.goal-bar .t i { display: block; height: 100%; background: var(--accent); } .goal-bar .t i.warn { background: var(--quota); } .goal-bar .t i.over { background: var(--fail); }
+.goal-items { list-style: none; padding: 0; margin: 0.45rem 0 0; } .goal-items li { margin: 0.2rem 0; }
+.goal-items pre { margin: 0.25rem 0 0.2rem 1.4rem; max-height: 11rem; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 0.35rem; padding: 0.4rem; font: 0.8rem/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-items summary { cursor: pointer; }
+.goal-stop { color: var(--fail); font-weight: 600; margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.goal-human { margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: 0.35rem; background: color-mix(in srgb, var(--quota) 14%, transparent); }
+.goal-rounds { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.35rem; font-size: 0.8rem; }
+.goal-rounds span { padding: 0 0.4rem; border-radius: 0.3rem; background: var(--line); }
+.of-goalt { fill: #dc2626; font-size: 11px; font-weight: 700; }
+.of-pole { stroke: #8a94a3; stroke-width: 3; stroke-linecap: round; }
+.of-flag { transition: transform 1s ease; }
+.of-flagc { transform-box: fill-box; transform-origin: 0% 50%; animation: of-flut 2.6s ease-in-out infinite; }
+.of-gdone .of-flagc { animation: of-flut .7s ease-in-out infinite; }
+.of-gstop .of-flagc { animation: none; transform: skewY(8deg) scaleX(.85); }
+@keyframes of-flut { 0%, 100% { transform: skewY(0) scaleX(1); } 50% { transform: skewY(-6deg) scaleX(.92); } }
+.of-conf { animation: of-zz 1.6s ease-out infinite; }
 body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-paused .of-bar i { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .of-scene *, .of-bar i { animation: none !important; } }
 </style>
@@ -267,6 +292,11 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
     <section class="panel warn" id="deadBox" hidden data-panel="dead">
       <div class="ph"><h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2></div>
       <div class="pb" id="dead"></div>
+    </section>
+    <section class="panel" id="goalBox" hidden data-panel="goals">
+      <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="gcount"></span></h2><span class="sp"></span>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb" id="goals"></div>
     </section>
     <section class="panel" data-panel="running">
       <div class="ph"><h2>กำลังทำ <span class="muted" id="slotInfo"></span></h2><span class="sp"></span>
@@ -368,6 +398,7 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
         <li>🚶 <b>ผู้ตรวจประจำออฟฟิศ</b> (แถบม่วงใต้โต๊ะ) = ว่างจะเดินลาดตระเวนรองานตรวจ · มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ</li>
         <li>🛡 <b>ยามเฝ้า shell</b> (แถบล่างสุด ชุดกรมท่า หมวกยาม ถือไฟฉาย) = ว่างจะเดินส่องไฟ · มีคำสั่ง shell รันอยู่จะยืนเฝ้าที่ช่องนั้น · ❗ = โปรเซสนิ่ง (CPU/I/O ไม่ขยับ) · 🚨 จับได้ = ฆ่าคำสั่งค้างแล้ว งานทำต่อ (ไม่ฆ่าทั้งงาน) · เฉพาะ Windows + <span class="mono">--attach</span> server</li>
+        <li>🚩 <b>เป้าหมาย</b> (<span class="mono">/flash-goal</span>) = ธงที่โต๊ะ "รอบ 2/5" = งานนั้นเป็นรอบหนึ่งของเป้าหมาย · <b>เสาธง</b> (แถบล่างสุด) ธงขึ้นสูงตามจำนวนเกณฑ์ที่ผ่าน · ผ่านครบ = ธงเขียวโบก+ฉลอง · รอคุณตรวจ = ธงเหลือง 👀 · หยุดเพราะเบรก = ธงแดงครึ่งเสา · แจ้งเตือน/เสียงเมื่อผ่าน/หยุด/รอตรวจ</li>
         <li>🏢 <b>ห้องทำงาน</b> = พื้นไม้ ผนัง หน้าต่าง+ม่าน ชั้นหนังสือ ไวท์บอร์ด รูปภาพ ตู้น้ำ ต้นไม้ · โต๊ะมีคีย์บอร์ด เมาส์ แก้วกาแฟ เอกสาร ไฟสถานะจอ เก้าอี้มีล้อ (ตกแต่งอย่างเดียว ไม่มีผลกับสถานะงาน)</li>
         <li>👔 <b>แต่งตัวต่างจากคนงาน</b> = ผู้ตรวจใส่เสื้อกาวน์ขาว+เนคไท+แว่น · 🕵️ ผู้สืบ (flash-investigator) ใส่โค้ทเบจ+หมวกนักสืบ · ทั้งคู่ถือแว่นขยาย</li>
         <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
@@ -382,6 +413,10 @@ body.calm .of-scene *, body.of-paused .of-scene *, body.calm .of-bar i, body.of-
   </section>
   </div>
   <div class="of-colR">
+  <section class="panel" id="ofGoalBox" hidden data-panel="ofgoals">
+    <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="ofGcount"></span></h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+    <div class="pb" id="ofGoals"></div>
+  </section>
   <div class="of-cards" id="ofRuns"></div>
   <div class="of-two">
     <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
@@ -670,6 +705,74 @@ function checkFinished() {
   prevStates = now;
 }
 
+/* --- เป้าหมาย (/flash-goal): การ์ด · แจ้งเตือนเมื่อผ่าน/หยุด/รอตรวจ --- */
+const GOAL_ST = { START: ["🆕 ตั้งธงแล้ว", "ยังไม่ได้ตรวจรอบแรก"], CONTINUE: ["🔄 กำลังวน", "ยังไม่ผ่าน → รอบถัดไป"], DONE: ["✅ ผ่านแล้ว", "เกณฑ์ผ่านครบ"],
+  DONE_NEEDS_USER: ["👀 รอคุณตรวจ", "เครื่องตรวจผ่านหมด เหลือข้อที่ต้องดูเอง"], STOP: ["⛔ หยุด", "ติดเบรก ต้องให้คุณตัดสิน"] };
+const goalOpen = new Set();  // <details> ที่เปิดอยู่ (คงไว้ตอนวาดใหม่)
+function goalLast(g) { const r = g.rounds || []; return r[r.length - 1] || null; }
+function goalHTML(g) {
+  const last = goalLast(g), res = (last && last.results) || {}, n = (g.rounds || []).length, rmax = g.rounds_max || 1;
+  const [stT, stD] = GOAL_ST[g.verdict] || [g.verdict, ""];
+  const hrs = (g.hours || 0) * 3600, el = g.elapsed_sec || 0, tp = hrs ? Math.min(100, (el / hrs) * 100) : 0, rp = Math.min(100, (n / rmax) * 100);
+  const cls = (p) => (p >= 100 ? "over" : p >= 80 ? "warn" : "");
+  const items = (g.items || []).map((i) => {
+    if (i.human) return `<li>👤 <b>${esc(i.id)}</b> ${esc(i.desc)} <span class="muted">· คนตรวจ: ${esc(i.human)}</span></li>`;
+    const r = res[i.id];
+    if (!r) return `<li>⏳ <b>${esc(i.id)}</b> ${esc(i.desc)} <span class="muted">· ยังไม่ได้ตรวจ</span></li>`;
+    if (r.ok) return `<li>✅ <b>${esc(i.id)}</b> ${esc(i.desc)}</li>`;
+    const key = g.id + ":" + i.id;
+    return `<li><details data-gkey="${esc(key)}"${goalOpen.has(key) ? " open" : ""}><summary>❌ <b>${esc(i.id)}</b> ${esc(i.desc)} <span class="muted">· exit ${r.rc}${r.seen === false ? " · ไม่เห็นข้อความที่ต้องเห็น" : ""} · กดดูท้าย output</span></summary><pre>${esc(r.tail || "(ไม่มี output)")}</pre></details></li>`;
+  }).join("");
+  const stop = last && last.stop && last.stop.length ? `<ul class="goal-stop">${last.stop.map((x) => `<li>เบรก: ${esc(x)}</li>`).join("")}</ul>` : "";
+  const human = (g.items || []).filter((i) => i.human);
+  const hum = human.length && g.verdict !== "DONE" && g.verdict !== "STOP"
+    ? `<div class="goal-human">${g.verdict === "DONE_NEEDS_USER" ? "👀 <b>ถึงตาคุณตรวจ:</b>" : "👤 ข้อที่คุณต้องตรวจเองตอนจบ:"} ${human.map((i) => `<b>${esc(i.id)}</b> ${esc(i.human)}`).join(" · ")}</div>` : "";
+  const runs = (state.running_list || []).filter((r) => r.goal && r.goal.id === g.id);
+  const live = runs.length ? `<div class="of-line">🧑‍💻 Flash กำลังทำรอบ ${runs.map((r) => r.goal.round).join(", ")} · ช่อง ${runs.map((r) => r.slot || "?").join(", ")} <button data-oflog="${esc(runs[0].id)}">ดู log สด</button></div>` : "";
+  const chips = n ? `<div class="goal-rounds">${g.rounds.map((r, k) => `<span title="${esc(r.at)}">รอบ ${k + 1}: ${r.verdict === "CONTINUE" ? "ยังไม่ผ่าน " + (r.fail || []).length + " ข้อ" : esc((GOAL_ST[r.verdict] || [r.verdict])[0])}</span>`).join("")}</div>` : "";
+  return `<article class="goal-card v-${esc(g.verdict)}">
+    <div class="goal-h"><span class="goal-st v-${esc(g.verdict)}" title="${esc(stD)}">${esc(stT)}</span><b>${esc(g.title)}</b>
+      <span class="of-proj" style="--h:${hueOf(g.project_name)}">${esc(g.project_name)}</span><span class="mono muted">${esc(g.goal)}</span></div>
+    <div class="goal-bar"><span>รอบ ${n}/${rmax}</span><span class="t"><i class="${cls(rp)}" style="width:${rp.toFixed(1)}%"></i></span><span class="muted">เหลือ ${Math.max(0, rmax - n)} รอบ</span></div>
+    <div class="goal-bar"><span>เวลา ${(el / 3600).toFixed(1)}/${g.hours} ชม.</span><span class="t"><i class="${cls(tp)}" style="width:${tp.toFixed(1)}%"></i></span><span class="muted">${g.verdict === "CONTINUE" || g.verdict === "START" ? "ยังนับอยู่" : "หยุดนับ"}</span></div>
+    <div class="of-line">ผ่าน <b>${g.passed}/${g.machine}</b> เกณฑ์ที่เครื่องตรวจ${human.length ? ` · คนตรวจ ${human.length} ข้อ` : ""}${last ? ` · ตรวจล่าสุด ${esc(last.at)}` : ""}</div>
+    ${live}${stop}<ul class="goal-items">${items}</ul>${hum}${chips}</article>`;
+}
+function renderGoals() {
+  const gs = state.goals || [];
+  const html = gs.map(goalHTML).join("");
+  const cnt = gs.length ? `${gs.length} เรื่อง · กำลังวน ${gs.filter((g) => g.verdict === "CONTINUE" || g.verdict === "START").length}` : "";
+  for (const [box, el, c] of [["goalBox", "goals", "gcount"], ["ofGoalBox", "ofGoals", "ofGcount"]]) {
+    $(box).hidden = !gs.length;
+    if ($(el).innerHTML !== html) $(el).innerHTML = html;
+    setText(c, cnt);
+  }
+}
+document.addEventListener("toggle", (e) => {
+  const k = e.target && e.target.dataset && e.target.dataset.gkey;
+  if (k) e.target.open ? goalOpen.add(k) : goalOpen.delete(k);
+}, true);
+let seenGoals = null;
+function checkGoals() {
+  const cur = new Map((state.goals || []).map((g) => [g.id, `${(g.rounds || []).length}:${g.verdict}`]));
+  if (seenGoals) {
+    for (const g of state.goals || []) {
+      if (seenGoals.get(g.id) === cur.get(g.id) || !["DONE", "DONE_NEEDS_USER", "STOP"].includes(g.verdict)) continue;
+      const last = goalLast(g);
+      const txt = g.verdict === "DONE" ? `🚩 เป้าหมายผ่านครบ ✅ · ${g.project_name} · ${g.title} (${(g.rounds || []).length} รอบ)`
+        : g.verdict === "DONE_NEEDS_USER" ? `🚩 เป้าหมายรอคุณตรวจ 👀 · ${g.project_name} · ${g.title}`
+        : `🚩 เป้าหมายหยุด ⛔ · ${g.project_name} · ${g.title}${last && last.stop && last.stop[0] ? " · " + trunc(last.stop[0], 80) : ""}`;
+      toast(txt);
+      if (soundOn) beep(g.verdict === "DONE" ? [[523, 0.12], [659, 0.12], [784, 0.12], [1047, 0.32]]
+        : g.verdict === "DONE_NEEDS_USER" ? [[660, 0.14], [880, 0.14], [660, 0.22]] : [[440, 0.16], [330, 0.16], [262, 0.34]]);
+      if (notifyOn && "Notification" in window && Notification.permission === "granted") {
+        try { new Notification("flashq: เป้าหมาย", { body: txt, tag: "goal-" + g.id, requireInteraction: g.verdict !== "DONE" }); } catch (e) {}
+      }
+    }
+  }
+  seenGoals = cur;
+}
+
 /* ผลตรวจจาก /flash-check (flashq review done) → แจ้งเตือน + เสียง เหมือนงานจบ */
 let seenReviews = null;
 function checkReviews() {
@@ -696,6 +799,8 @@ async function refresh() {
     render();
     checkFinished();
     checkReviews();
+    renderGoals();
+    checkGoals();
     officeTrack();
     if (view === "office") { officeUpdate(); officePoll(); }
   } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
@@ -1178,7 +1283,7 @@ function officeModel() {
   const GR = { killed: 3, quiet: 2, active: 1 };
   const watched = runs.filter((r) => r.shell_watch && GR[r.shell_watch.state]).sort((a, b) => GR[b.shell_watch.state] - GR[a.shell_watch.state]);
   const kill = ((state.guard || {}).kills || []).find((k) => k.age_sec != null && k.age_sec + (now - stateAt) / 1000 <= 90) || null;
-  return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [], reviews, reviewFin, watched, kill };
+  return { runs, N, desks, celeAt, queue: state.queued || [], dead: state.dead || [], reviews, reviewFin, watched, kill, goals: state.goals || [] };
 }
 const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
   quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
@@ -1190,7 +1295,8 @@ function deskSVG(i, cx, cy, r, c) {
   if (r) {
     stCls = "of-st-work";
     who = person({ seed: r.id, hue: hueOf(r.project_name), pose: "sit", mood: "smile", x: px, y: py, checker: roleOf(r) });
-    bubble = `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
+    if (r.goal) bubble += `<text class="of-goalt" x="${cx + 180}" y="${cy + 62}" text-anchor="end">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max}<title>งานนี้เป็นรอบหนึ่งของเป้าหมาย (/flash-goal)</title></text>`;
+    bubble += `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
     label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 8 : 10))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 162}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 10))}<title>${esc(modelText(r))}</title></text>` : ""}`;
   } else if (c) {
@@ -1246,7 +1352,7 @@ function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง
 
 function sceneSVG(m) {
   const cols = Math.min(4, m.N), rows = Math.ceil(m.N / 4);
-  const stripY = DESK_Y0 + rows * DH, H = Math.max(530, stripY + 196);
+  const stripY = DESK_Y0 + rows * DH, H = Math.max(530, stripY + 196 + (m.goals.length ? 94 : 0));
   const areaW = SCENE_W - DESK_X0 - 10, ox = DESK_X0 + Math.max(0, (areaW - cols * DW) / 2);
   const total = m.runs.length;
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
@@ -1288,6 +1394,7 @@ function sceneSVG(m) {
       <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🛡 ยามเฝ้า shell</text>
       <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
   }
+  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 196);
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || "");
@@ -1303,6 +1410,32 @@ function sceneSVG(m) {
       <text class="of-qt" x="54" y="${H - 22}" text-anchor="middle" style="font-size:11px;font-weight:700">😴 process ตาย ${m.dead.length}</text></g>`;
   }
   return g + `</svg>`;
+}
+
+/* เสาธงของเป้าหมาย: ธงขึ้นตามสัดส่วนเกณฑ์ที่ผ่าน · ผ่านครบ = ยอดเสา โบก+ฉลอง · รอคุณตรวจ = เหลือง · หยุด = แดงครึ่งเสา */
+function goalPolesSVG(goals, sy) {
+  let g = `<g><title>เสาธงเป้าหมาย (/flash-goal)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+    <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🚩 เป้าหมาย</text>
+    <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${goals.length > 3 ? `แสดง 3 จาก ${goals.length} เรื่อง` : "ธงสูงตามเกณฑ์ที่ผ่าน"}</text>`;
+  const top = sy + 10, bot = sy + 58;
+  goals.slice(0, 3).forEach((gl, k) => {
+    const x = DESK_X0 + 30 + k * 190, v = gl.verdict, ratio = gl.machine ? gl.passed / gl.machine : 0;
+    const fy = v === "DONE" || v === "DONE_NEEDS_USER" ? top : v === "STOP" ? (top + bot) / 2 : bot - (bot - top) * ratio;
+    const col = v === "DONE" ? "#16a34a" : v === "DONE_NEEDS_USER" ? "#eab308" : v === "STOP" ? "#dc2626" : "#2563eb";
+    const cls = v === "DONE" ? "of-gdone" : v === "STOP" ? "of-gstop" : "";
+    const fresh = v === "DONE" && (gl.age_sec || 0) < 3600;
+    const sub = v === "STOP" ? "⛔ หยุด · ลดครึ่งเสา" : v === "DONE" ? "✅ ผ่านครบ!" : v === "DONE_NEEDS_USER" ? "👀 รอคุณตรวจ" : `ผ่าน ${gl.passed}/${gl.machine} · รอบ ${(gl.rounds || []).length}/${gl.rounds_max}`;
+    g += `<g class="${cls}"><title>${esc(`${gl.title} · ${gl.project_name}\n${(GOAL_ST[v] || [v])[0]} · ผ่าน ${gl.passed}/${gl.machine}`)}</title>
+      <ellipse class="of-shadow" cx="${x}" cy="${sy + 78}" rx="16" ry="3"/><rect x="${x - 8}" y="${sy + 72}" width="16" height="6" rx="2" fill="#6b7280"/>
+      <line class="of-pole" x1="${x}" y1="${sy + 6}" x2="${x}" y2="${sy + 74}"/><circle cx="${x}" cy="${sy + 6}" r="3" fill="#facc15"/>
+      <g class="of-flag" style="transform:translateY(${(fy - top).toFixed(1)}px)"><path class="of-flagc" d="M${x + 1} ${top} h30 l-6 8 l6 8 h-30z" fill="${col}"/></g>
+      ${fresh ? `<text class="of-conf" x="${x + 30}" y="${sy + 14}" font-size="14">🎉</text><text class="of-conf" x="${x - 26}" y="${sy + 30}" font-size="12" style="animation-delay:.8s">✨</text>` : ""}
+      ${v === "DONE_NEEDS_USER" ? `<text x="${x + 36}" y="${top + 13}" font-size="13" class="of-blinkt">👀</text>` : ""}
+      <text class="of-tb" x="${x + 40}" y="${sy + 44}" style="font-size:12px">${esc(trunc(gl.title, 18))}</text>
+      <text class="of-tm" x="${x + 40}" y="${sy + 60}">${esc(sub)}</text>
+      <text class="of-tm" x="${x + 40}" y="${sy + 74}">${esc(trunc(gl.project_name, 20))}</text></g>`;
+  });
+  return g + `</g>`;
 }
 
 /* --- การ์ดงาน / คิว / เพิ่งจบ --- */
@@ -1321,6 +1454,7 @@ function runCardHTML(r, k) {
   return `<article class="of-card" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
+    ${r.goal ? `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(((state.goals || []).find((g) => g.id === r.goal.id) || {}).title || "")}</b></div>` : ""}
     <div class="of-bar" id="ofCB${k}" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     <div class="of-line"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
     <div class="of-line">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
@@ -1352,7 +1486,7 @@ function officeUpdate() {
   if (view !== "office" || !state) return;
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd, Math.floor(r.shell_watch.quiet_sec / 30)]), m.kill && [m.kill.job, m.kill.at], m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600)]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -1447,6 +1581,7 @@ $("officeView").addEventListener("click", async (e) => {
   w.disabled = false;
 });
 $("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel],button[data-ofwhy]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("goals").addEventListener("click", (e) => { const t = e.target.closest("button[data-oflog]"); if (t) openLog(t.dataset.oflog); });
 $("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
 $("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
 $("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };

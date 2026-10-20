@@ -1917,6 +1917,7 @@ def ui_state() -> dict:
                 for s, m in accs]
     rows = history + queued + running
     rv_act, rv_done = ui_reviews()
+    goals = ui_goals(running)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history[::-1][:300],
@@ -1924,7 +1925,8 @@ def ui_state() -> dict:
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
-            "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]}}
+            "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
+            "goals": goals}
 
 
 def job_stats(history: list[dict]) -> dict:
@@ -2471,6 +2473,66 @@ def _goal_load(root: Path, goal_arg: str) -> tuple[Path, Path, dict, dict]:
     return goal, _goal_state_path(root, goal), goal_parse(goal), read_json(_goal_state_path(root, goal))
 
 
+GOALS_DIR = HOME / "goals"  # สำเนาสถานะเป้าหมายทุกโปรเจกต์ ให้ UI เห็น (ต้นฉบับอยู่ใน <project>/.tmp/flashq-goal/)
+
+
+def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max: int) -> None:
+    """คัดลอกสถานะเป้าหมายไป ~/.flashq/goals/ (ย่อ: รอบเก่าเก็บแค่ผล · รอบล่าสุดเก็บท้าย output) — พังได้ ไม่ขวางงาน"""
+    try:
+        title = ""
+        for line in goal.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("# "):
+                title = re.sub(r"^#\s*GOAL\s*:\s*", "", line).strip()
+                break
+        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human")} for r in st.get("rounds", [])]
+        if rounds:
+            rounds[-1]["results"] = st["rounds"][-1].get("results", {})
+        GOALS_DIR.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha1(f"{root.resolve()}|{rel}".lower().encode("utf-8")).hexdigest()[:12]
+        write_json(GOALS_DIR / f"{key}.json", {
+            "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
+            "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
+            "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds})
+    except Exception:
+        pass
+
+
+def goal_topic(name: str) -> str:
+    """ชื่อเรื่องร่วมของ GOAL_<เรื่อง>.md กับ PLAN_FLASH_<เรื่อง>_R<n>.md"""
+    s = Path(name).stem
+    s = re.sub(r"^(GOAL_|PLAN_FLASH_)", "", s, flags=re.I)
+    return re.sub(r"_R\d+$", "", s, flags=re.I).lower()
+
+
+def ui_goals(running: list[dict]) -> list[dict]:
+    """เป้าหมายสำหรับ UI: สถานะ + ผูกงานที่รันอยู่ (แผน _R<n> ในโปรเจกต์เดียวกัน) · ซ่อนที่จบ/หยุดเกิน 3 วัน"""
+    out = []
+    for f in GOALS_DIR.glob("*.json") if GOALS_DIR.is_dir() else []:
+        gl = read_json(f)
+        if not gl.get("id"):
+            continue
+        last = (gl.get("rounds") or [None])[-1]
+        verdict = last["verdict"] if last else "START"
+        upd = _secs(gl.get("updated", "")) or 0
+        if verdict in ("DONE", "DONE_NEEDS_USER", "STOP") and upd > 3 * 86400:
+            continue
+        proj, topic = os.path.normcase(gl.get("project", "")), goal_topic(gl.get("stem", ""))
+        jobs_now = []
+        for r in running:
+            m = re.search(r"_R(\d+)\.md$", r.get("plan") or "", re.I)
+            if m and os.path.normcase(r.get("project", "")) == proj and goal_topic(r["plan"]) == topic:
+                jobs_now.append(r["id"])
+                r["goal"] = {"id": gl["id"], "round": int(m.group(1)), "rounds_max": gl.get("rounds_max", 0)}
+        res = (last or {}).get("results") or {}
+        machine = [i for i in gl.get("items", []) if not i.get("human")]
+        final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP")
+        out.append(dict(gl, verdict=verdict, age_sec=upd,
+                        elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
+                        passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
+                        jobs=jobs_now, project_name=Path(gl.get("project", "")).name))
+    return sorted(out, key=lambda x: x.get("updated", ""), reverse=True)[:12]
+
+
 def _glob_hit(path: str, globs: list[str]) -> bool:
     import fnmatch
     return any(fnmatch.fnmatch(path, g) or (g.endswith("/") and path.startswith(g)) or path.startswith(g.rstrip("/") + "/") for g in globs)
@@ -2524,6 +2586,7 @@ def cmd_goal(a) -> int:
             st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": []}
             sp.parent.mkdir(parents=True, exist_ok=True)
             write_json(sp, st)
+        goal_publish(root, goal, rel, g, st, rounds_max)
         print(f"GOAL_CHECK=OK เกณฑ์ {len(g['items'])} ข้อ (เครื่องตรวจ {sum(1 for i in g['items'] if i['cmd'])}) · "
               f"งบ {rounds_max} รอบ / {g['hours']:g} ชม. · ใช้ไปแล้ว {len(st['rounds'])} รอบ · base {st['base'][:9]}")
         return 0
@@ -2579,8 +2642,10 @@ def cmd_goal(a) -> int:
         if hrs >= g["hours"]:
             stop.append(f"เกินงบเวลา {g['hours']:g} ชม. (ผ่านไป {hrs:.1f})")
         verdict = "STOP" if stop else "CONTINUE"
-    st["rounds"].append({"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked})
+    st["rounds"].append({"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked,
+                         "stop": stop, "human": human})
     write_json(sp, st)
+    goal_publish(root, goal, rel, g, st, rounds_max)
     if regress:
         print(f"ถอยหลัง: {', '.join(regress)} เคยผ่านรอบก่อนแต่รอบนี้ไม่ผ่าน → แผนรอบหน้าต้องแก้ตัวนี้ก่อน")
     for s in stop:
