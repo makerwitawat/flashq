@@ -299,6 +299,7 @@ summary.goal-h button { margin-left: auto; }
 .goal-steps span { padding: 0.05rem 0.45rem; border-radius: 0.3rem; background: var(--line); opacity: 0.55; white-space: nowrap; }
 .goal-steps span.done { opacity: 0.85; } .goal-steps span.done::before { content: "✓ "; }
 .goal-steps span.cur { opacity: 1; font-weight: 700; background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.goal-steps span.skip { opacity: 0.35; text-decoration: line-through; }
 .goal-steps span.cur.warn { background: color-mix(in srgb, var(--quota) 35%, transparent); }
 .goal-phase ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.92em; } .goal-phase li.warn { font-weight: 600; }
 .goal-warn { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.9em; border: 1px dashed var(--quota); }
@@ -1652,6 +1653,28 @@ function runGoalHTML(r) {
     ${p && p.step ? `<div class="goal-steps" title="${esc(p.label)}">${goalStepsHTML(p)}</div>` : ""}
     ${gl.id ? `<div class="of-line muted">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
 }
+/* งานแผนทั่วไป: ขั้นของแผน 🕵️ สืบ → ✍️ แผน → 🧑‍💻 Flash ทำ → 🔍 ตรวจ → 🏁 ผล + งานที่เกี่ยวข้อง (ผู้สืบก่อนแผน · เคยรัน · ผลตรวจ) */
+const TRAIL_ICON = { ok: "✅", fail: "❌", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
+function planTrailHTML(r) {
+  const t = r.trail;
+  if (!t || !t.plan) return "";
+  const hm = (s) => String(s || "").slice(11, 16), ic = (s) => TRAIL_ICON[s] || "•";
+  const verify = kindOf(r) === "verify", rvNow = (state.reviews || []).some((x) => x.plan_name === t.plan);
+  const checked = t.checks.length || t.reviews.some((x) => x.status !== "reviewing");
+  const st = [["sleuth", "🕵️ สืบ", t.n_sleuths ? "done" : "skip", t.n_sleuths ? `ผู้สืบก่อนแผนนี้ ${t.n_sleuths} งาน` : "ไม่มีผู้สืบในโปรเจกต์นี้ก่อนแผนนี้ (ข้ามได้)"],
+    ["plan", "✍️ แผน", "done", t.plan],
+    ["flash", `🧑‍💻 Flash ทำ${!verify && t.n_runs ? ` ครั้งที่ ${t.n_runs + 1}` : ""}`, verify ? (t.n_runs ? "done" : "skip") : "cur", verify ? `Flash รันแผนนี้มาแล้ว ${t.n_runs} ครั้ง` : "งานนี้"],
+    ["check", "🔍 ตรวจ", verify || rvNow ? "cur" : checked ? "done" : "", verify ? "งานนี้ (ผู้ตรวจ)" : rvNow ? "Claude กำลังตรวจแผนนี้" : checked ? "เคยตรวจแล้ว (ก่อนงานนี้)" : "รอ Flash จบแล้วตรวจ (/flash-check)"],
+    ["result", "🏁 ผล", "", "ผลตรวจรอบนี้"]];
+  const steps = st.map(([, txt, c, tip]) => `<span class="${c}" title="${esc(tip)}">${txt}</span>`).join("");
+  const parts = [];
+  if (t.n_sleuths) parts.push(`🕵️ ผู้สืบก่อนแผนนี้ ${t.n_sleuths} งาน (อาจเกี่ยวข้อง · เดาจากเวลา): ` + t.sleuths.map((x) => `${ic(x.state)} ${hm(x.finished)}${x.what ? " «" + trunc(x.what, 30) + "»" : ""}`).join(" · "));
+  if (t.n_runs) parts.push(`🧑‍💻 เคยรันแผนนี้ ${t.n_runs} ครั้ง: ` + t.runs.map((x) => `${ic(x.state)} ${x.tasks || "ทั้งแผน"} (${hm(x.finished)})`).join(" · "));
+  if (t.checks.length) parts.push("🔍 ผู้ตรวจ: " + t.checks.map((x) => `${ic(x.state)} ${hm(x.finished)}`).join(" · "));
+  if (t.reviews.length) parts.push("🔍 Claude ตรวจ: " + t.reviews.map((x) => `${ic(x.status)} ${x.status === "reviewing" ? "กำลังตรวจ" : x.status === "pass" ? "ผ่าน" : "ไม่ผ่าน"} ${hm(x.finished || x.started)}`).join(" · "));
+  if (!parts.length) parts.push("รอบแรกของแผนนี้ — ยังไม่เคยรัน/ตรวจ และไม่มีผู้สืบก่อนหน้า");
+  return `<div class="goal-steps">${steps}</div>${parts.map((x) => `<div class="of-line muted of-full">${esc(x)}</div>`).join("")}`;
+}
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card" id="ofC${k}">
@@ -1659,6 +1682,7 @@ function runCardHTML(r, k) {
       <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-compact="runs" title="ย่อ/ขยายการ์ดงาน (ทุกการ์ด): ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว"></button><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
     ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
+    ${r.goal ? "" : planTrailHTML(r)}
     <div class="of-bar" id="ofCB${k}" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     <div class="of-line of-mini" id="ofCX${k}"></div>
     <div class="of-line of-full"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>

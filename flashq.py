@@ -1952,6 +1952,32 @@ def cmd_review(a) -> int:
     return 1
 
 
+def plan_trail(row: dict, rows: list[dict], reviews: list[dict]) -> dict:
+    """เส้นทางของแผนที่งานนี้รัน (ให้การ์ดบอกว่าอยู่ขั้นไหน): ผู้สืบก่อนแผน → แผน → Flash ทำ → ตรวจ → แก้
+    runs = งานแผนเดียวกันที่จบแล้ว (ชื่อไฟล์แผนตรงกัน) · checks = งานผู้ตรวจ (verify) ของแผนนี้ · reviews = Claude ตรวจ (/flash-check)
+    sleuths = ผู้สืบในโปรเจกต์เดียวกันที่จบก่อนแผนนี้เริ่มรอบแรก ≤6 ชม. (เดาจากเวลา — ผู้สืบไม่ได้ผูกชื่อแผน จึงบอกว่า "อาจเกี่ยวข้อง")"""
+    key = Path(str(row.get("plan") or "").replace("\\", "/")).name
+    if not key or row.get("message"):
+        return {}
+    same = [r for r in rows if r is not row and Path(str(r.get("plan") or "").replace("\\", "/")).name == key and r.get("project_name") == row.get("project_name")]
+    done = sorted([r for r in same if r.get("finished") and r.get("finished") <= (row.get("created") or "9")], key=lambda r: r["finished"])
+    pick = lambda r: {"id": r["id"], "kind": r.get("kind") or "work", "state": r.get("state", ""), "tasks": r.get("tasks", ""), "finished": r.get("finished", "")}
+    runs = [pick(r) for r in done if (r.get("kind") or "work") == "work"]
+    checks = [pick(r) for r in done if r.get("kind") == "verify"]
+    rv = sorted([{"status": r.get("status", ""), "started": r.get("started", ""), "finished": r.get("finished", ""), "tasks": r.get("tasks", "")}
+                 for r in reviews if r.get("plan_name") == key and r.get("started", "") <= (row.get("created") or "9")], key=lambda r: r["started"])
+    first = min([r.get("created", "") for r in same if r.get("created")] + [row.get("created") or now()])
+    t0 = _ts(first)
+    sleuths = [pick(r) for r in rows if re.search(r"investigator", r.get("agent") or "", re.I)
+               and r.get("project_name") == row.get("project_name") and r.get("finished")
+               and 0 <= t0 - _ts(r["finished"]) <= 6 * 3600] if t0 else []
+    msg = {r.get("id"): (r.get("message") or "").strip() for r in rows}
+    for sl in sleuths:  # หัวข้อที่สืบ = บรรทัดแรกของข้อความ ตัดคำนำ "ผู้สืบ (...) —"
+        sl["what"] = re.sub(r"^.*?—\s*", "", (msg.get(sl["id"]) or "").splitlines()[0] if msg.get(sl["id"]) else "")[:60]
+    return {"plan": key, "runs": runs[-5:], "n_runs": len(runs), "checks": checks[-3:], "reviews": rv[-3:],
+            "sleuths": sleuths[-3:], "n_sleuths": len(sleuths)}
+
+
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
     held = held_slots()
@@ -1996,6 +2022,9 @@ def ui_state() -> dict:
                 for s, m in accs]
     rows = history + queued + running
     history_total = len(history)
+    all_rv = _review_rows()
+    for row in running + queued:  # เส้นทางของแผน (ใช้ประวัติทั้งหมดก่อนตัดเหลือ 300)
+        row["trail"] = plan_trail(row, rows, all_rv)
     rv_act, rv_done = ui_reviews()
     history = history[::-1][:300]
     goals = ui_goals(running, history, queued)

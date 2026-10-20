@@ -237,6 +237,26 @@ class FlashqTest(unittest.TestCase):
             rows = [json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "reviews").glob("rv_*.json")]
             self.assertEqual([x["tasks"] for x in rows], [want])  # แผนเดียวกันเริ่มใหม่ = ทับป้ายเก่า
 
+    def test_plan_trail(self):
+        """การ์ดงานบอกเส้นทางของแผน: ผู้สืบก่อนแผน (≤6 ชม. โปรเจกต์เดียวกัน) · เคยรัน · ผู้ตรวจ · Claude ตรวจ — ไม่นับงานหลังจากนี้/โปรเจกต์อื่น"""
+        mod = self.load_mod("flashq_trail")
+        P = "docs/PLAN_A.md"
+        row = {"id": "J9", "plan": P, "project_name": "p", "created": "2026-10-20 20:00:00"}
+        rows = [row,
+                {"id": "S1", "agent": "flash-investigator", "message": "ผู้สืบ (อ่านอย่างเดียว) — ภาพย่อซ้อนกัน\nรายละเอียด", "project_name": "p", "state": "ok", "finished": "2026-10-20 19:30:00"},
+                {"id": "S2", "agent": "flash-investigator", "message": "x", "project_name": "p", "state": "ok", "finished": "2026-10-20 10:00:00"},  # เก่าเกิน 6 ชม.
+                {"id": "S3", "agent": "flash-investigator", "message": "x", "project_name": "q", "state": "ok", "finished": "2026-10-20 19:40:00"},  # โปรเจกต์อื่น
+                {"id": "W1", "plan": "D:/x/docs/PLAN_A.md", "kind": "work", "project_name": "p", "state": "ok", "tasks": "T-01", "created": "2026-10-20 19:50:00", "finished": "2026-10-20 19:55:00"},
+                {"id": "V1", "plan": P, "kind": "verify", "project_name": "p", "state": "fail", "created": "2026-10-20 19:56:00", "finished": "2026-10-20 19:58:00"},
+                {"id": "W2", "plan": P, "kind": "work", "project_name": "q", "state": "ok", "finished": "2026-10-20 19:55:00"},  # ชื่อแผนเดียวกันแต่โปรเจกต์อื่น
+                {"id": "W3", "plan": P, "kind": "work", "project_name": "p", "state": "ok", "finished": "2026-10-20 21:00:00"}]  # จบหลังงานนี้เริ่ม
+        rv = [{"plan_name": "PLAN_A.md", "status": "fail", "started": "2026-10-20 19:57:00", "finished": "2026-10-20 19:59:00"},
+              {"plan_name": "PLAN_B.md", "status": "pass", "started": "2026-10-20 19:57:00"}]
+        t = mod.plan_trail(row, rows, rv)
+        self.assertEqual(([r["id"] for r in t["runs"]], [r["id"] for r in t["checks"]], [r["status"] for r in t["reviews"]]), (["W1"], ["V1"], ["fail"]))
+        self.assertEqual(([s["id"] for s in t["sleuths"]], t["sleuths"][0]["what"]), (["S1"], "ภาพย่อซ้อนกัน"))  # นับจากรอบแรกของแผน (19:50) ย้อน 6 ชม.
+        self.assertEqual(mod.plan_trail({"id": "M", "message": "hi", "project_name": "p"}, rows, rv), {})  # ข้อความทดสอบ = ไม่มีแผน
+
     def test_review_markers_and_log_idle(self):
         """review: start/done ทำป้ายผู้ตรวจที่ /api/state เห็น (reviews → reviews_done) · งานที่รันมี log_idle_sec"""
         sys.path.insert(0, str(REPO))
