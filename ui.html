@@ -138,8 +138,8 @@ dialog h2 { margin: 0; font-size: 1.15rem; }
 #tip .tp-h + div { margin-top: 0.3rem; padding-top: 0.3rem; border-top: 1px solid var(--line); }
 #tip .tp-l { color: var(--muted); }
 #tip .tp-l b { color: var(--text); font-weight: 600; }
-#tip .tp-l.dot { padding-left: 0.85rem; text-indent: -0.85rem; }
-#tip .tp-l.dot::before { content: "• "; color: var(--accent); }
+#tip .tp-l.tp-b { padding-left: 0.85rem; text-indent: -0.85rem; }
+#tip .tp-l.tp-b::before { content: "• "; color: var(--accent); }
 /* กล่องยืนยัน/ถาม (แทน confirm/prompt ของเบราว์เซอร์) */
 dialog.ask { width: min(30rem, calc(100vw - 2rem)); }
 dialog.ask[open] { animation: ask-in .16s ease-out; }
@@ -1944,13 +1944,13 @@ function tipHTML(text) {
   if (!lines.length) return "";
   const out = [], head = lines.length > 1 || lines[0].length > 70 ? lines.shift() : null;
   const line = (l, dot) => { const m = /^([^:：=]{1,28})(\s*[:：=]\s+)(.+)$/.exec(l);
-    return `<div class="tp-l${dot ? " dot" : ""}">${m ? `<b>${esc(m[1])}</b>${esc(m[2])}${esc(m[3])}` : esc(l)}</div>`; };
+    return `<div class="tp-l${dot ? " tp-b" : ""}">${m ? `<b>${esc(m[1])}</b>${esc(m[2])}${esc(m[3])}` : esc(l)}</div>`; };
   const split = (l) => l.split(" · ").reduce((o, p) => { if (o.length && (p.length < 14 || o[o.length - 1].length < 14)) o[o.length - 1] += " · " + p; else o.push(p); return o; }, []);  // ชิ้นสั้น (ชื่อไฟล์/ตัวเลข) ไม่แตกบรรทัด
   let headHTML = "";
   if (head) {  // หัวเรื่องยาวที่มี " · " → ส่วนแรกเป็นหัว ที่เหลือเป็นข้อ ๆ
     const parts = head.length > 60 ? split(head) : [head];
     headHTML = `<div class="tp-h">${esc(parts.shift())}</div>`;
-    parts.forEach((p) => lines.unshift(p));
+    lines.unshift(...parts);  // คงลำดับเดิม
   }
   for (const l of lines) {
     const parts = l.length > 60 ? split(l) : [l];
