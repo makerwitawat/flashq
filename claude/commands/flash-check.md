@@ -43,7 +43,7 @@ description: >-
 ## 4. บันทึก + ปิด
 - เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (ก่อน/หลัง/ยืนยัน ตรงตัว) · **ห้าม revert/reset เอง**
 - **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → จบแล้ว `/flash-check` ซ้ำ · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
-- ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user
+- ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user · **merge ขัดแย้ง (conflict) → `git merge --abort` ทันที แล้วหยุดรายงาน user** (ไฟล์ที่ขัดแย้ง + commit ทั้งสองฝั่ง) · ห้ามแก้ conflict ในไฟล์โค้ดเอง
 - สรุปให้ user: ผ่าน/ไม่ผ่านกี่งาน · รอบแก้ที่ส่งไปแล้ว
 - ปิดป้ายผู้ตรวจ: `python {{FLASHQ}}/flashq.py review done <แผน> pass` (ผ่านทั้งชุด) หรือ `... fail` (มี ❌/T-xxR) — ต้องเรียกก่อนจบ session ทุกครั้ง ไม่งั้นป้ายค้างจน 90 นาทีแล้วหายเอง
 
