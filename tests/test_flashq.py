@@ -1779,6 +1779,94 @@ class FlashqTest(unittest.TestCase):
         for p in (p1, p2):
             self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
 
+    def test_usage_sums_claude_tokens_per_plan(self):
+        """`flashq usage <แผน>`: สแกน transcript ของ Claude Code เฉพาะโฟลเดอร์ที่ cwd ตรงกับโปรเจกต์ (รวม worktree · ไม่รวมโฟลเดอร์ชื่อคล้าย)
+        · นับเฉพาะ session ที่อ้างถึงชื่อแผน · บรรทัดซ้ำ message.id เดียวกันนับครั้งเดียว · รวม subagent · แยกขั้นวางแผน/ตรวจ/รอบแก้
+        · --since ตัดตาม mtime · บันทึก usage/<stem>.json ให้ UI · ไม่มี session = exit 1 + USAGE=…sessions=0 · โหมดโปรเจกต์รวมทุกแผน"""
+        mod = self.load_mod("flashq_usage")
+        claude = self.tmp / "claude"
+        key = mod.claude_project_key(self.proj.resolve())
+        main = claude / "projects" / key
+        wt = claude / "projects" / (key + "--claude-worktrees-w1")
+        other = claude / "projects" / (key + "-other")  # ชื่อขึ้นต้นเหมือนกันแต่คนละโปรเจกต์ → ห้ามนับ
+        for d in (main, wt, other):
+            d.mkdir(parents=True)
+        (self.proj / "docs" / "plans").mkdir(parents=True)
+        (self.proj / "docs" / "plans" / "PLAN_X.md").write_text("# แผน X\n", encoding="utf-8")
+
+        def jl(f, *entries):
+            f.write_text("".join(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n" for e in entries), encoding="utf-8")
+
+        def asst(mid, model, i, o, cr=0, cw=0, text="ok"):  # key "type" อยู่ท้าย object เหมือนไฟล์จริง (message ยาวมาก่อน)
+            return {"cwd": str(self.proj), "message": {"id": mid, "model": model, "role": "assistant",
+                                                        "content": [{"type": "text", "text": text}],
+                                                        "usage": {"input_tokens": i, "output_tokens": o, "cache_read_input_tokens": cr, "cache_creation_input_tokens": cw}},
+                    "timestamp": "2026-10-20T10:00:00.000Z", "type": "assistant"}
+
+        def user(text):
+            return {"cwd": str(self.proj), "message": {"role": "user", "content": [{"type": "text", "text": text}]}, "timestamp": "2026-10-20T09:59:00.000Z", "type": "user"}
+
+        # a = วางแผน (Opus · response เดียวถูกเขียน 2 บรรทัด → นับครั้งเดียว)
+        jl(main / "sess-a.jsonl", user("<command-name>/flash-plan</command-name> เขียนแผน docs/plans/PLAN_X.md"),
+           asst("m1", "claude-opus-5-5", 100, 50, 1000, 200), asst("m1", "claude-opus-5-5", 100, 50, 1000, 200, text="ซ้ำ"),
+           asst("m2", "claude-opus-5-5", 10, 5))
+        # b = ตรวจ (Sonnet · เรียกสกิลผ่าน tool Skill)
+        jl(main / "sess-b.jsonl", {"type": "user", "message": {"role": "user", "content": "ตรวจงานหน่อย"}},
+           {"type": "assistant", "message": {"id": "m3", "model": "claude-sonnet-5", "role": "assistant", "usage": {"input_tokens": 20, "output_tokens": 10, "cache_read_input_tokens": 500},
+                                             "content": [{"type": "tool_use", "name": "Skill", "input": {"skill": "flash-check", "args": "docs/plans/PLAN_X.md"}}]}})
+        # c = รอบแก้ ใน worktree + subagent ของมัน
+        jl(wt / "sess-c.jsonl", user("ส่งรอบแก้ T-01R ของ PLAN_X ให้ Flash"), asst("m4", "claude-opus-5-5", 30, 15))
+        sub = wt / "sess-c" / "subagents" / "agent-s1.jsonl"
+        sub.parent.mkdir(parents=True)
+        jl(sub, asst("m5", "claude-haiku-5-5", 5, 5))
+        # d = แผนอื่น · e = โฟลเดอร์คนละโปรเจกต์ที่พูดถึง PLAN_X
+        jl(main / "sess-d.jsonl", user("/flash-plan PLAN_Y"), asst("m6", "claude-opus-5-5", 7, 7))
+        jl(other / "sess-e.jsonl", user("/flash-plan PLAN_X"), asst("m7", "claude-opus-5-5", 999, 999))
+        env = {"FLASHQ_CLAUDE_HOME": str(claude)}
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # in ใหม่ = input + cache เขียน: (110+20+35) + 200 · out = 55+10+20 · cache อ่าน = 1000+500
+        self.assertIn("USAGE=PLAN_X claude_in=365 claude_out=85 cache_read=1500 sessions=3", r.stdout)
+        self.assertIn("วางแผน", r.stdout)
+        self.assertIn("ตรวจ", r.stdout)
+        self.assertIn("รอบแก้", r.stdout)
+        self.assertNotIn("sess-e", r.stdout)
+        u = json.loads((self.home / "usage" / "PLAN_X.json").read_text(encoding="utf-8"))
+        self.assertEqual(u["sessions"], 3)
+        self.assertEqual({k: v["sessions"] for k, v in u["by_phase"].items()}, {"plan": 1, "check": 1, "fix": 1})
+        self.assertEqual({x["id"]: x["phase"] for x in u["session_list"]}, {"sess-a": "plan", "sess-b": "check", "sess-c": "fix"})
+        self.assertEqual(u["total"]["tokens"], 365 + 85 + 1500)
+        self.assertEqual(sorted(u["by_model"]), ["claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5"])
+        self.assertGreater(u["total"]["usd"], 0)
+        self.assertEqual(sum(v["pct"] for v in u["by_phase"].values()), 100)
+        # UI: บรรทัดสั้นบนการ์ดงาน/ธง
+        mod.USAGE_DIR = self.home / "usage"
+        b = mod.usage_brief("PLAN_X")
+        self.assertEqual((b["sessions"], b["tokens"], sorted(b["pct"])), (3, 1950, ["check", "fix", "plan"]))
+        self.assertEqual(mod.usage_brief("PLAN_NONE"), {})
+        # --since: session เก่ากว่าช่วงถูกตัดออก
+        old = time.time() - 40 * 86400
+        os.utime(main / "sess-a.jsonl", (old, old))
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", "--since", "30", env=env)
+        self.assertIn("USAGE=PLAN_X claude_in=55 claude_out=30 cache_read=500 sessions=2", r.stdout)
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", "--since", "60", env=env)
+        self.assertIn("sessions=3", r.stdout)
+        # ไม่มี session ที่อ้างถึงแผน → exit 1 แต่ยังพิมพ์บรรทัด USAGE
+        r = self.run_q("usage", "docs/plans/PLAN_Z.md", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("USAGE=PLAN_Z claude_in=0 claude_out=0 cache_read=0 sessions=0", r.stdout)
+        self.assertFalse((self.home / "usage" / "PLAN_Z.json").exists())
+        # โหมดโปรเจกต์: ทุกแผนที่ถูกพูดถึง
+        r = self.run_q("usage", ".", "--since", "60", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("USAGE=PLAN_X ", r.stdout)
+        self.assertIn("USAGE=PLAN_Y claude_in=7 claude_out=7 cache_read=0 sessions=1", r.stdout)
+        self.assertIn("รวมทั้งโปรเจกต์ (session ไม่ซ้ำ 4)", r.stdout)
+        # ไม่เคยเปิดโปรเจกต์ใน Claude Code เลย → exit 1
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", env={"FLASHQ_CLAUDE_HOME": str(self.tmp / "empty")})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sessions=0", r.stdout)
+
 
 class NewProjectTest(unittest.TestCase):
     """โปรเจกต์ใหม่ที่ branch หลักไม่ใช่ master: ตรวจอัตโนมัติ + flashq init"""
