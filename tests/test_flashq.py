@@ -1189,6 +1189,11 @@ class FlashqTest(unittest.TestCase):
         (self.home / "jobs" / "J1.json").write_text(json.dumps({"id": "J1", "project": proj, "plan": "docs/plans/PLAN_FLASH_x_R1.md",
                                                                 "status": "running", "created": t0, "started": t0}), encoding="utf-8")
         (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        (self.proj / "docs" / "plans" / "PLAN_FLASH_y_R1.md").write_text("y\n", encoding="utf-8")  # session อื่น (เรื่อง y) commit ช่วงเดียวกัน
+        (self.proj / "lib").mkdir()
+        (self.proj / "lib" / "y.py").write_text("y\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.proj), "add", "docs/plans/PLAN_FLASH_y_R1.md", "lib/y.py"], check=True)
+        subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "งานเรื่อง y"], check=True)
         r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
         self.assertIn("GOAL=DONE", r.stdout, r.stdout)
         (self.proj / "other.py").write_text("x\n", encoding="utf-8")  # ระหว่างงาน Flash รัน = นอกขอบเขต

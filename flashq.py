@@ -2556,18 +2556,27 @@ def goal_job_windows(root: Path, stem: str) -> list[tuple[float, float]]:
     return out
 
 
-def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]]) -> list[str]:
+def _other_topic(files: list[str], topic: str) -> bool:
+    """commit แตะแผน/เป้าหมายของเรื่องอื่น = งานของ session อื่นที่บังเอิญอยู่ในช่วงเวลาเดียวกัน"""
+    return bool(topic) and any(re.match(r"(GOAL_|PLAN_FLASH_).+\.md$", Path(f).name, re.I) and goal_topic(f) != topic for f in files)
+
+
+def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]], topic: str = "") -> list[str]:
     """ไฟล์ที่ถูกแก้ระหว่างวนเป้าหมาย — นับเฉพาะ commit (ไม่รวม merge) ที่เกิดระหว่างงาน Flash ของเป้าหมายนี้รัน
     + ไฟล์ค้าง/ยังไม่ track ที่แก้ระหว่างงาน Flash รัน · ไม่มีประวัติงาน = ทุก commit หลัง base + ไฟล์ค้างที่แก้หลังเริ่มเป้าหมาย
+    ข้าม commit ที่แตะ GOAL_/PLAN_FLASH_ ของเรื่องอื่น (งานเป้าหมาย/แผนอื่นที่รันช่วงเดียวกัน)
     (กัน STOP ผิด: เทสต์เกณฑ์ที่เจ้าของ commit หลัง check · ไฟล์ขยะที่ไม่ track มาก่อน · commit ของ session อื่นในโปรเจกต์เดียวกัน)"""
     out = set()
     if base:
-        t = None
+        commits: list[tuple[int, list[str]]] = []
         for line in _git(root, "log", "--no-merges", "--format=@@%ct", "--name-only", f"{base}..HEAD").splitlines():
             if line.startswith("@@"):
-                t = int(line[2:] or 0)
-            elif line.strip() and t is not None and (not windows or any(a - 2 <= t <= b + 5 for a, b in windows)):
-                out.add(line.strip())
+                commits.append((int(line[2:] or 0), []))
+            elif line.strip() and commits:
+                commits[-1][1].append(line.strip())
+        for t, files in commits:
+            if (not windows or any(a - 2 <= t <= b + 5 for a, b in windows)) and not _other_topic(files, topic):
+                out.update(files)
     dirty = set(_git(root, "diff", "--name-only", "HEAD").splitlines()) | set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     for f in dirty:
         f = f.strip()
@@ -2652,7 +2661,7 @@ def cmd_goal(a) -> int:
         if not ok:
             fail.append(i["id"])
             print("   " + "\n   ".join(out.strip().splitlines()[-8:]))
-    changed = goal_changed_files(root, st["base"], st["started"], goal_job_windows(root, goal.stem)) if is_git else []
+    changed = goal_changed_files(root, st["base"], st["started"], goal_job_windows(root, goal.stem), goal_topic(goal.stem)) if is_git else []
     cfg = project_cfg(root)
     free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"] + g["locked"]
     out_scope = [f for f in changed if not _glob_hit(f, g["files"] + free)]
