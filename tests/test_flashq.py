@@ -1088,6 +1088,63 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(job["title"].startswith("flash-investigate "))
         self.assertIn("[สืบ]", self.run_q("list", "--all").stdout)
 
+    BRIEF = '## 1. อาการ (ของจริง)\nโปรเจกต์ X · r1 ≤ 0.27 · "ค่า" a<b>c | d & e 100% ^ !\n\n## 2. จุดที่เกี่ยว\n- f.py:10'
+
+    def test_investigate_multiline_brief_title_single_line_prompt_intact(self):
+        """เหตุจริง 2026-10-21: บรีฟหลายบรรทัด → title มีขึ้นบรรทัดใหม่ · prompt ต้องถึง opencode ครบตัวอักษร (ไม่เพี้ยน/ไม่ถูกตัด)"""
+        r = self.run_q("investigate", "--no-open", self.BRIEF)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        title = argv[argv.index("--title") + 1]
+        self.assertNotRegex(title, r"[\r\n]")
+        self.assertTrue(title.startswith("flash-investigate ## 1. อาการ"))
+        self.assertEqual(argv[-1], self.BRIEF)
+        self.assertEqual(argv[-2], "--")
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertNotRegex(job["title"], r"[\r\n]")
+        r = self.run_q("investigate", "--no-open", "--title", "ชื่อ\nสองบรรทัด", "สั้น ๆ")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(argv[argv.index("--title") + 1], "ชื่อ สองบรรทัด")
+
+    def test_opencode_npm_shim_resolves_to_real_exe(self):
+        """opencode.CMD (ตัวห่อ npm) → เรียก opencode.exe ใต้ node_modules ตรง ๆ ไม่ผ่าน cmd.exe · ไม่มี exe ให้ชี้ = คืนตัวห่อเดิม"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("flashq_shim", FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        npm = self.tmp / "npm"
+        exe = npm / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"")
+        shim = npm / "opencode.cmd"
+        shim.write_text('@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n'
+                        '"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe"   %*\r\n', encoding="utf-8")
+        self.assertEqual(mod.resolve_shim(str(shim)), str(exe))
+        exe.unlink()
+        self.assertEqual(mod.resolve_shim(str(shim)), str(shim))
+        self.assertEqual(mod.resolve_shim(r"C:\x\opencode.exe"), r"C:\x\opencode.exe")
+        self.assertEqual(mod.one_line("a\r\n  b\tc", 40), "a b c")
+
+    @unittest.skipUnless(os.name == "nt", "cmd.exe เฉพาะ Windows")
+    def test_cmd_shim_unresolved_refuses_unsafe_brief_but_runs_safe_one(self):
+        """ยังต้องผ่าน .cmd (หา exe จริงไม่เจอ): บรีฟที่ cmd.exe จะตัด/เพี้ยน → FAIL ทันทีพร้อมบอกเหตุ (ไม่ใช่ NOSTART เงียบ 6 นาที) · บรีฟปลอดภัยยังรันได้"""
+        shim = self.tmp / "opencode.cmd"
+        shim.write_text(f'@echo off\r\n"{sys.executable}" "{FAKE}" %*\r\n', encoding="utf-8")
+        env = {"FLASHQ_OPENCODE": str(shim)}
+        t0 = time.time()
+        r = self.run_q("investigate", "--no-open", self.BRIEF, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("cmd.exe", r.stdout)
+        self.assertLess(time.time() - t0, 30)
+        self.assertFalse(self.args_out.exists())  # opencode ไม่ถูกเรียก
+        self.assertEqual(list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else [], [])
+        r = self.run_q("investigate", "--no-open", "บรีฟ ปลอดภัย", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[-1], "บรีฟ ปลอดภัย")
+
     def test_stalled_agent_job_is_killed_retried_once_and_explained(self):
         """log เงียบเกิน agent_stall_min → ฆ่า · TIMEOUT พร้อมเหตุ · ลองใหม่ 1 ครั้งเอง (ทั้งผู้สืบและงานทำจริง)"""
         (self.proj / ".flash.json").write_text(json.dumps({"agent_stall_min": 0.05, "stall_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")

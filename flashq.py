@@ -226,9 +226,42 @@ def opencode_cmd() -> list[str]:
     """FLASHQ_OPENCODE = ทางแทน (ใช้ในเทสต์ · ไฟล์ .py รันด้วย python)"""
     alt = os.environ.get("FLASHQ_OPENCODE")
     if alt:
-        return [sys.executable, alt] if alt.endswith(".py") else [alt]
+        return [sys.executable, alt] if alt.endswith(".py") else [resolve_shim(alt)]
     exe = shutil.which("opencode")
-    return [exe] if exe else []
+    return [resolve_shim(exe)] if exe else []
+
+
+SHIM_EXE_RE = re.compile(r'"%~?dp0%?\\?([^"]+?\.exe)"', re.I)
+
+
+def resolve_shim(exe: str) -> str:
+    """ตัวห่อ npm (opencode.CMD) แค่เรียก opencode.exe ต่อ — ข้ามไปเรียก exe ตรง ๆ เพราะ cmd.exe ตัดบรรทัดคำสั่งตรงขึ้นบรรทัดใหม่
+    และตีเครื่องหมาย < > & | % เป็นคำสั่งของมัน (เหตุจริง 2026-10-21: บรีฟหลายบรรทัดทำให้ opencode ไม่ได้ข้อความงาน → NOSTART) · หา exe ไม่เจอ = คืนของเดิม"""
+    if not exe.lower().endswith((".cmd", ".bat")):
+        return exe
+    try:
+        text = Path(exe).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return exe
+    m = SHIM_EXE_RE.search(text)
+    real = Path(exe).parent / m.group(1).replace("\\", os.sep) if m else None
+    return str(real) if real and real.is_file() else exe
+
+
+UNSAFE_CMD_CHARS = set('\r\n"<>&|%^!')
+
+
+def cmd_shim_unsafe(exe: list[str], *texts: str) -> str:
+    """ยังต้องผ่าน .cmd/.bat (หา exe จริงไม่เจอ) แล้วข้อความมีอักขระที่ cmd.exe ตีความเอง → คืนอักขระนั้น (ไม่มี = ปลอดภัย)"""
+    if os.name != "nt" or not exe or not exe[-1].lower().endswith((".cmd", ".bat")):
+        return ""
+    bad = sorted({c for t in texts for c in t if c in UNSAFE_CMD_CHARS})
+    return " ".join(repr(c) for c in bad)
+
+
+def one_line(text: str, limit: int) -> str:
+    """ชื่อ session ต้องบรรทัดเดียว (ขึ้นบรรทัดใหม่/ช่องว่างซ้อน → ช่องว่างเดียว) แล้วตัดความยาว"""
+    return " ".join(str(text).split())[:limit]
 
 
 # ---------- โปรเจกต์ ----------
@@ -1860,9 +1893,15 @@ def cmd_run(a) -> int:
     elif kind == "verify":
         title = f"flash-verify {Path(plan).stem} {a.tasks}"
     elif kind == "investigate":
-        title = f"flash-investigate {a.message[:40]}"
+        title = f"flash-investigate {one_line(a.message, 40)}"
     else:
         title = f"flash-test {ts}" if a.message else f"flash {Path(plan).stem} {a.tasks}"
+    title = one_line(title, 200)
+    bad = cmd_shim_unsafe(exe, title, prompt, a.message or "")
+    if bad:  # ไม่ปล่อยให้ opencode ได้คำสั่งที่ถูกตัดแล้วเงียบ 3 นาที × 2 รอบถึงรู้ว่า NOSTART
+        print(f"FLASH_RUN=FAIL opencode ถูกเรียกผ่าน {exe[-1]} (cmd.exe) แต่บรีฟมีอักขระ {bad} ที่ cmd.exe ตีความเอง → ข้อความงานจะหายหรือเพี้ยน · "
+              f"แก้: ตั้ง FLASHQ_OPENCODE เป็นไฟล์ opencode.exe ตัวจริง (npm: <npm>\\node_modules\\opencode-ai\\bin\\opencode.exe) หรือตัดอักขระเหล่านี้ออกจากบรีฟ")
+        return 1
     worker_like = agent in ("", "flash-worker")
     # agent อื่น (ผู้ตรวจ/ผู้สำรวจ) ใช้โมเดลที่ตั้งไว้ใน agent นั้นเอง — ไม่ทับด้วยโมเดลของ flash-worker
     model = a.model or (configured_model() if worker_like else agent_model(agent))
