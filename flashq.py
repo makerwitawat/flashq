@@ -82,6 +82,7 @@ DEFAULTS = {
     "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
     "agent_stall_floor_min": 4,
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
+    "variants": {"investigate": "high", "verify": "low"},  # ระดับความคิด (opencode --variant) ตามชนิดงาน · ไม่มีชนิดนั้น/ค่าว่าง = ไม่ส่ง (ใช้ค่าเริ่มต้นของ provider) · ทับได้ใน .flash.json / config.json · --variant ใน CLI ชนะทุกอย่าง
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
 # แยก process ออกจาก console ของผู้เรียก แต่ "ต้องมี console ซ่อนของตัวเอง" (CREATE_NO_WINDOW) · ห้ามใส่ DETACHED_PROCESS: ไม่มี console เลย →
@@ -324,6 +325,26 @@ def project_cfg(root: Path) -> dict:
             cfg["main_branch"] = detect_main_branch(root, own.get("remote") or cfg["remote"])
     cfg.update(own)
     return cfg
+
+
+VARIANT_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,31}$")
+
+
+def variant_for(kind: str, cli: str | None, root: Path) -> str:
+    """ระดับความคิดของงานชนิดนี้ (work/verify/investigate/test) · ลำดับ: --variant ใน CLI > "variants" ใน .flash.json > config.json > DEFAULTS
+    ชนิดที่ไม่มีในตาราง = ไม่ส่ง (provider ใช้ค่าเริ่มต้น) · ใส่ "" หรือ "none" ในชั้นที่สูงกว่า = ปิดค่าของชั้นล่าง · ค่าที่หน้าตาไม่ใช่ชื่อ variant = ข้าม"""
+    if cli:
+        return cli.strip()
+    for src in (read_json(root / ".flash.json"), read_config(), DEFAULTS):
+        table = src.get("variants")
+        if isinstance(table, dict) and kind in table:
+            v = str(table[kind] or "").strip()
+            if v.lower() in ("", "none", "default"):
+                return ""
+            if VARIANT_RE.match(v):
+                return v
+            print(f"คำเตือน: variants.{kind} = {v!r} ไม่ใช่ชื่อ variant → ข้าม", file=sys.stderr)
+    return ""
 
 
 # ---------- สิทธิ์นอกโปรเจกต์ (opencode permission.external_directory) ----------
@@ -1323,7 +1344,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     job.setdefault("logs", []).append(str(log))
     save_job(job)
     print(f"START {job['id']} รอบ {attempt} title='{job['title']}' model={job.get('model') or '(ค่าเริ่มต้น config)'} "
-          f"attach={attach or '-'} log={log}", flush=True)
+          f"{('variant=' + job['variant'] + ' ') if job.get('variant') else ''}attach={attach or '-'} log={log}", flush=True)
     t0, status = time.time(), "OK"
     head0 = _git(root, "rev-parse", "HEAD")  # มี commit ใหม่หลังรัน = งานสำเร็จบางส่วน (ใช้ตัดสิน DENIED กับ OK)
     with open(log, "wb") as fo, open(err, "wb") as fe:
@@ -1937,6 +1958,9 @@ def cmd_run(a) -> int:
                       f"(ดูสดในแอปไม่ได้) · อยากได้ดูสดรอบหน้า: ปิด server เมื่อไม่มีงานอื่นใช้อยู่ ให้เปิดใหม่เองตอนสั่งงานครั้งหน้า", flush=True)
                 attach = ""
         job["attach"] = attach
+        variant = variant_for(kind, a.variant, root)
+        if variant:
+            job["variant"] = variant
         save_job(job)
         for ln in perm_precheck(ext_dirs, attach, root):
             print(ln, flush=True)
@@ -1952,8 +1976,8 @@ def cmd_run(a) -> int:
             cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
             if job["model"]:
                 cmd += ["--model", job["model"]]
-            if a.variant:
-                cmd += ["--variant", a.variant]
+            if variant:
+                cmd += ["--variant", variant]
             if attach:
                 cmd += ["--attach", attach]
             if a.auto:
@@ -4623,7 +4647,7 @@ def main() -> int:
         r.add_argument("--readonly", action="store_true", help="งานอ่านอย่างเดียว ไม่ชนงานอื่นในตัวจัดคิว (verify/investigate เปิดให้เสมอ)")
         r.add_argument("--attach", default="live", help="live (ค่าเริ่มต้นของ run) = server 4096 ให้ desktop ดูสด · none = รันแยก (ค่าเริ่มต้นของ verify/investigate) · หรือ url")
         r.add_argument("--model", help="provider/model (ค่าเริ่มต้น = agent.flash-worker.model · ระบุเอง = ไม่สลับบัญชีอัตโนมัติ)")
-        r.add_argument("--variant")
+        r.add_argument("--variant", help="ระดับความคิดของโมเดล (low/medium/high/max ตามที่โมเดลรองรับ) · ชนะค่า variants ใน .flash.json/config.json (ผู้สืบ=high ผู้ตรวจ=low งานทำ=ไม่ส่ง)")
         r.add_argument("--timeout-min", type=int, default=0, help="ค่าเริ่มต้นจาก .flash.json (480)")
         r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
         r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")

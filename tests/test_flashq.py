@@ -1107,6 +1107,50 @@ class FlashqTest(unittest.TestCase):
         argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
         self.assertEqual(argv[argv.index("--title") + 1], "ชื่อ สองบรรทัด")
 
+    def last_argv(self):
+        return json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
+
+    def variant_of(self, argv):
+        return argv[argv.index("--variant") + 1] if "--variant" in argv else None
+
+    def test_variant_defaults_by_kind(self):
+        """ค่าเริ่มต้น: ผู้สืบ=high · ผู้ตรวจ=low · งานทำ=ไม่ส่ง --variant (provider ใช้ค่าของมันเอง) · เก็บลงบันทึกงานให้เทียบผลภายหลัง"""
+        self.assertEqual(self.run_q("investigate", "--no-open", "สืบ").returncode, 0)
+        self.assertEqual(self.variant_of(self.last_argv()), "high")
+        self.assertEqual(self.run_q("verify", "PLAN.md", "T-01", "--no-open").returncode, 0)
+        self.assertEqual(self.variant_of(self.last_argv()), "low")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIsNone(self.variant_of(self.last_argv()))
+        jobs = {j["kind"]: j for j in (json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))}
+        self.assertEqual((jobs["investigate"].get("variant"), jobs["verify"].get("variant"), jobs["work"].get("variant")), ("high", "low", None))
+        self.assertIn("variant=low", self.run_q("verify", "PLAN.md", "T-01", "--no-open").stdout)
+
+    def test_variant_precedence_cli_flash_json_config_default(self):
+        """ลำดับ: --variant ใน CLI > variants ใน .flash.json > config.json > ค่าเริ่มต้น · ใส่ "" / none = ปิดชั้นล่าง · ชื่อแปลก = ข้ามพร้อมเตือน"""
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"variants": {"investigate": "max", "work": "medium"}}), encoding="utf-8")
+        self.run_q("investigate", "--no-open", "ก")
+        self.assertEqual(self.variant_of(self.last_argv()), "max")  # config.json ชนะค่าเริ่มต้น
+        self.run_q(*self.base())
+        self.assertEqual(self.variant_of(self.last_argv()), "medium")  # ตั้งให้งานทำได้
+        self.run_q("verify", "PLAN.md", "T-01", "--no-open")
+        self.assertEqual(self.variant_of(self.last_argv()), "low")  # ชนิดที่ config.json ไม่พูดถึง = ค่าเริ่มต้น
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "variants": {"investigate": "low", "work": ""}}), encoding="utf-8")
+        self.run_q("investigate", "--no-open", "ข")
+        self.assertEqual(self.variant_of(self.last_argv()), "low")  # .flash.json ชนะ config.json
+        self.run_q(*self.base())
+        self.assertIsNone(self.variant_of(self.last_argv()))  # "" = ปิด (ไม่ใช้ medium จาก config.json)
+        r = self.run_q("investigate", "--no-open", "ค", "--variant", "max")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.variant_of(self.last_argv()), "max")  # CLI ชนะทุกอย่าง
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "variants": {"verify": "none", "investigate": "--bad opt"}}), encoding="utf-8")
+        self.run_q("verify", "PLAN.md", "T-01", "--no-open")
+        self.assertIsNone(self.variant_of(self.last_argv()))  # none = ปิด ผู้ตรวจไม่ส่ง
+        r = self.run_q("investigate", "--no-open", "ง")
+        self.assertIn("ไม่ใช่ชื่อ variant", r.stderr)
+        self.assertEqual(self.variant_of(self.last_argv()), "max")  # ชื่อแปลก (อาจแอบเป็นออปชัน) ไม่ถูกส่ง · ข้ามไปใช้ชั้นถัดไป (config.json = max)
+
     def test_opencode_npm_shim_resolves_to_real_exe(self):
         """opencode.CMD (ตัวห่อ npm) → เรียก opencode.exe ใต้ node_modules ตรง ๆ ไม่ผ่าน cmd.exe · ไม่มี exe ให้ชี้ = คืนตัวห่อเดิม"""
         import importlib.util
