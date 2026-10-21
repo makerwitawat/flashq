@@ -1222,6 +1222,69 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(all(re.match(r"/session/ses_fake\d+/abort\?directory=", p) for p in aborts), aborts)
         self.assertIn("หยุด session", r.stdout)
 
+    @unittest.skipUnless(os.name == "nt", "หน้าต่าง console เป็นเรื่องของ Windows")
+    def test_detached_spawn_children_do_not_open_console_windows(self):
+        """process ที่แยกขาด (spawn_run / server สด) ต้องมี console ซ่อนของตัวเอง (CREATE_NO_WINDOW) ไม่ใช่ DETACHED_PROCESS —
+        ไม่งั้นลูกที่เป็นโปรแกรม console (git · python · taskkill) ทุกตัวเปิดหน้าต่างดำเด้งขึ้นจอผู้ใช้ · ลูกหลานต้องไม่มีหน้าต่างที่มองเห็น"""
+        mod = self.load_mod("flashq_flags")
+        self.assertFalse(mod.HIDDEN_DETACH_FLAGS & subprocess.DETACHED_PROCESS)
+        self.assertTrue(mod.HIDDEN_DETACH_FLAGS & subprocess.CREATE_NO_WINDOW)
+        gc = self.tmp / "gc.py"
+        gc.write_text("import ctypes, sys"+chr(10)+"h = ctypes.windll.kernel32.GetConsoleWindow()"+chr(10)+
+                      "open(sys.argv[1], 'w').write('visible' if h and ctypes.windll.user32.IsWindowVisible(h) else 'hidden')"+chr(10), encoding="utf-8")
+        ch = self.tmp / "ch.py"
+        ch.write_text("import subprocess, sys"+chr(10)+"subprocess.run([sys.executable, sys.argv[1], sys.argv[2]])"+chr(10), encoding="utf-8")
+        out = self.tmp / "gc_out.txt"
+        subprocess.Popen([sys.executable, str(ch), str(gc), str(out)], creationflags=mod.HIDDEN_DETACH_FLAGS,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).wait(timeout=60)
+        self.assertEqual(out.read_text(encoding="utf-8"), "hidden")
+
+    def test_live_server_without_external_dirs_falls_back_to_own_opencode(self):
+        """server 4096 เปิดค้างโหลดสิทธิ์ครั้งเดียว: external_dirs ที่เพิ่งเพิ่มใน .flash.json ที่ server ไม่รู้ → ไม่ปล่อยให้โดน DENIED หลังรันหลายนาที
+        แต่รันแยก (ได้สิทธิ์ผ่าน OPENCODE_CONFIG_CONTENT) พร้อมบอกเหตุ · server อนุญาตแล้ว = ใช้ server ตามเดิม · ระบุ --attach <url> เอง = ไม่เปลี่ยนให้"""
+        (self.proj / ".flash.json").write_text(
+            json.dumps({"require_plan_in_remote": False, "external_dirs": ["D:/outside/lib/*"]}), encoding="utf-8")
+        import http.server
+        import threading
+        perm_srv = {"external_directory": {"*": "ask"}}
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"permission": perm_srv}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        env_out = self.tmp / "env_fb.txt"
+        env = {"FLASHQ_LIVE_URL": url, "FAKE_ENV_OUT": str(env_out)}
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
+        self.assertIn("PERM_FALLBACK:", r.stdout)
+        self.assertIn("D:/outside/lib/*", r.stdout)
+        self.assertNotIn("--attach", self.args_out.read_text(encoding="utf-8").splitlines()[0])  # รันแยก ไม่ต่อ server
+        rules = json.loads(env_out.read_text(encoding="utf-8"))["permission"]["external_directory"]
+        self.assertEqual(rules.get("D:/outside/lib/*"), "allow")
+        job = max((json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json")), key=lambda j: j["created"])
+        self.assertEqual(job["attach"], "")
+        # server อนุญาตแล้ว → ไม่ fallback
+        perm_srv["external_directory"]["D:/outside/*"] = "allow"
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
+        self.assertNotIn("PERM_FALLBACK", r.stdout)
+        self.assertIn("server opencode อนุญาต external_dirs แล้ว", r.stdout)
+        # ผู้ใช้ระบุ URL เอง → ไม่ตัดสินใจแทน (คงคำเตือนเดิม)
+        perm_srv["external_directory"].pop("D:/outside/*")
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", url, "--no-open", env=env)
+        self.assertNotIn("PERM_FALLBACK", r.stdout)
+        self.assertIn("WARN: server opencode", r.stdout)
+
     def load_mod(self, name):
         import importlib.util
         spec = importlib.util.spec_from_file_location(name, FLASHQ)
@@ -2420,6 +2483,34 @@ class NewProjectTest(unittest.TestCase):
             mod.open_in_desktop("ses_x", "http://127.0.0.1:1")
         self.assertLess(time.time() - t0, 20)
         self.assertIn("DESKTOP_OPEN=FAIL หมดเวลา 1 วิ", buf.getvalue())
+
+    def test_goal_ui_buttons_report_timeout_instead_of_dropping(self):
+        """ปุ่ม ✅/❌ และยกเลิกธงบนหน้าเว็บ: คำสั่ง goal ลูกค้าง → ฆ่าแล้วตอบ 504 + ข้อความไทย (ไม่ใช่ exception หลุดจน handler ตัดการเชื่อมต่อ)"""
+        mod = self.load_mod("flashq_goaltimeout")
+        mod.GOALS_DIR = self.tmp / "goals_t"
+        mod.GOALS_DIR.mkdir()
+        fake = self.tmp / "repo_t"
+        fake.mkdir()
+        mark = self.tmp / "child_pid.txt"
+        (fake / "flashq.py").write_text(
+            f"import os, time\nopen({str(mark)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n", encoding="utf-8")
+        proj = self.tmp / "proj_t"
+        proj.mkdir()
+        gid = "0123456789ab"
+        mod.write_json(mod.GOALS_DIR / f"{gid}.json", {"project": str(proj), "goal": "GOAL_x.md", "rounds": [{"verdict": "CONTINUE"}]})
+        mod.REPO, mod.GOAL_UI_CMD_TIMEOUT_SEC = fake, 1
+        for action, body in (("human", {"item": "G-02", "ok": True}), ("cancel", {"reason": "เลิกแล้ว"})):
+            t0 = time.time()
+            code, r = mod.goal_ui_action(gid, action, body)
+            self.assertLess(time.time() - t0, 20, action)
+            self.assertEqual((code, r["ok"]), (504, False), action)
+            self.assertIn("ไม่ตอบภายใน 1 วิ", r["message"], action)
+            pid = int(mark.read_text(encoding="utf-8"))
+            for _ in range(50):  # ลูกต้องถูกฆ่าจริง ไม่ค้างเป็นกำพร้า
+                if not mod.pid_alive(pid, 0):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(mod.pid_alive(pid, 0), f"{action}: ลูกยังไม่ตาย")
 
     def test_skip_precheck_only_from_plan_form_and_submit_failure_is_reported(self):
         """หน้าเว็บ: --skip-precheck ส่งได้เฉพาะ run ตามแผน · ด่านตรวจที่ล้มหลังหน้าต่างรอ 8 วิต้องมีป้ายเตือน (ไม่เงียบ) และหายเมื่อรับทราบ"""

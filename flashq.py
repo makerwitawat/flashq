@@ -84,6 +84,10 @@ DEFAULTS = {
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
+# แยก process ออกจาก console ของผู้เรียก แต่ "ต้องมี console ซ่อนของตัวเอง" (CREATE_NO_WINDOW) · ห้ามใส่ DETACHED_PROCESS: ไม่มี console เลย →
+# ลูกที่เป็นโปรแกรม console (git · python · taskkill · opencode) ของ process นั้นแต่ละตัวจะเปิดหน้าต่างดำเด้งขึ้นจอผู้ใช้
+HIDDEN_DETACH_FLAGS = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0
+GOAL_UI_CMD_TIMEOUT_SEC = 60  # ปุ่ม ✅/❌ และยกเลิกธงบนหน้าเว็บ: คำสั่ง goal ลูกเกินเวลา = ฆ่า + ตอบข้อความกลับ (ไม่ปล่อยให้ handler ล้มเงียบ)
 PUSH_TIMEOUT_SEC = float(os.environ.get("FLASHQ_PUSH_TIMEOUT_SEC") or 120)  # git push ของ `flashq init --commit` (ห้ามค้างตลอดไปเมื่อเครือข่าย/credential มีปัญหา)
 DESKTOP_OPEN_TIMEOUT_SEC = 30  # สั่ง opencode desktop เปิด session — desktop ไม่ตอบ = ข้าม
 SHELL_POLL_SEC = float(os.environ.get("FLASHQ_SHELL_POLL_SEC") or 30)  # ถามสถานะ tool + วัดโปรเซสถี่แค่ไหนตอน log เงียบ
@@ -144,12 +148,12 @@ def kill_tree(pid: int) -> None:
             pass
 
 
-def run_timeout(cmd: list[str], timeout: float = 60, text: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_timeout(cmd: list[str], timeout: float = 60, text: bool = True, env: dict | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
     """subprocess.run แบบมีเวลาจำกัดและไม่ถามรหัส: เกินเวลา = ฆ่าทั้งต้น (git push/fetch ติดเครือข่ายหรือรอรหัสผ่านจะค้างตลอดไป) แล้วคืน returncode 124
     เปิดโปรแกรมไม่ได้ = returncode 127 · ไม่โยน exception เพื่อให้ผู้เรียกจัดการตามรหัสคืนเหมือน subprocess.run(check=False)"""
     kw = {"encoding": "utf-8", "errors": "replace"} if text else {}
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env, **kw)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env, cwd=cwd, **kw)
     except OSError as e:
         return subprocess.CompletedProcess(cmd, 127, "" if text else b"", str(e) if text else str(e).encode("utf-8", "replace"))
     try:
@@ -363,6 +367,16 @@ def _perm_pairs(dirs: list[str]) -> str:
     return ", ".join(json.dumps({_native(d): "allow"}, ensure_ascii=False)[1:-1] for d in dirs)
 
 
+def perm_missing_on_server(dirs: list[str], attach: str, root: Path) -> list[str]:
+    """external_dirs ที่ server opencode (--attach) ยังไม่อนุญาต · ถาม server ไม่ได้ = ใช้ opencode.json แทน · ไม่ใช่ server (attach ว่าง) = []"""
+    if not dirs or not attach.startswith("http"):
+        return []
+    perm = (read_json(OC_CONFIG).get("permission") or {})
+    file_perm = perm.get("external_directory") if isinstance(perm, dict) else None
+    sp = server_permission(attach, root)
+    return [d for d in dirs if not perm_allows(sp if sp is not None else file_perm, d)]
+
+
 def perm_precheck(dirs: list[str], attach: str, root: Path) -> list[str]:
     """ก่อนรัน: opencode.json อ่านได้ไหม · external_dirs ถูกอนุญาตแล้วหรือยัง (ไฟล์ของผู้ใช้ / server สด) → บรรทัดแจ้ง/เตือน"""
     out = []
@@ -374,8 +388,7 @@ def perm_precheck(dirs: list[str], attach: str, root: Path) -> list[str]:
     file_perm = (oc.get("permission") or {}).get("external_directory") if isinstance(oc.get("permission"), dict) else None
     miss_file = [d for d in dirs if not perm_allows(file_perm, d)]
     if attach.startswith("http"):
-        sp = server_permission(attach, root)
-        miss = [d for d in dirs if not perm_allows(sp if sp is not None else file_perm, d)]
+        miss = perm_missing_on_server(dirs, attach, root)
         if miss:
             pidf = HOME / "live_server.pid"
             pid = pidf.read_text(encoding="utf-8", errors="replace").strip() if pidf.exists() else "?"
@@ -1043,9 +1056,7 @@ def ensure_live_server(exe: list[str], ext_dirs: list[str] = ()) -> bool:
             return getattr(e, "code", None) is not None
     if up():
         return True
-    flags = 0
-    if os.name == "nt":
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+    flags = HIDDEN_DETACH_FLAGS
     env = {k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"}
     if ext_dirs:
         env["OPENCODE_CONFIG_CONTENT"] = perm_config_content(list(ext_dirs))
@@ -1880,6 +1891,12 @@ def cmd_run(a) -> int:
             print(f"WARN: เปิด server 4096 ไม่ขึ้นใน 30 วิ → รันแยก (ดูสดไม่ได้) · log {HOME / 'live_server.log'} · pid "
                   f"{pidf.read_text(encoding='utf-8', errors='replace').strip() if pidf.exists() else '?'} (ค้าง = taskkill /PID <pid> /T /F แล้วสั่งใหม่)", flush=True)
             attach = ""
+        if a.attach == "live" and attach == LIVE_URL:  # server เปิดค้างโหลดสิทธิ์ตอนเปิดครั้งเดียว — เห็นโฟลเดอร์ที่เพิ่งเพิ่มใน .flash.json ไม่ได้ → งานจะโดน DENIED หลังรันไปหลายนาที
+            miss = perm_missing_on_server(ext_dirs, attach, root)
+            if miss:
+                print(f"PERM_FALLBACK: server {attach} ยังไม่อนุญาต external_dirs: {', '.join(miss)} (โหลดสิทธิ์ตอนเปิดครั้งเดียว) → รอบนี้รัน opencode แยกที่ได้สิทธิ์จาก .flash.json แทน "
+                      f"(ดูสดในแอปไม่ได้) · อยากได้ดูสดรอบหน้า: ปิด server เมื่อไม่มีงานอื่นใช้อยู่ ให้เปิดใหม่เองตอนสั่งงานครั้งหน้า", flush=True)
+                attach = ""
         job["attach"] = attach
         save_job(job)
         for ln in perm_precheck(ext_dirs, attach, root):
@@ -2870,9 +2887,7 @@ def spawn_run(argv: list[str], project: str, wait_sec: float = 8, body: dict | N
     JOBS.mkdir(parents=True, exist_ok=True)
     out = LOGS / f"submit_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.out"
     before = {f.name for f in JOBS.glob("*.json")}
-    flags = 0
-    if os.name == "nt":
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+    flags = HIDDEN_DETACH_FLAGS
     with open(out, "wb") as fo:
         p = subprocess.Popen(argv, cwd=project, stdout=fo, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              creationflags=flags, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
@@ -4124,6 +4139,13 @@ def open_link(url: str) -> None:
         subprocess.Popen(["open", url])
 
 
+def _goal_sub(argv: list[str], root: Path) -> tuple[int, dict]:
+    r = run_timeout(argv, GOAL_UI_CMD_TIMEOUT_SEC, cwd=str(root))
+    if r.returncode == 124:
+        return 504, {"ok": False, "message": f"คำสั่ง goal ไม่ตอบภายใน {GOAL_UI_CMD_TIMEOUT_SEC:g} วิ → ฆ่าแล้ว (ยังไม่ได้บันทึก) ลองใหม่อีกครั้ง"}
+    return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+
+
 def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์)
     claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป) · archive (✖ เก็บการ์ดที่จบแล้ว)
@@ -4150,10 +4172,8 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
             subprocess.Popen(["explorer", "/select,", str(target)] if target.is_file() else ["explorer", str(target)])
         return 200, {"ok": True, "message": f"เปิด {target}"}
     if action == "human":
-        r = subprocess.run(me + ["human", str(goal), str(body.get("item") or ""), "--project", str(root)]
-                           + (["--pass"] if body.get("ok") else ["--fail", str(body.get("reason") or "")]),
-                           cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-        return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+        return _goal_sub(me + ["human", str(goal), str(body.get("item") or ""), "--project", str(root)]
+                         + (["--pass"] if body.get("ok") else ["--fail", str(body.get("reason") or "")]), root)
     if action == "archive":
         last = (gl.get("rounds") or [{}])[-1]
         if last.get("verdict") not in ("DONE", "STOP"):
@@ -4167,9 +4187,7 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         reason = " ".join(str(body.get("reason") or "").split())
         if not reason:
             return 400, {"ok": False, "message": "ใส่เหตุที่เลิกก่อน"}
-        r = subprocess.run(me + ["cancel", str(goal), "--reason", reason, "--project", str(root)],
-                           cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-        return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+        return _goal_sub(me + ["cancel", str(goal), "--reason", reason, "--project", str(root)], root)
     if action == "hide":  # ซ่อนการ์ดธงที่ยกเลิกแล้ว = ลบเฉพาะสำเนาใน ~/.flashq/goals (ไฟล์ GOAL/สถานะในโปรเจกต์อยู่ครบ)
         if not (gl.get("cancelled") or goal_cancel_note(goal)):
             return 409, {"ok": False, "message": "ซ่อนได้เฉพาะธงที่ยกเลิกแล้ว"}
