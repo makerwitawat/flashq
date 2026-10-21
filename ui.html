@@ -195,10 +195,10 @@ body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
 .of-card.quiet { border-color: var(--quota); }
 /* ย่อการ์ด: เหลือหัว · ธง/ขั้น · แถบ · บรรทัดสรุปเดียว (% · ขั้น · เวลา · กำลังทำ · ⚠) */
 .of-mini { display: none; }
-.of-cards.compact .of-full { display: none; }
-.of-cards.compact .of-mini { display: block; }
-.of-cards.compact .of-card { gap: 0.2rem; padding: 0.45rem 0.7rem; }
-.of-cards.compact .of-mini, .of-cards.compact .of-clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }  /* ย่อ = บรรทัดเดียวจริง (ชี้ดูเต็ม) */
+.of-card.compact .of-full { display: none; }
+.of-card.compact .of-mini { display: block; }
+.of-card.compact { gap: 0.2rem; padding: 0.45rem 0.7rem; }
+.of-card.compact .of-mini, .of-card.compact .of-clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }  /* ย่อ = บรรทัดเดียวจริง (ชี้ดูเต็ม) */
 .of-card .of-line:empty { display: none; }
 .of-ch .of-acts { display: flex; gap: 0.35rem; margin-left: auto; flex: none; }  /* ปุ่มย่อ + log ไปด้วยกันเสมอ ชิดขวา */
 .of-ch .of-plan { flex: 1 1 9rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  /* ชื่อแผนยาว = ตัดท้าย ปุ่มอยู่บรรทัดหัวเสมอ */
@@ -1329,17 +1329,26 @@ const cele = [];                   // งานที่เพิ่งจบ �
 let prevRun = new Set(), ofSig = "", ologBusy = false;
 /* ปุ่ม ▤ ย่อ: การ์ดงาน (ออฟฟิศ) / การ์ดธง (ทั้งสองหน้า) · จำค่าไว้ในเบราว์เซอร์นี้ */
 function applyCompact() {
-  const runs = !!store.get("compactRuns", false), goals = !!store.get("compactGoals", false);
-  $("ofRuns").classList.toggle("compact", runs);
+  const goals = !!store.get("compactGoals", false);
   for (const id of ["goals", "ofGoals"]) $(id).classList.toggle("goals-compact", goals);
-  document.querySelectorAll("[data-compact]").forEach((b) => { const on = b.dataset.compact === "runs" ? runs : goals; b.textContent = on ? "▦ ขยาย" : "▤ ย่อ"; b.setAttribute("aria-pressed", on); });
+  document.querySelectorAll("[data-compact]").forEach((b) => { const on = goals; b.textContent = on ? "▦ ขยาย" : "▤ ย่อ"; b.setAttribute("aria-pressed", on); });
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-compact]");
   if (!b) return;
-  const k = b.dataset.compact === "runs" ? "compactRuns" : "compactGoals";
-  store.set(k, !store.get(k, false));
+  store.set("compactGoals", !store.get("compactGoals", false));
   applyCompact();
+});
+/* ย่อ/ขยายการ์ดงานแยกรายช่อง (จำตาม job id) */
+function compactRuns() { const m = store.get("compactRunCards", {}); return m && typeof m === "object" ? m : {}; }
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-compact-run]");
+  if (!b) return;
+  const id = b.dataset.compactRun, m = compactRuns();
+  if (m[id]) delete m[id]; else m[id] = true;
+  store.set("compactRunCards", m);
+  const c = b.closest(".of-card"), on = !!m[id];
+  c.classList.toggle("compact", on); b.textContent = on ? "▦ ขยาย" : "▤ ย่อ";
 });
 document.addEventListener("DOMContentLoaded", applyCompact);
 
@@ -1767,9 +1776,9 @@ function planTrailHTML(r) {
 }
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
-  return `<article class="of-card" id="ofC${k}">
+  return `<article class="of-card${compactRuns()[r.id] ? ' compact' : ''}" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
-      <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact="runs" title="ย่อ/ขยายการ์ดงาน (ทุกการ์ด): ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว"></button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
+      <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact-run="${esc(r.id)}" title="ย่อ/ขยายการ์ดนี้: ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว">${compactRuns()[r.id] ? '▦ ขยาย' : '▤ ย่อ'}</button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
     ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     ${r.goal ? "" : planTrailHTML(r)}
