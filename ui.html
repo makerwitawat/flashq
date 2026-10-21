@@ -189,17 +189,21 @@ body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1
 body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; }
 body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
 body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
-.of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); }
-.of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; gap: 0.3rem; }
+.of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); align-items: start; }  /* การ์ดย่อไม่ถูกยืดสูงตามใบข้าง ๆ */
+.of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }  /* คอลัมน์ไม่ขยายตามข้อความยาว (ไม่ล้นทับการ์ดข้าง ๆ) */
 .of-card.quiet { border-color: var(--quota); }
 /* ย่อการ์ด: เหลือหัว · ธง/ขั้น · แถบ · บรรทัดสรุปเดียว (% · ขั้น · เวลา · กำลังทำ · ⚠) */
 .of-mini { display: none; }
 .of-cards.compact .of-full { display: none; }
 .of-cards.compact .of-mini { display: block; }
 .of-cards.compact .of-card { gap: 0.2rem; padding: 0.45rem 0.7rem; }
+.of-cards.compact .of-mini, .of-cards.compact .of-clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }  /* ย่อ = บรรทัดเดียวจริง (ชี้ดูเต็ม) */
+.of-card .of-line:empty { display: none; }
+.of-ch .of-acts { display: flex; gap: 0.35rem; margin-left: auto; flex: none; }  /* ปุ่มย่อ + log ไปด้วยกันเสมอ ชิดขวา */
+.of-ch .of-plan { flex: 1 1 9rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  /* ชื่อแผนยาว = ตัดท้าย ปุ่มอยู่บรรทัดหัวเสมอ */
 .of-mini.of-warn { color: var(--quota); font-weight: 600; }
 .goals-compact .goal-full { display: none; }
-.goals-compact .goal-phase li:not(.warn), .goals-compact .goal-phase > .muted { display: none; }
+.goals-compact .goal-phase li:not(.gwarn), .goals-compact .goal-phase > .muted { display: none; }
 .of-card .goal-steps { margin: 0; }
 .of-ch { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .of-proj { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-weight: 600; font-size: 0.88rem; color: #fff; background: hsl(var(--h) 55% 42%); }
@@ -316,7 +320,7 @@ summary.goal-h button { margin-left: auto; }
 .goal-steps span.cur { opacity: 1; font-weight: 700; background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .goal-steps span.skip { opacity: 0.35; text-decoration: line-through; }
 .goal-steps span.cur.warn { background: color-mix(in srgb, var(--quota) 35%, transparent); }
-.goal-phase ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.92em; } .goal-phase li.warn { font-weight: 600; }
+.goal-phase ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.92em; } .goal-phase li.gwarn { font-weight: 600; }
 .goal-warn { margin: 0.35rem 0 0; padding: 0.3rem 0.5rem; border-radius: 0.35rem; font-size: 0.9em; border: 1px dashed var(--quota); }
 .rtag { font-size: 0.78rem; padding: 0 0.35rem; border-radius: 0.3rem; margin-left: 0.3rem; white-space: nowrap; font-family: inherit; }
 .rtag.goal { background: color-mix(in srgb, var(--accent) 16%, transparent); } .rtag.fix { background: var(--line); }
@@ -382,7 +386,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <select id="stateFilter" title="กรองสถานะ">
           <option value="">ทุกสถานะ</option><option value="ok">OK</option><option value="fail">FAIL</option>
           <option value="quota">QUOTA</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
-          <option value="cancelled">ยกเลิก</option><option value="dead">ตาย</option>
+          <option value="cancelled">ยกเลิก</option><option value="dead">ตาย</option><option value="busy">BUSY (คิวไม่ว่าง)</option><option value="queue_timeout">รอคิวนานเกิน</option>
         </select>
         <select id="projFilter" title="กรองโปรเจกต์"><option value="">ทุกโปรเจกต์</option></select>
         <button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
@@ -522,7 +526,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <pre id="cmdPreview" class="mono"></pre>
     <p id="submitMsg"></p>
     <div class="row" style="justify-content:flex-end">
-      <button value="cancel" formnovalidate>ปิด</button>
+      <button type="button" data-dlgclose>ปิด</button>
       <button id="submitGo" class="primary" value="default">ส่งเข้าคิว</button>
     </div>
   </form>
@@ -534,7 +538,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <label id="rnAckRow" hidden style="color:var(--fail)"><input type="checkbox" id="rnAck"> <b>เข้าใจแล้วว่ามีไฟล์ซ้อน — ยืนยันจะรันพร้อมกัน</b></label>
     <p id="rnMsg"></p>
     <div class="row" style="justify-content:flex-end">
-      <button value="cancel" formnovalidate>ปิด</button>
+      <button type="button" data-dlgclose>ปิด</button>
       <button id="rnGo" class="primary" value="default">รันเลย</button>
     </div>
   </form>
@@ -898,7 +902,7 @@ function phaseHTML(g) {
   const steps = goalStepsHTML(p);
   const when = p.ago_sec == null ? "" : ` · ${esc(p.ago_what)} <b>${esc(ago(p.ago_sec))}</b>${/มา$/.test(p.ago_what) ? "" : " ที่แล้ว"}`;
   const log = p.job ? ` <button data-oflog="${esc(p.job)}">ดู log สด</button>` : "";
-  const notes = (p.notes || []).length && p.step !== "result" ? `<ul>${p.notes.map((x) => `<li class="${x.warn ? "warn" : ""}">${esc(x.t)}${x.ago_sec == null ? "" : ` <span class="muted">· เคลื่อนไหว ${esc(ago(x.ago_sec))} ที่แล้ว</span>`}</li>`).join("")}</ul>` : "";
+  const notes = (p.notes || []).length && p.step !== "result" ? `<ul>${p.notes.map((x) => `<li class="${x.warn ? "gwarn" : ""}">${esc(x.t)}${x.ago_sec == null ? "" : ` <span class="muted">· เคลื่อนไหว ${esc(ago(x.ago_sec))} ที่แล้ว</span>`}</li>`).join("")}</ul>` : "";
   const hint = p.warn && p.step !== "result" ? `<div class="muted">นิ่งนาน/รอคุณ → กด ↩ เปิด session นั้นดู · ปิดไปแล้ว → กด 🤖 ให้ Claude ทำต่อ</div>` : "";
   return `<div class="goal-steps" title="${esc(p.label)}">${steps}</div><div class="goal-idle goal-phase${p.warn ? " long" : ""}">${esc(p.label)}${when}${log}${notes}${hint}</div>`;
 }
@@ -959,15 +963,12 @@ async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     state = await r.json();
-    stateAt = Date.now();
-    render();
-    checkFinished();
-    checkReviews();
-    renderGoals();
-    checkGoals();
-    officeTrack();
-    if (view === "office") { officeUpdate(); officePoll(); }
-  } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; }
+  } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; return; }
+  stateAt = Date.now();
+  // แยกทีละส่วน: ส่วนหนึ่งพัง ส่วนที่เหลือยังอัปเดต (เดิมทั้งหน้าขึ้น "เชื่อมต่อ server ไม่ได้" ทั้งที่ server ปกติ)
+  for (const f of [render, checkFinished, checkReviews, renderGoals, checkGoals, officeTrack, () => { if (view === "office") { officeUpdate(); officePoll(); } }]) {
+    try { f(); } catch (e) { console.error(e); $("updated").textContent = `หน้าเว็บแสดงผลผิดพลาด (${f.name || "ออฟฟิศ"}): ${e.message}`; }
+  }
 }
 
 /* ---------- log ---------- */
@@ -980,7 +981,8 @@ function renderLog(appended) {
   } else {
     const hit = logLines.filter((l) => l.toLowerCase().includes(q));
     const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    pre.innerHTML = hit.map((l) => esc(l).replace(re, (m) => `<mark>${m}</mark>`)).join("\n");
+    const mark = (l) => { let o = "", i = 0; for (const m of l.matchAll(re)) { o += esc(l.slice(i, m.index)) + `<mark>${esc(m[0])}</mark>`; i = m.index + m[0].length; } return o + esc(l.slice(i)); };
+    pre.innerHTML = hit.map(mark).join("\n");  // ไฮไลต์ก่อน escape (ค้น "amp"/"lt" ไม่ไปแทรกกลาง &amp;)
     pre.dataset.mode = "filter";
     $("logCount").textContent = `ตรง ${hit.length} / ${logLines.length}`;
   }
@@ -1000,11 +1002,11 @@ function openLog(id) {
 
 async function pollLog() {
   if (!logJob) return;
-  const id = logJob;
+  const id = logJob, at = logAttempt;
   try {
     const r = await fetch(`/api/log?id=${encodeURIComponent(id)}&attempt=${logAttempt}&offset=${logOffset}`, { cache: "no-store" });
     const d = await r.json();
-    if (id !== logJob) return;
+    if (id !== logJob || at !== logAttempt) return;  // สลับงาน/รอบระหว่างรอ = ทิ้ง (ไม่งั้นได้ poll สองสาย log ซ้ำ/ขาด)
     if (!r.ok) { $("log").textContent = d.error || "อ่าน log ไม่ได้"; logTimer = setTimeout(pollLog, 4000); return; }
     if (d.reset) logLines = [];
     const asel = $("attemptSel");
@@ -1090,11 +1092,14 @@ $("submitForm").addEventListener("input", (e) => {
   if (e.target.id === "fProject") { clearTimeout(planTimer); planTimer = setTimeout(loadPlans, 400); }
 });
 $("submitForm").addEventListener("change", preview);
+// ปุ่ม "ปิด" ของ dialog เป็น type=button — ถ้าเป็น submit ตัวแรกของฟอร์ม กด Enter ในช่องข้อความจะไปกด "ปิด" (ข้อความที่พิมพ์หาย)
+document.addEventListener("click", (e) => { const b = e.target.closest("[data-dlgclose]"); if (b) b.closest("dialog").close("cancel"); });
 $("submitGo").onclick = async (e) => {
   e.preventDefault();
   const b = formBody();
-  if (!b.project) { $("fProject").focus(); return; }
-  if (!b.message && (!b.plan || !b.tasks)) { (b.plan ? $("fTasks") : $("fPlan")).focus(); return; }
+  const need = (el, what) => { el.focus(); $("submitMsg").className = "err"; $("submitMsg").textContent = `กรอก${what}ก่อน`; };
+  if (!b.project) return need($("fProject"), "โปรเจกต์");
+  if (!b.message && (!b.plan || !b.tasks)) return b.plan ? need($("fTasks"), "งาน (T-xx)") : need($("fPlan"), "แผน (หรือข้อความ)");
   $("submitGo").disabled = true; $("submitMsg").className = ""; $("submitMsg").textContent = "กำลังส่ง…";
   const d = await post("/api/submit", b);
   $("submitGo").disabled = false;
@@ -1261,7 +1266,7 @@ function applyTheme() {
 $("themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; store.set("theme2", theme); applyTheme(); };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.body.classList.contains("has-max") && !dlg.open) { setMax(null); return; }
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || dlg.open;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || !!document.querySelector("dialog[open]");
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "+" || e.key === "=") stepZoom(1);
   else if (e.key === "-") stepZoom(-1);
@@ -1299,7 +1304,7 @@ document.addEventListener("DOMContentLoaded", applyCompact);
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
 const pad2 = (n) => String(n).padStart(2, "0");
 const hueOf = (str) => { let h = 7; for (const c of String(str || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-const shortWhat = (j) => j.message && !isSleuth(j) ? `ข้อความ: ${trunc(j.message, 40)}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 40) : String(j.plan || "-").split(/[\/]/).pop() + " " + (j.tasks || "")}`;
+const shortWhat = (j) => j.message && !isSleuth(j) ? `ข้อความ: ${trunc(j.message, 40)}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 40) : String(j.plan || "-").split(/[\\/]/).pop() + " " + (j.tasks || "")}`;
 const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 function approx(s) {
   if (s == null || !isFinite(s)) return "-";
@@ -1682,9 +1687,9 @@ function modelChip(j) { const t = modelText(j); return t ? `<div class="of-line 
 function runGoalHTML(r) {
   const gl = (state.goals || []).find((g) => g.id === r.goal.id) || {}, p = gl.phase;
   const unv = (gl.unverified || []).length ? ` · <span style="color:var(--fail)">⚠ รอบ ${gl.unverified.join(", ")} ยังไม่ verify</span>` : "";
-  return `<div class="of-line">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(r.goal.title || gl.title || "")}</b></div>
+  return `<div class="of-line of-clip" title="${esc(r.goal.title || gl.title || "")}">🚩 รอบ ${r.goal.round}/${r.goal.rounds_max} ของเป้าหมาย <b>${esc(r.goal.title || gl.title || "")}</b></div>
     ${p && p.step ? `<div class="goal-steps" title="${esc(p.label)}">${goalStepsHTML(p)}</div>` : ""}
-    ${gl.id ? `<div class="of-line muted">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
+    ${gl.id ? `<div class="of-line muted of-full">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
 }
 /* งานแผนทั่วไป: ขั้นของแผน 🕵️ สืบ → ✍️ แผน → 🧑‍💻 Flash ทำ → 🔍 ตรวจ → 🏁 ผล + งานที่เกี่ยวข้อง (ผู้สืบก่อนแผน · เคยรัน · ผลตรวจ) */
 const TRAIL_ICON = { ok: "✅", fail: "❌", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
@@ -1721,7 +1726,7 @@ function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
-      <span class="muted mono">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="sp"></span><button data-compact="runs" title="ย่อ/ขยายการ์ดงาน (ทุกการ์ด): ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว"></button><button data-oflog="${esc(r.id)}">ดู log สด</button></div>
+      <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact="runs" title="ย่อ/ขยายการ์ดงาน (ทุกการ์ด): ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว"></button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
     ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     ${r.goal ? "" : planTrailHTML(r)}
@@ -1759,9 +1764,18 @@ function setText(id, t) { const e = $(id); if (e && e.textContent !== t) e.textC
 const sameShape = (a, b) => a.nodeName === b.nodeName && a.childNodes.length === b.childNodes.length
   && [...a.childNodes].every((c, i) => sameShape(c, b.childNodes[i]));
 function patchDOM(a, b) {
-  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
-  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
-  for (const at of b.attributes) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  if (a.nodeType !== 1) {  // ข้อความใน <title> ของ SVG ที่ tooltip เก็บไว้ (_tip) = อัปเดต _tip แทนการคืนข้อความ (กล่องของเบราว์เซอร์จะซ้อน)
+    const host = a.parentNode && a.parentNode.nodeName === "title" && a.parentNode.parentNode;
+    if (host && host._tip != null) { host._tip = b.nodeValue; return; }
+    if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue;
+    return;
+  }
+  const moved = a.hasAttribute("data-tip") && !b.hasAttribute("data-tip");  // title ถูก tooltip ย้ายไป data-tip แล้ว
+  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name) && !(moved && at.name === "data-tip")) a.removeAttribute(at.name);
+  for (const at of b.attributes) {
+    if (moved && at.name === "title") { if (a.dataset.tip !== at.value) a.dataset.tip = at.value; continue; }
+    if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  }
   a.childNodes.forEach((c, i) => patchDOM(c, b.childNodes[i]));
 }
 function setHTML(id, h) {
@@ -1828,7 +1842,7 @@ function officeUpdate() {
       ri.el == null ? "" : "⏱ " + mmss(ri.el) + (ri.rem != null ? " · เหลือ " + approx(ri.rem) : ri.over ? " · เกินที่คาด " + approx(ri.el - ri.est.sec) : ""),
       "🛠 " + trunc(act, 60), quiet ? `⚠ log เงียบ ${dur(Math.floor(idleMs / 1000))}` : "", swAlert].filter(Boolean).join(" · ");
     setText("ofCX" + k, mini);
-    const cx = $("ofCX" + k); if (cx) cx.classList.toggle("of-warn", !!quiet || !!swAlert || ri.severe);
+    const cx = $("ofCX" + k); if (cx) { cx.classList.toggle("of-warn", !!quiet || !!swAlert || ri.severe); if (cx.getAttribute("title") !== mini && cx.dataset.tip !== mini) cx.title = mini; }
     const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
     if (i >= 0) {
       setText("ofB" + i, trunc(act, 24));
@@ -1988,7 +2002,9 @@ document.addEventListener("pointermove", (e) => { tipXY = [e.clientX, e.clientY]
 document.addEventListener("pointerout", (e) => { if (!e.relatedTarget) tipHide(); });
 document.addEventListener("focusin", (e) => { const el = e.target.matches && e.target.matches(":focus-visible") && tipSource(e.target); if (el) { tipXY = null; tipShow(el); } });
 document.addEventListener("focusout", tipHide);
-for (const ev of ["pointerdown", "keydown", "scroll", "wheel"]) document.addEventListener(ev, tipHide, { capture: true, passive: true });
+for (const ev of ["pointerdown", "keydown", "wheel"]) document.addEventListener(ev, tipHide, { capture: true, passive: true });
+// ซ่อนเมื่อหน้า/กล่องที่มีตัวที่ชี้อยู่เลื่อนเท่านั้น — กล่อง log ที่เลื่อนลงเองทุกรอบ poll ไม่ทำให้ tooltip ของปุ่มอื่นหาย
+document.addEventListener("scroll", (e) => { if (tipFor && (e.target === document || (e.target.contains && e.target.contains(tipFor)))) tipHide(); }, { capture: true, passive: true });
 setInterval(() => { if (view === "office" && !document.hidden) officeUpdate(); }, 1000);
 
 setView(view);
