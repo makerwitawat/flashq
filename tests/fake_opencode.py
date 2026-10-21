@@ -2,8 +2,9 @@
 
 พฤติกรรมตามตัวแปรแวดล้อม:
   FAKE_SLEEP=<วินาที>   หน่วงก่อนจบ (ค่าเริ่มต้น 0)
-  FAKE_MODE=ok|quota|nostart|fail
+  FAKE_MODE=ok|quota|nostart|fail|denied (denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน)
   FAKE_ARGS_OUT=<path>  เขียน argv ลงไฟล์ (ต่อท้าย)
+  FAKE_ENV_OUT=<path>   เขียนค่า OPENCODE_CONFIG_CONTENT ที่ได้รับลงไฟล์ (ว่าง = ไม่ได้รับ)
   FAKE_SET_MODEL=<model> (คู่ FAKE_MODE=quota) เขียนโมเดลนี้ลง FLASHQ_OPENCODE_CONFIG ก่อนตอบ quota
 """
 import json
@@ -14,6 +15,9 @@ import time
 if os.environ.get("FAKE_ARGS_OUT"):
     with open(os.environ["FAKE_ARGS_OUT"], "a", encoding="utf-8") as f:
         f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\n")
+if os.environ.get("FAKE_ENV_OUT"):
+    with open(os.environ["FAKE_ENV_OUT"], "w", encoding="utf-8") as f:
+        f.write(os.environ.get("OPENCODE_CONFIG_CONTENT", ""))
 mode = os.environ.get("FAKE_MODE", "ok")
 if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agent ที่แอบแก้ไฟล์ในโปรเจกต์
     with open(os.path.join(sys.argv[sys.argv.index("--dir") + 1], os.environ["FAKE_WRITE"]), "w", encoding="utf-8") as _f:
@@ -47,4 +51,11 @@ if mode == "subagent":  # opencode เตือนทาง stderr แล้ว�
 if mode == "fail":
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": "สถานะ: FAIL"}}), flush=True)
     sys.exit(1)
+if mode == "denied":  # เหตุจริง 2026-10-20: กฎ external_directory เป็น ask → โหมดไม่โต้ตอบปฏิเสธเอง (stderr) · subagent ล้มเป็น tool error · จบ exit 0
+    print("\x1b[93m\x1b[1m! \x1b[0mpermission requested: external_directory (D:\\outside\\lib\\*); auto-rejecting", file=sys.stderr, flush=True)
+    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "task", "state": {
+        "status": "error", "input": {"description": "T-01 x", "subagent_type": "flash-worker", "prompt": "ได้ DONE → ติ๊ก"},
+        "error": "Subagent failed (task_id: ses_x): The user rejected permission to use this specific tool call."}}}), flush=True)
+    print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "ส่งงานให้ flash-worker ไม่ได้ — ผู้ใช้ปฏิเสธสิทธิ์การใช้ tool call นี้")}}), flush=True)
+    sys.exit(0)
 print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "PONG")}}), flush=True)

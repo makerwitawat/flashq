@@ -1622,8 +1622,116 @@ class FlashqTest(unittest.TestCase):
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("DENIED: 1 คำสั่ง", r.stdout)
+        self.assertIn("RULE_DENIED: 1 คำสั่ง", r.stdout)
         self.assertIn("find . -name x", r.stdout)
+        self.assertNotIn("FLASH_RUN=DENIED", r.stdout)  # กฎของ agent บล็อก ≠ opencode ปฏิเสธสิทธิ์
+
+    def test_permission_denied_is_not_ok(self):
+        """เหตุจริง 2026-10-20: opencode ปฏิเสธสิทธิ์ external_directory เอง (โหมดไม่โต้ตอบ) งานจบ exit 0 โดยไม่ได้ทำ → ต้องเป็น DENIED ไม่ใช่ OK
+        พิมพ์ path ที่ถูกปฏิเสธ + ทางแก้ 2 ทาง · wait คืน 1 · มี DONE (สำเร็จบางส่วน) = คง OK แต่เตือน"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "denied"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=DENIED", r.stdout)
+        self.assertIn("DENIED: opencode ปฏิเสธสิทธิ์ 1 รายการ", r.stdout)
+        self.assertIn("external_directory: D:\\outside\\lib\\*", r.stdout)
+        self.assertIn('"external_dirs": ["D:/outside/lib/*"]', r.stdout)
+        self.assertIn('permission.external_directory เพิ่ม "D:\\\\outside\\\\lib\\\\*": "allow"', r.stdout)
+        j = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual((j["status"], j["result"]), ("denied", "DENIED"))
+        self.assertEqual(j["perm_denied"], [{"kind": "external_directory", "path": "D:\\outside\\lib\\*"}])
+        r = self.run_q("wait", "PLAN.md")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=DENIED", r.stdout)
+        self.assertIn("D:\\outside\\lib\\*", r.stdout)
+        self.assertIn("external_dirs", r.stdout)
+        r = self.run_q("list", "--all")
+        self.assertIn("denied", r.stdout)
+        # worker ตอบ DONE (บางงานสำเร็จ) → คง OK แต่เตือนรายการที่ถูกปฏิเสธ
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "denied", "FAKE_TEXT": "T-01 DONE แล้ว · T-02 ถูกปฏิเสธสิทธิ์"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertIn("WARN: opencode ปฏิเสธสิทธิ์ 1 รายการระหว่างทำงาน แต่มีงานสำเร็จบางส่วน", r.stdout)
+        self.assertIn("D:\\outside\\lib\\*", r.stdout)
+        # ตัดสินจาก log จริงได้ด้วยฟังก์ชันเดียวกัน (stderr ของ opencode มีสี ANSI นำหน้า)
+        sys.path.insert(0, str(REPO))
+        import flashq
+        perm = flashq.perm_denials("\x1b[93m! \x1b[0mpermission requested: external_directory (D:\\a\\b\\*); auto-rejecting\n", ["task T-01"])
+        self.assertEqual(perm, [{"kind": "external_directory", "path": "D:\\a\\b\\*"}])
+        self.assertEqual(flashq.perm_denials("", ["task T-01", "task T-01"]), [{"kind": "tool", "path": "task T-01"}])  # ไม่มี stderr = ใช้ tool error
+
+    def test_external_dirs_precheck_and_config_content(self):
+        """`.flash.json` ช่อง external_dirs → ส่งสิทธิ์ให้ opencode ผ่าน OPENCODE_CONFIG_CONTENT (ไม่แตะ opencode.json) ·
+        opencode.json ยังไม่มี allow → บอกบรรทัด JSON ที่ต้องเพิ่ม · มีแล้ว → ไม่เตือน · opencode.json เสีย → เตือน · server สด (--attach) ยังไม่อนุญาต → WARN จะ DENIED"""
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "external_dirs": ["D:/outside/lib/*", "D:\\other"]}), encoding="utf-8")
+        env_out = self.tmp / "env.txt"
+        r = self.run_q(*self.base(), env={"FAKE_ENV_OUT": str(env_out)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PERM: ส่งสิทธิ์ external_dirs ให้ opencode รอบนี้ผ่าน OPENCODE_CONFIG_CONTENT", r.stdout)
+        self.assertIn("ยังไม่มี allow ของ D:/outside/lib/*, D:/other/*", r.stdout)
+        self.assertIn('"D:\\\\outside\\\\lib\\\\*": "allow"', r.stdout)
+        rules = json.loads(env_out.read_text(encoding="utf-8"))["permission"]["external_directory"]
+        self.assertEqual(rules.get("D:/outside/lib/*"), "allow")
+        self.assertEqual(rules.get("D:/other/*"), "allow")  # ไม่มี * = เติม /* ให้
+        self.assertEqual(rules.get("D:\\outside\\lib\\*"), "allow")  # ใส่ทั้งสองแบบบน Windows
+        # opencode.json อนุญาตแล้ว (รูปแบบ \\ · กฎเจาะจงทับ "*": "ask") → ไม่เตือน
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        cfg["permission"] = {"external_directory": {"*": "ask", "D:\\outside\\*": "allow", "D:/other/*": "allow"}}
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PERM: ส่งสิทธิ์ external_dirs", r.stdout)
+        self.assertNotIn("ยังไม่มี allow", r.stdout)
+        self.assertNotIn("WARN: อ่าน", r.stdout)
+        # ไม่มี external_dirs = ไม่พิมพ์อะไรเพิ่ม · opencode.json เสีย (ลืมคอมมา) → เตือน
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False}), encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertNotIn("PERM:", r.stdout)
+        self.oc_cfg.write_text('{"permission": {"external_directory": {"*": "ask"\n "D:/x/*": "allow"}}}', encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("WARN: อ่าน", r.stdout)
+        self.assertIn("JSON เสีย", r.stdout)
+        # server สด: ถาม /config ของ server (โหลด config ตอนเปิด ไม่เห็น env ของงาน)
+        import http.server
+        import threading
+        sys.path.insert(0, str(REPO))
+        import flashq
+        perm_srv = {"external_directory": {"*": "ask"}}
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"permission": perm_srv, "provider": {"p": {"options": {"apiKey": "x"}}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}"
+            flashq.OC_CONFIG = self.oc_cfg
+            flashq.HOME = self.home
+            out = "\n".join(flashq.perm_precheck(["D:/outside/lib/*"], url, self.proj))
+            self.assertIn("ยังไม่อนุญาต external_dirs: D:/outside/lib/*", out)
+            self.assertIn("(DENIED)", out)
+            self.assertIn('"D:\\\\outside\\\\lib\\\\*": "allow"', out)
+            self.assertNotIn("apiKey", out)
+            perm_srv["external_directory"]["D:/outside/*"] = "allow"
+            out = "\n".join(flashq.perm_precheck(["D:/outside/lib/*"], url, self.proj))
+            self.assertIn("server opencode อนุญาต external_dirs แล้ว", out)
+            self.assertNotIn("WARN: server", out)
+        finally:
+            srv.shutdown()
+        # perm_allows: กฎเจาะจงชนะ "*" · deny เจาะจงชนะ allow กว้าง · ค่าเป็นสตริง
+        self.assertTrue(flashq.perm_allows({"*": "ask", "D:\\x\\*": "allow"}, "D:/x/y/*"))
+        self.assertFalse(flashq.perm_allows({"*": "allow", "D:/x/*": "deny"}, "D:/x/y/*"))
+        self.assertFalse(flashq.perm_allows({"*": "ask"}, "D:/x/*"))
+        self.assertTrue(flashq.perm_allows("allow", "D:/x/*"))
+        self.assertFalse(flashq.perm_allows(None, "D:/x/*"))
+        self.assertEqual(flashq.external_dirs({"external_dirs": ["D:/a", "D:/b/*", " "]}), ["D:/a/*", "D:/b/*"])
 
     def test_investigate_subagent_fails_and_never_conflicts(self):
         r = self.run_q("investigate", "--no-open", "สืบหน่อย", env={"FAKE_MODE": "subagent"})

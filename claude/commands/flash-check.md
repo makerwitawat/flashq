@@ -15,6 +15,7 @@ description: >-
 - **โมเดลผู้ตรวจ**: session นี้เป็น **Opus/Fable** → ห้ามตรวจเอง ส่ง subagent `flash-checker` (Agent tool · `subagent_type: "flash-checker"` · ติดตั้งโดย `flashq.py install`) ทำข้อ 1–3 + เติมช่อง "ตรวจ Claude"/เพิ่ม `T-xxR` ในแผน แล้ว agent หลักทำ §4 (commit แผน · สั่งรอบแก้ · merge/push) · brief ไทย = path แผน + งาน + บรรทัด `FLASH_RUN=` + path log · ไม่มี agent นี้ → ตรวจเองแต่ Grep ก่อน Read ทุกครั้ง · session เป็น **Sonnet** → ตรวจเองได้
 - `FLASH_RUN=OK` → ข้อ 1
 - `QUOTA` (สลับบัญชีครบแล้ว) → หยุด บอก user · `NOSTART` (ลองใหม่แล้ว) → หยุด บอก user
+- `FLASH_RUN=DENIED` → opencode ปฏิเสธสิทธิ์เอง (แตะไฟล์นอกโปรเจกต์ · บรรทัด `DENIED:` บอก path) งานไม่ได้ทำ **ไม่ต้องไล่หา commit/§4** → บอก user แก้สิทธิ์ตามทางแก้ที่ flashq พิมพ์ (`external_dirs` ใน `.flash.json` หรือ `permission.external_directory` ใน `~/.config/opencode/opencode.json`) แล้วส่งงานใหม่ · `OK` แต่มี `WARN: opencode ปฏิเสธสิทธิ์` = สำเร็จบางส่วน → ตรวจตามปกติแล้วบอก user ว่างานไหนขาดเพราะสิทธิ์
 - `BUSY` / `QUEUE_TIMEOUT` → มีงานอื่นในคิวกลาง ห้ามรันซ้อน บอก user (`python {{FLASHQ}}/flashq.py`)
 - `FAIL` / `TIMEOUT` → อ่าน §4 ของแผน + ท้าย log (path ในบรรทัด `START … log=` · `python {{FLASHQ}}/flashq.py log <job>`) แล้วตรวจงานที่ทำเสร็จตามปกติ
 
