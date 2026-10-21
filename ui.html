@@ -9,21 +9,21 @@
   --zoom: 1;
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2430; --muted: #687385; --line: #e2e6ec;
   --accent: #2f6fdb; --accent-text: #ffffff; --hover: #eef3fb; --code: #f1f3f6; --mark: #ffe58a;
-  --ok: #1f8a4c; --fail: #c53030; --quota: #b7791f; --timeout: #7b4fd0; --nostart: #2b8a9a; --other: #8a94a3;
+  --ok: #1f8a4c; --fail: #c53030; --quota: #b7791f; --timeout: #7b4fd0; --nostart: #2b8a9a; --other: #8a94a3; --denied: #c2410c;
   --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .18);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
     --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920; --mark: #6b5a12;
-    --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+    --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3; --denied: #fb923c;
     --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .5);
   }
 }
 :root[data-theme="dark"] {
   --bg: #11151b; --panel: #1a2029; --text: #e5e9f0; --muted: #98a2b3; --line: #2b3340;
   --accent: #5b93f0; --accent-text: #0d1117; --hover: #222b38; --code: #141920; --mark: #6b5a12;
-  --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3;
+  --ok: #48bb78; --fail: #f56565; --quota: #ecc94b; --timeout: #b794f4; --nostart: #4fd1c5; --other: #8a94a3; --denied: #fb923c;
   --shadow: 0 0.6rem 2rem rgba(0, 0, 0, .5);
 }
 /* ฟอนต์ตามความกว้างจอ (1280 ≈ 14px · 1920 ≈ 17.6px · 2560 ≈ 21px · 4K ≈ 27px) × zoom ของผู้ใช้ */
@@ -88,7 +88,8 @@ tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--hover); }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
 .badge { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-size: 0.82rem; font-weight: 600; color: #fff; white-space: nowrap; }
-.s-ok { background: var(--ok); } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; }
+.s-ok { background: var(--ok); } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; } .s-denied { background: var(--denied); }
+.deny { color: var(--denied); font-size: 0.85em; font-weight: 600; white-space: normal; }
 .s-timeout { background: var(--timeout); } .s-nostart { background: var(--nostart); color: #10262a; } .s-other { background: var(--other); }
 .s-running { background: var(--accent); color: var(--accent-text); } .s-queued { background: var(--other); }
 .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--ok); display: inline-block; animation: pulse 1.4s infinite; }
@@ -385,7 +386,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <input type="search" id="histSearch" placeholder="ค้นหา แผน/งาน/id" style="width:11rem">
         <select id="stateFilter" title="กรองสถานะ">
           <option value="">ทุกสถานะ</option><option value="ok">OK</option><option value="fail">FAIL</option>
-          <option value="quota">QUOTA</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
+          <option value="denied">DENIED</option><option value="quota">QUOTA</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
           <option value="cancelled">ยกเลิก</option><option value="dead">ตาย</option><option value="busy">BUSY (คิวไม่ว่าง)</option><option value="queue_timeout">รอคิวนานเกิน</option>
         </select>
         <select id="projFilter" title="กรองโปรเจกต์"><option value="">ทุกโปรเจกต์</option></select>
@@ -472,7 +473,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
-        <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
+        <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · 🚫 = DENIED (opencode ปฏิเสธสิทธิ์ งานไม่ได้ทำ — ดูทางแก้ในกล่อง log) · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
         <li>😴 <b>นอนที่โซฟา</b> = งานที่ process ตาย (ดูแผงเตือนในแดชบอร์ด)</li>
         <li>⏱ ทุก <b>เวลาที่ประมาณ</b> มาจากประวัติงานที่ผ่านมา (ค่ากลางต่อ T-xx) ไม่ใช่ค่ารับประกัน — คิวจริงอาจเร็ว/ช้ากว่านี้ได้</li>
       </ul>
@@ -563,11 +564,13 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem("flashq." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("flashq." + k, JSON.stringify(v)); } catch (e) {} },
 };
-const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
+const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], denied: ["DENIED", "s-denied"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
   nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
   dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
-const FINAL = ["ok", "fail", "quota", "timeout", "nostart"];
+const FINAL = ["ok", "fail", "denied", "quota", "timeout", "nostart"];
 const badge = (st) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}">${esc(t)}</span>`; };
+/* opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ) → บอก path ที่ถูกปฏิเสธบนแถวงาน · ทางแก้เต็มอยู่ในกล่อง log (denied_help) */
+const denyNote = (j) => (j.perm_denied || []).length ? `<div class="deny" title="opencode ปฏิเสธสิทธิ์ · ทางแก้: external_dirs ใน .flash.json หรือ permission.external_directory ใน opencode.json (ดูกล่อง log)">🚫 ปฏิเสธสิทธิ์: ${esc(j.perm_denied.join(" · "))}</div>` : "";
 const dur = (s) => {
   if (s == null || s < 0) return "-";
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
@@ -732,7 +735,7 @@ function render() {
   setHTML("history", hist.length ? `<table>
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}</td>
+      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j)}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
@@ -1019,6 +1022,7 @@ async function pollLog() {
     if (!live && d.offset >= d.size && !logDone) {
       logDone = true;
       if (!d.attempts) add.push(d.state === "queued" ? "(ยังรอคิว — ยังไม่มี log)" : "(ไม่มีไฟล์ log)");
+      if (d.denied_help) add.push("", d.denied_help);
       if (d.last) add.push("", "---- ข้อความท้าย ----", d.last);
     }
     if (live) logDone = false;
@@ -1504,6 +1508,7 @@ function officeModel() {
 }
 const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
   quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
+  denied: { pose: "sit", mood: "sad", icon: "🚫", text: "ถูกปฏิเสธสิทธิ์ (DENIED)", cls: "of-st-bad" },
   nostart: { pose: "sit", mood: "sad", icon: "❓", text: "ไม่เริ่มทำงาน (NOSTART)", cls: "of-st-bad" } };
 
 function deskSVG(i, cx, cy, r, c) {
@@ -1692,7 +1697,7 @@ function runGoalHTML(r) {
     ${gl.id ? `<div class="of-line muted of-full">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
 }
 /* งานแผนทั่วไป: ขั้นของแผน 🕵️ สืบ → ✍️ แผน → 🧑‍💻 Flash ทำ → 🔍 ตรวจ → 🏁 ผล + งานที่เกี่ยวข้อง (ผู้สืบก่อนแผน · เคยรัน · ผลตรวจ) */
-const TRAIL_ICON = { ok: "✅", fail: "❌", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
+const TRAIL_ICON = { ok: "✅", fail: "❌", denied: "🚫", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
 /* บรรทัด token ของ Claude ต่อแผน/ธง (จาก `flashq usage` → ~/.flashq/usage/<stem>.json · ไม่เคยรัน = ไม่แสดง) */
 const USAGE_PHASES = [["plan", "วางแผน"], ["check", "ตรวจ"], ["fix", "รอบแก้"], ["goal", "เป้าหมาย"], ["other", "อื่น ๆ"]];
 function usageLineHTML(u) {
@@ -1753,7 +1758,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
@@ -1878,7 +1883,7 @@ function officeUpdate() {
   setText("ofTE", doneAll ? approx(allEnd) : "—");
   setText("ofTEs", doneAll ? `ราว ${clockAt(allEnd)}${anyRough ? " · ประมาณคร่าว (ข้อมูลเก่ายังน้อย)" : ""}` : "ไม่มีงานค้าง");
   const today = String(s.now || "").slice(0, 10), td = (s.history || []).filter((h) => (h.finished || "").startsWith(today));
-  const okN = td.filter((h) => h.state === "ok").length, badN = td.filter((h) => ["fail", "timeout", "nostart", "quota"].includes(h.state)).length;
+  const okN = td.filter((h) => h.state === "ok").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
   setText("ofTD", `${td.length} งาน`);
   setText("ofTDs", td.length ? `✓ ${okN} ผ่าน · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
 }

@@ -2,6 +2,9 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-10-21
+- **สถานะ `DENIED`**: opencode (โหมดไม่โต้ตอบ) ปฏิเสธสิทธิ์เอง เช่น อ่านไฟล์นอกโปรเจกต์ที่ `permission.external_directory` เป็น `ask` → เดิมบันทึกเป็น OK เพราะ exit 0 · ตอนนี้ตรวจ stderr `auto-rejecting` + tool error "ปฏิเสธสิทธิ์" → `FLASH_RUN=DENIED` + บรรทัด `DENIED:` บอก path + ทางแก้ 2 ทาง (`external_dirs` ใน `.flash.json` / `opencode.json`) · มี commit/`DONE` = คง OK แต่ `WARN:` · `wait` คืน 1 · หน้าเว็บป้าย DENIED + 🚫 path + ทางแก้ในกล่อง log · `.flash.json` ช่อง `external_dirs` → flashq ส่งสิทธิ์ผ่าน `OPENCODE_CONFIG_CONTENT` (ไม่แตะไฟล์ผู้ใช้) + ตรวจก่อนรันว่า `opencode.json`/server สดอนุญาตแล้วหรือยัง (`PERM:`/`WARN:`) + เตือน `opencode.json` อ่านไม่ได้ · บรรทัดคำสั่งที่กฎ agent บล็อกเปลี่ยนชื่อเป็น `RULE_DENIED:`
+
 ## 2026-10-20
 - **มิเตอร์ token Claude ต่อแผน**: `flashq usage <แผน|โปรเจกต์> [--since วัน]` สแกน transcript ของ Claude Code (โฟลเดอร์ที่ cwd ตรงกับโปรเจกต์ + worktree · อ่านทีละบรรทัด) รวม token แยกขั้นวางแผน/ตรวจ/รอบแก้ + โมเดล · USD โดยประมาณ (ทับราคาได้ใน `config.json` ช่อง `prices`) · บรรทัด `USAGE=…` · เก็บ `~/.flashq/usage/<แผน>.json` → การ์ดงาน/การ์ดธงโชว์ "🪙 Claude ใช้ ~Nk token (~$x) · วางแผน a% · ตรวจ b%"
 - **ประหยัด token Claude**: `flashq run` ตรวจขนาดแผน (เตือน 300/100/30 · ปฏิเสธ 600/200/60 บรรทัด · ห้ามภาคผนวกโค้ด) · 1 แผน = 1 session (`flashq wait` + subagent `flash-checker`) · hook `image_guard` + `flashq shrink` กันรูปใหญ่ · `install --hooks`

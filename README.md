@@ -22,7 +22,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 - **ตัวเฝ้า shell** (`shell_idle_min` 4 · 0 = ปิด · Windows + `--attach` server): opencode รันคำสั่งแล้วรอเฉย ๆ ไม่รู้ว่าโปรเซสตายหรือยังทำงาน · เมื่อ log เงียบเกิน 30 วิ flashq ถาม server ว่า bash ตัวไหนกำลังรัน แล้วหาโปรเซสของคำสั่งนั้น (shell + ลูกหลาน) วัด CPU+I/O ทุก 30 วิ · ขยับ = ปล่อยไป (กันเกณฑ์งานค้างไม่ให้ฆ่างาน build ยาวที่ยังทำงานจริง) · นิ่งสนิทเกิน `shell_idle_min` หรือ shell จบแล้วแต่ลูกกำพร้า (`start /b`, `&`, server) ยังถือ handle ไว้ → **ฆ่าเฉพาะคำสั่งนั้น** tool คืน error แล้วโมเดลทำต่อ (ไม่ฆ่าทั้งงาน) · พิมพ์ `SHELL_WATCH:` + บันทึก `shell_kills` ในงาน · หน้าออฟฟิศมี 🛡 ยามเฝ้า shell (ชุดกรมท่า ถือไฟฉาย) แถบล่างสุด + บรรทัด 🛡 บนการ์ดงาน
 - **ตรวจสด ๆ: `flashq why [id]`** (ไม่ระบุ id = ทุกงานที่รัน · ปุ่ม `🔍 ตรวจสาเหตุ` บนการ์ดงานในหน้าออฟฟิศ) — บอก log เงียบกี่นาที · subagent/tool ขยับล่าสุดเมื่อไร · tool ไหนรันอยู่มานานเท่าไร แล้วสรุป: ปกติ / tool นานแต่อาจยาวจริง / **tool ค้าง** (ถ้าคำสั่งเปิดโปรเซสเบื้องหลังจะเตือนว่า tool รอ handle ไม่คืน) / **รอโมเดล** / แยกไม่ได้ (`--attach none`) · ความคืบหน้า "เสร็จ N/M งาน" ในหน้า UI นับจากกล่อง `[x]` ในแผนจริง
 - **ค้างที่ shell/tool หรือที่โมเดล?** เมื่อ `--attach live` flashq ถามเซิร์ฟเวอร์ opencode ว่า session + subagent ลูกขยับล่าสุดเมื่อไรและมี tool ไหนรันอยู่ → (ส่ง `directory` ของโปรเจกต์ไปด้วย · ไล่ subagent ซ้อนได้ · ถามสดทุกครั้งก่อนตัดสินฆ่า) → (1) log ของ parent เงียบแต่ subagent ยังทำอยู่ = **ไม่ฆ่า** (2) ค้างจริง = ฆ่า + สั่ง server `abort` session นั้นด้วย (ไม่งั้น session บน server ยังเดินต่อ แก้ไฟล์ซ้อนกับรอบลองใหม่) แล้วบอก `สาเหตุ: tool bash ค้าง (<คำสั่ง>) รันมา N นาที` หรือ `ไม่มี tool รัน → รอโมเดล/ผู้ให้บริการตอบไม่ได้` (3) `--attach none` ถามไม่ได้ → บอกว่าแยกสาเหตุไม่ได้ · worker ถูกสั่งให้ตั้ง timeout ให้คำสั่ง shell เองด้วย
-- **`DENIED:`** = agent พยายามรันคำสั่ง shell ที่สิทธิ์ไม่อนุญาต (เช่น find/python) — ไม่ใช่งานล้มเหลว · agent อ่านอย่างเดียวอนุญาต git show/diff/log/grep/status/ls-files/blame · ls cat head tail wc grep (ห้าม `>`)
+- **`RULE_DENIED:`** = agent พยายามรันคำสั่ง shell ที่กฎของ agent ไม่อนุญาต (เช่น find/python) — ไม่ใช่งานล้มเหลว · agent อ่านอย่างเดียวอนุญาต git show/diff/log/grep/status/ls-files/blame · ls cat head tail wc grep (ห้าม `>`) · ต่างจากสถานะ `DENIED` (opencode ปฏิเสธสิทธิ์เอง งานไม่ได้ทำ — ดูหัวข้อ "งานถูกปฏิเสธสิทธิ์")
 - `CITATIONS:` ของผู้สืบ = "ตรงถึงโค้ด" (คัดข้อความอยู่ในบรรทัดจริง) · "ตรงแค่ไฟล์/บรรทัด" · "ผิด" — พิสูจน์ได้แค่ว่าโค้ดที่อ้างมีจริง ไม่ใช่ว่าเป็นต้นตอจริง
 - ข้อจำกัดที่ยังทดสอบกับของจริงไม่ได้: โควต้าหมดจริงของผู้ให้บริการ (ทดสอบได้เฉพาะ opencode ปลอม) · ผู้ตรวจทดสอบจริงแล้วกับ commit ที่ใส่ความผิดไว้ 3 จุด (สูตรผิด/ไฟล์นอกแผน/log ปลอม) จับได้ครบ แต่ยังเป็นตัวอย่างเดียว
 
@@ -156,9 +156,18 @@ python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
   "require_plan_in_remote": true,
   "command": "flash",
   "timeout_min": 480,
-  "rules": "กติกาเพิ่มที่ /flash แบบ global ต้องทำตาม (เช่น คำสั่ง commit ของโปรเจกต์)"
+  "rules": "กติกาเพิ่มที่ /flash แบบ global ต้องทำตาม (เช่น คำสั่ง commit ของโปรเจกต์)",
+  "external_dirs": ["D:/MyCode/iris-game/*"]
 }
 ```
+
+### งานถูกปฏิเสธสิทธิ์ (DENIED)
+- `opencode run` เป็นโหมดไม่โต้ตอบ: ถ้า agent แตะไฟล์**นอกโปรเจกต์**และ `permission.external_directory` ใน `~/.config/opencode/opencode.json` เป็น `ask` opencode จะตอบ "ไม่อนุญาต" ให้เองทันที (stderr: `permission requested: external_directory (<path>); auto-rejecting`) → subagent ล้ม งานจบ exit 0 โดยไม่ได้ทำอะไร
+- flashq ตรวจ stderr + tool error นั้นแล้วให้ `FLASH_RUN=DENIED` (ไม่ใช่ OK) พร้อมบรรทัด `DENIED:` บอก path ที่ถูกปฏิเสธ + ทางแก้ 2 ทาง · `flashq wait` คืน exit 1 เหมือน FAIL · หน้าเว็บมีป้าย DENIED + 🚫 path บนแถวงาน + ทางแก้ในกล่อง log · ถ้าถูกปฏิเสธแต่มี commit ใหม่หรือ worker ตอบ `DONE` = สำเร็จบางส่วน → คง OK แต่พิมพ์ `WARN:` รายการที่ถูกปฏิเสธ
+- **ทางแก้ 1 (แนะนำ)**: ใส่ `"external_dirs": ["D:/path/*", ...]` ใน `.flash.json` → ทุกครั้งที่รัน flashq ส่งสิทธิ์ให้ opencode ผ่าน `OPENCODE_CONFIG_CONTENT` (รวมกับ config ของผู้ใช้ตอนเริ่ม ไม่แตะไฟล์ `opencode.json`) · ไม่ใส่ `*` = เติม `/*` ให้ · ใช้ `/` หรือ `\\` ก็ได้
+  - ข้อจำกัด `--attach live`: server สด (4096) โหลด config ครั้งเดียวตอนเปิด → flashq ส่ง `external_dirs` ของทุกโปรเจกต์ที่เคยส่งงานให้ตอน**เปิด** server เท่านั้น · เพิ่ม `external_dirs` ทีหลังต้องปิด server (`taskkill /PID <pid ใน ~/.flashq/live_server.pid> /T /F`) แล้วสั่งงานใหม่ flashq จะเปิดให้เองพร้อมสิทธิ์ใหม่ · ก่อนรัน flashq ถาม `/config` ของ server แล้วพิมพ์ `WARN:` ถ้ายังไม่ครอบ
+- **ทางแก้ 2 (ถาวร)**: เพิ่มใน `opencode.json` ช่อง `permission.external_directory` เช่น `"D:\\MyCode\\iris-game\\*": "allow"` (รูปแบบเดียวกับที่ opencode รายงาน · Windows = `\\`) แล้วรีสตาร์ต server สด
+- ก่อนรันทุกครั้ง flashq พิมพ์ `PERM:`/`WARN:` บอกว่า `external_dirs` ถูกอนุญาตแล้วหรือยัง และเตือนถ้า `opencode.json` อ่านไม่ได้ (JSON เสีย เช่นลืมคอมมา — opencode จะเปิดไม่ขึ้น)
 
 ## ดูสดใน opencode desktop
 - ค่าเริ่มต้นรันผ่าน `opencode serve --port 4096` (เปิดค้างให้เองถ้ายังไม่มี · cwd = `~/.flashq` ไม่ผูกโปรเจกต์ · ส่ง `--dir` ของโปรเจกต์ทุกครั้ง)
