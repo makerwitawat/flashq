@@ -67,22 +67,129 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ไม่พบไฟล์แผน", r.stdout)
 
     def test_big_plan_warn_and_reject(self):
-        """แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash: เกินเพดานอ่อน = เตือนแต่ส่ง · เกินเพดานแข็ง = ปฏิเสธ (เว้นแต่ --big-plan) · นับ fence ~~~~ ด้วย"""
-        code = lambda n, f="```": f + "python\n" + "x = 1\n" * n + f + "\n"
-        (self.proj / "BIG.md").write_text("# แผน\n" + code(450, "~~~~"), encoding="utf-8")
+        """แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash: เกินเพดานอ่อน (300/100/30) = เตือนแต่ส่ง · เกินเพดานแข็ง (600/200/60) หรือภาคผนวกโค้ด = ปฏิเสธ
+        ไม่มีทางลัด (--big-plan ถูกตัด) · ยกเว้นส่งเฉพาะรอบแก้ T-xxR ของแผนที่เคยรันแล้ว = เตือนผ่าน · นับ fence ~~~~ ด้วย"""
+        code = lambda n, f="```": f + "python\n" + "x = 1\n" * n + f + "\n"  # noqa: E731
+        (self.proj / "BIG.md").write_text("# แผน\n" + code(250, "~~~~"), encoding="utf-8")
         r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
         self.assertIn("แผนใหญ่เกิน", r.stdout)
-        self.assertIn("โค้ดใน ``` 450 บรรทัด", r.stdout)
+        self.assertIn("รวม 250 บรรทัด", r.stdout)
+        self.assertIn("บล็อกโค้ดเดียวยาว 250 บรรทัด", r.stdout)
         r = self.run_q("run", "BIG.md", "T-01", "--attach", "none", "--no-open", "--big-plan")
-        self.assertNotIn("แผนใหญ่เกิน", r.stdout)
-        self.assertEqual(r.returncode, 0, r.stdout)
-        (self.proj / "MID.md").write_text("# แผน\n" + code(250), encoding="utf-8")
+        self.assertNotEqual(r.returncode, 0)  # ทางลัดเดิมไม่มีแล้ว
+        self.assertIn("--big-plan", r.stderr)
+        # โค้ดรวมไม่เกิน แต่บล็อกเดียวยาวเกิน 60 = ปฏิเสธ · บอกบรรทัดที่บล็อกเริ่ม
+        (self.proj / "BLOCK.md").write_text("# แผน\n\nข้อความ\n" + code(61), encoding="utf-8")
+        r = self.run_q("run", "BLOCK.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("บล็อกโค้ดเดียวยาว 61 บรรทัด (บรรทัด 4", r.stdout)
+        # หัวข้อภาคผนวกที่มีโค้ด >20 บรรทัด = ปฏิเสธ แม้ขนาดรวมไม่เกิน
+        (self.proj / "APP.md").write_text("# แผน\n- [ ] T-01 x\n\n## ภาคผนวก A — โค้ดเต็ม\n" + code(25), encoding="utf-8")
+        r = self.run_q("run", "APP.md", "T-01", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ภาคผนวก", r.stdout)
+        (self.proj / "APPEN.md").write_text("# plan\n\n## Appendix: full code\n" + code(25), encoding="utf-8")
+        self.assertEqual(self.run_q("run", "APPEN.md", "T-01", "--attach", "none", "--no-open").returncode, 1)
+        (self.proj / "APPOK.md").write_text("# แผน\n\n## ภาคผนวก — หมายเหตุ\n" + code(5), encoding="utf-8")  # โค้ดสั้นในภาคผนวก = ผ่าน
+        self.assertEqual(self.run_q("run", "APPOK.md", "T-01", "--attach", "none", "--no-open").returncode, 0)
+        # เกินเพดานอ่อน = เตือนแต่ส่ง
+        (self.proj / "MID.md").write_text("# แผน\n" + "".join(code(25) for _ in range(5)), encoding="utf-8")  # โค้ดรวม 125 บล็อกละ 25
         r = self.run_q("run", "MID.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("WARN: แผนใหญ่", r.stdout)
         r = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open")
         self.assertNotIn("แผนใหญ่", r.stdout)
+        # รอบแก้ T-xxR ของแผนที่เคยรันแล้ว (MID.md มีประวัติ) → แผนโตเกินเพดานแข็งก็เตือนผ่าน · แผนไม่เคยรัน = ปฏิเสธ
+        (self.proj / "MID.md").write_text("# แผน\n" + code(250), encoding="utf-8")
+        r = self.run_q("run", "MID.md", "T-01R", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("รอบแก้", r.stdout)
+        r = self.run_q("run", "MID.md", "T-01R,T-02", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        r = self.run_q("run", "BIG.md", "T-01R", "--attach", "none", "--no-open")
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_wait_blocks_until_done_and_reports(self):
+        """wait <job|แผน> บล็อกจนงานจบแล้วพิมพ์ FLASH_RUN=... (exit 0 = OK · 1 = ไม่ OK/ไม่พบ · 3 = ยังไม่จบ)"""
+        p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "5"}, wait=False)
+        time.sleep(2.5)
+        r = self.run_q("wait", "PLAN.md", "--timeout-min", "0.02", "--poll", "0.5")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("FLASH_WAIT=TIMEOUT", r.stdout)
+        r = self.run_q("wait", "PLAN.md", "--poll", "0.5")
+        p1.communicate(timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("FLASH_RUN=OK job=", r.stdout)
+        self.assertIn("PLAN.md T-01", r.stdout)
+        jid = re.search(r"job=(\S+)", r.stdout).group(1)
+        r = self.run_q("wait", jid[:10])  # งานจบแล้ว = ตอบทันที
+        self.assertEqual(r.returncode, 0, r.stdout)
+        r = self.run_q("wait", "NOPE.md")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FLASH_WAIT=NOJOB", r.stdout)
+        p2 = self.run_q(*self.base(), env={"FAKE_MODE": "fail"})
+        self.assertIn("FLASH_RUN=FAIL", p2.stdout)
+        r = self.run_q("wait", "PLAN.md")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
+    def test_shrink_image(self):
+        """shrink ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ด้านยาว ≤ --max · พื้นโปร่งเป็นขาว"""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("ไม่มี Pillow")
+        Image.new("RGBA", (2400, 1200), (255, 0, 0, 0)).save(self.proj / "big.png")
+        r = self.run_q("shrink", "big.png")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = self.proj / ".tmp" / "shrink" / "big.jpg"
+        self.assertTrue(out.exists(), r.stdout)
+        self.assertIn("2400x1200→800x400", r.stdout)
+        self.assertEqual(Image.open(out).size, (800, 400))
+        r = self.run_q("shrink", "missing.png")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("SHRINK=FAIL", r.stdout)
+
+    def test_image_guard_hook(self):
+        """hook กันอ่านรูป: ใหญ่ >1200px = บล็อก (exit 2 + วิธีย่อ) · รูปเล็กผ่าน · เกิน image_max_reads ต่อ session = บล็อก · ไฟล์ปิดยาม = ผ่าน · ไม่ใช่รูป/พัง = ผ่าน"""
+        import struct
+        import zlib
+        guard = REPO / "hooks" / "image_guard.py"
+
+        def png(path, w, h):  # PNG เล็กสุด (header ถูกต้องพอให้อ่านขนาด)
+            def chunk(t, d):
+                return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+            raw = zlib.compress(b"".join(b"\x00" + b"\x00" * (w * 3) for _ in range(h)))
+            path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", raw) + chunk(b"IEND", b""))
+
+        def hook(file_path, session="s1"):
+            data = json.dumps({"tool_name": "Read", "session_id": session, "tool_input": {"file_path": str(file_path)}})
+            return subprocess.run([sys.executable, str(guard)], input=data, capture_output=True, text=True, encoding="utf-8",
+                                  env=self.env, timeout=30)
+        png(self.proj / "big.png", 1600, 900)
+        png(self.proj / "small.png", 640, 480)
+        r = hook(self.proj / "big.png")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("1600x900", r.stderr)
+        self.assertIn("shrink", r.stderr)
+        self.assertEqual(hook(self.proj / "small.png").returncode, 0)
+        (self.proj / ".tmp" / "shrink").mkdir(parents=True)
+        png(self.proj / ".tmp" / "shrink" / "big.jpg", 1600, 900)  # ไฟล์ที่ย่อแล้ว (ชื่อ .jpg เนื้อ png ก็อ่านได้) ไม่ตรวจขนาด
+        self.assertEqual(hook(self.proj / ".tmp" / "shrink" / "big.jpg").returncode, 0)
+        self.assertEqual(hook(self.proj / "PLAN.md").returncode, 0)
+        self.assertEqual(hook(self.proj / "none.png").returncode, 0)
+        (self.home).mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"image_max_reads": 3}), encoding="utf-8")
+        self.assertEqual(hook(self.proj / "small.png").returncode, 0)  # s1 นับแล้ว 3 (small + shrink + นี้ · รูปที่ถูกบล็อกไม่นับ) → ครั้งถัดไปเกินเพดาน
+        r = hook(self.proj / "small.png")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("อ่านรูปไปแล้ว", r.stderr)
+        self.assertEqual(hook(self.proj / "small.png", session="s2").returncode, 0)  # session อื่นนับแยก
+        (self.home / "image_guard_off").write_text("", encoding="utf-8")
+        self.assertEqual(hook(self.proj / "big.png").returncode, 0)  # ปิดยาม
+        self.assertEqual(subprocess.run([sys.executable, str(guard)], input="not json", capture_output=True, text=True,
+                                        env=self.env, timeout=30).returncode, 0)
 
     PRECHECK_PLAN = """# แผน
 - [ ] **T-01** `src\\a.cpp` (`f`)
@@ -253,10 +360,35 @@ class FlashqTest(unittest.TestCase):
         self.assertNotIn("{{FLASHQ}}", plan)
         self.assertEqual((claude / "commands" / "flash-check.md").read_text(encoding="utf-8"), "ของผู้ใช้เอง\n")
         self.assertTrue((self.tmp / "command" / "flash.md").exists())
+        self.assertTrue((claude / "agents" / "flash-checker.md").exists(), r.stdout)
+        self.assertTrue((claude / "hooks" / "image_guard.py").exists(), r.stdout)
+        self.assertNotIn("{{FLASHQ}}", (claude / "hooks" / "image_guard.py").read_text(encoding="utf-8"))
+        self.assertIn("ยังไม่ได้ลงทะเบียน image_guard", r.stdout)
         r = self.run_q("install", "--force", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("flashq:managed", (claude / "commands" / "flash-check.md").read_text(encoding="utf-8"))
         self.assertTrue(list((claude / "commands").glob("flash-check.md.bak-flashq-*")))
+        # ไฟล์ที่ flashq ติดตั้งเองเปลี่ยน = ทับเลย ไม่สำรอง (ต้นฉบับอยู่ใน git)
+        (claude / "commands" / "flash-plan.md").write_text(plan + "\nแก้ทดลอง\n", encoding="utf-8")
+        r = self.run_q("install", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual((claude / "commands" / "flash-plan.md").read_text(encoding="utf-8"), plan)
+        self.assertFalse(list((claude / "commands").glob("flash-plan.md.bak-flashq-*")))
+        # --hooks ลงทะเบียนใน settings.json แบบทำซ้ำได้ · ไม่ทับค่าอื่น
+        (claude / "settings.json").write_text(json.dumps({"model": "claude-sonnet-5", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}), encoding="utf-8")
+        r = self.run_q("install", "--hooks", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ลงทะเบียน", r.stdout)
+        st = json.loads((claude / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(st["model"], "claude-sonnet-5")
+        self.assertEqual(len(st["hooks"]["Stop"]), 1)
+        pre = st["hooks"]["PreToolUse"]
+        self.assertEqual(len(pre), 1)
+        self.assertEqual(pre[0]["matcher"], "Read")
+        self.assertIn("image_guard.py", pre[0]["hooks"][0]["command"])
+        r = self.run_q("install", "--hooks", env=env)
+        self.assertIn("เหมือนเดิม  hook", r.stdout)
+        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 1)
 
     def start_ui(self):
         with socket.socket() as s:
@@ -640,6 +772,13 @@ class FlashqTest(unittest.TestCase):
             "- [ ] **T-02** `src/a.cpp`\n  - ไฟล์: `include/b.h`\n"
             "- [ ] **T-03** `src/c.cpp`\n"
             "## 4. บันทึกผล\n`src/zzz.cpp`\n", encoding="utf-8")
+        self.touch_src()
+
+    def touch_src(self):
+        """ไฟล์ที่แผนทดสอบอ้างต้องมีจริง (ด่านแผนพิการของ flashq run)"""
+        for f, body in (("src/a.cpp", "old/ignored.cpp\n"), ("src/c.cpp", ""), ("include/b.h", "")):
+            (self.proj / f).parent.mkdir(parents=True, exist_ok=True)
+            (self.proj / f).write_text(body, encoding="utf-8")
 
     def test_plan_files_and_overlap(self):
         """ดึง path ไฟล์จากแผนตามงานที่สั่ง (ข้าม ก่อน/commit · ตรวจไม่ได้ = None) + เทียบไฟล์ซ้อน"""
@@ -750,6 +889,7 @@ class FlashqTest(unittest.TestCase):
     def auto_plan(self):
         (self.proj / "PLAN.md").write_text(
             "# plan\n- [ ] **T-01** `src/a.cpp`\n- [ ] **T-02** `src/a.cpp`\n- [ ] **T-03** `src/c.cpp`\n", encoding="utf-8")
+        self.touch_src()
 
     def by_key(self):
         out = {}
@@ -1559,8 +1699,116 @@ class FlashqTest(unittest.TestCase):
     def test_denied_tool_calls_are_counted_not_failures(self):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "1"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("DENIED: 1 คำสั่ง", r.stdout)
+        self.assertIn("RULE_DENIED: 1 คำสั่ง", r.stdout)
         self.assertIn("find . -name x", r.stdout)
+        self.assertNotIn("FLASH_RUN=DENIED", r.stdout)  # กฎของ agent บล็อก ≠ opencode ปฏิเสธสิทธิ์
+
+    def test_permission_denied_is_not_ok(self):
+        """เหตุจริง 2026-10-20: opencode ปฏิเสธสิทธิ์ external_directory เอง (โหมดไม่โต้ตอบ) งานจบ exit 0 โดยไม่ได้ทำ → ต้องเป็น DENIED ไม่ใช่ OK
+        พิมพ์ path ที่ถูกปฏิเสธ + ทางแก้ 2 ทาง · wait คืน 1 · มี DONE (สำเร็จบางส่วน) = คง OK แต่เตือน"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "denied"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=DENIED", r.stdout)
+        self.assertIn("DENIED: opencode ปฏิเสธสิทธิ์ 1 รายการ", r.stdout)
+        self.assertIn("external_directory: D:\\outside\\lib\\*", r.stdout)
+        self.assertIn('"external_dirs": ["D:/outside/lib/*"]', r.stdout)
+        self.assertIn('permission.external_directory เพิ่ม "D:\\\\outside\\\\lib\\\\*": "allow"', r.stdout)
+        j = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual((j["status"], j["result"]), ("denied", "DENIED"))
+        self.assertEqual(j["perm_denied"], [{"kind": "external_directory", "path": "D:\\outside\\lib\\*"}])
+        r = self.run_q("wait", "PLAN.md")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=DENIED", r.stdout)
+        self.assertIn("D:\\outside\\lib\\*", r.stdout)
+        self.assertIn("external_dirs", r.stdout)
+        r = self.run_q("list", "--all")
+        self.assertIn("denied", r.stdout)
+        # worker ตอบ DONE (บางงานสำเร็จ) → คง OK แต่เตือนรายการที่ถูกปฏิเสธ
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "denied", "FAKE_TEXT": "T-01 DONE แล้ว · T-02 ถูกปฏิเสธสิทธิ์"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertIn("WARN: opencode ปฏิเสธสิทธิ์ 1 รายการระหว่างทำงาน แต่มีงานสำเร็จบางส่วน", r.stdout)
+        self.assertIn("D:\\outside\\lib\\*", r.stdout)
+        # ตัดสินจาก log จริงได้ด้วยฟังก์ชันเดียวกัน (stderr ของ opencode มีสี ANSI นำหน้า)
+        sys.path.insert(0, str(REPO))
+        import flashq
+        perm = flashq.perm_denials("\x1b[93m! \x1b[0mpermission requested: external_directory (D:\\a\\b\\*); auto-rejecting\n", ["task T-01"])
+        self.assertEqual(perm, [{"kind": "external_directory", "path": "D:\\a\\b\\*"}])
+        self.assertEqual(flashq.perm_denials("", ["task T-01", "task T-01"]), [{"kind": "tool", "path": "task T-01"}])  # ไม่มี stderr = ใช้ tool error
+
+    def test_external_dirs_precheck_and_config_content(self):
+        """`.flash.json` ช่อง external_dirs → ส่งสิทธิ์ให้ opencode ผ่าน OPENCODE_CONFIG_CONTENT (ไม่แตะ opencode.json) ·
+        opencode.json ยังไม่มี allow → บอกบรรทัด JSON ที่ต้องเพิ่ม · มีแล้ว → ไม่เตือน · opencode.json เสีย → เตือน · server สด (--attach) ยังไม่อนุญาต → WARN จะ DENIED"""
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "external_dirs": ["D:/outside/lib/*", "D:\\other"]}), encoding="utf-8")
+        env_out = self.tmp / "env.txt"
+        r = self.run_q(*self.base(), env={"FAKE_ENV_OUT": str(env_out)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PERM: ส่งสิทธิ์ external_dirs ให้ opencode รอบนี้ผ่าน OPENCODE_CONFIG_CONTENT", r.stdout)
+        self.assertIn("ยังไม่มี allow ของ D:/outside/lib/*, D:/other/*", r.stdout)
+        self.assertIn('"D:\\\\outside\\\\lib\\\\*": "allow"', r.stdout)
+        rules = json.loads(env_out.read_text(encoding="utf-8"))["permission"]["external_directory"]
+        self.assertEqual(rules.get("D:/outside/lib/*"), "allow")
+        self.assertEqual(rules.get("D:/other/*"), "allow")  # ไม่มี * = เติม /* ให้
+        self.assertEqual(rules.get("D:\\outside\\lib\\*"), "allow")  # ใส่ทั้งสองแบบบน Windows
+        # opencode.json อนุญาตแล้ว (รูปแบบ \\ · กฎเจาะจงทับ "*": "ask") → ไม่เตือน
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        cfg["permission"] = {"external_directory": {"*": "ask", "D:\\outside\\*": "allow", "D:/other/*": "allow"}}
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PERM: ส่งสิทธิ์ external_dirs", r.stdout)
+        self.assertNotIn("ยังไม่มี allow", r.stdout)
+        self.assertNotIn("WARN: อ่าน", r.stdout)
+        # ไม่มี external_dirs = ไม่พิมพ์อะไรเพิ่ม · opencode.json เสีย (ลืมคอมมา) → เตือน
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False}), encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertNotIn("PERM:", r.stdout)
+        self.oc_cfg.write_text('{"permission": {"external_directory": {"*": "ask"\n "D:/x/*": "allow"}}}', encoding="utf-8")
+        r = self.run_q(*self.base())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("WARN: อ่าน", r.stdout)
+        self.assertIn("JSON เสีย", r.stdout)
+        # server สด: ถาม /config ของ server (โหลด config ตอนเปิด ไม่เห็น env ของงาน)
+        import http.server
+        import threading
+        sys.path.insert(0, str(REPO))
+        import flashq
+        perm_srv = {"external_directory": {"*": "ask"}}
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"permission": perm_srv, "provider": {"p": {"options": {"apiKey": "x"}}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}"
+            flashq.OC_CONFIG = self.oc_cfg
+            flashq.HOME = self.home
+            out = "\n".join(flashq.perm_precheck(["D:/outside/lib/*"], url, self.proj))
+            self.assertIn("ยังไม่อนุญาต external_dirs: D:/outside/lib/*", out)
+            self.assertIn("(DENIED)", out)
+            self.assertIn('"D:\\\\outside\\\\lib\\\\*": "allow"', out)
+            self.assertNotIn("apiKey", out)
+            perm_srv["external_directory"]["D:/outside/*"] = "allow"
+            out = "\n".join(flashq.perm_precheck(["D:/outside/lib/*"], url, self.proj))
+            self.assertIn("server opencode อนุญาต external_dirs แล้ว", out)
+            self.assertNotIn("WARN: server", out)
+        finally:
+            srv.shutdown()
+        # perm_allows: กฎเจาะจงชนะ "*" · deny เจาะจงชนะ allow กว้าง · ค่าเป็นสตริง
+        self.assertTrue(flashq.perm_allows({"*": "ask", "D:\\x\\*": "allow"}, "D:/x/y/*"))
+        self.assertFalse(flashq.perm_allows({"*": "allow", "D:/x/*": "deny"}, "D:/x/y/*"))
+        self.assertFalse(flashq.perm_allows({"*": "ask"}, "D:/x/*"))
+        self.assertTrue(flashq.perm_allows("allow", "D:/x/*"))
+        self.assertFalse(flashq.perm_allows(None, "D:/x/*"))
+        self.assertEqual(flashq.external_dirs({"external_dirs": ["D:/a", "D:/b/*", " "]}), ["D:/a/*", "D:/b/*"])
 
     def test_investigate_subagent_fails_and_never_conflicts(self):
         r = self.run_q("investigate", "--no-open", "สืบหน่อย", env={"FAKE_MODE": "subagent"})
@@ -1715,6 +1963,206 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ชนกับ", st["queued"][0]["wait_reason"])
         for p in (p1, p2):
             self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
+
+    def test_goal_cancel_blocks_verify_and_card(self):
+        """goal cancel: บรรทัดสถานะใต้หัว GOAL · cancelled ในไฟล์สถานะ · การ์ดสถานะยกเลิก (ไม่ลบ) · รายการ commit จาก §4 ของแผน + git revert
+        · verify/check ปฏิเสธ GOAL=CANCELLED ไม่สร้างการ์ดใหม่ · ปุ่มเว็บ ยกเลิก/ซ่อน · เปิดใหม่ = ลบบรรทัด + check --reset"""
+        py = f'"{sys.executable}"'
+        goal = self.goal_repo(f"# GOAL: ค่าใหม่\n> ไฟล์ธง\n\n## เกณฑ์\n- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                              "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n")
+        gq = lambda *a: self.run_q("goal", *a)  # noqa: E731
+        self.assertIn("GOAL_CHECK=OK", gq("check", "docs/plans/GOAL_x.md").stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/5", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        git = lambda *a: subprocess.run(["git", "-C", str(self.proj), *a], capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()  # noqa: E731
+        (self.proj / "src" / "a.txt").write_text("worse\n", encoding="utf-8")
+        git("commit", "-qam", "งาน Flash (T-01)")
+        sha = git("rev-parse", "--short=7", "HEAD")
+        (goal.parent / "PLAN_FLASH_x_R1.md").write_text(
+            "# แผน\n## 1. งาน\n| a | b |\n|---|---|\n| T-09 | 1234567abc |\n## 4. บันทึกผล\n| งาน | ผล | commit | หลักฐาน |\n|---|---|---|---|\n"
+            f"| T-01 | ✅ | {sha} | log deadbeefcafe |\n| T-02 | ⛔ | — | |\n```\n# 4. ในโค้ด\n| x | {sha} |\n```\n", encoding="utf-8")
+        r = gq("cancel", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CANCEL=FAIL", r.stdout)
+        r = gq("cancel", "docs/plans/GOAL_x.md", "--reason", "ทำออกมา  แย่ลง")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("GOAL=CANCELLED", r.stdout)
+        self.assertIn(f"git revert --no-edit {sha}", r.stdout, r.stdout)
+        self.assertNotIn("deadbeef", r.stdout)  # คอลัมน์อื่นในตารางที่มีคอลัมน์ commit ไม่นับ
+        self.assertIn("ต้อง commit ไฟล์ GOAL เอง", r.stdout)
+        lines = goal.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[:4], ["# GOAL: ค่าใหม่", "", f"> **สถานะ: ยกเลิกโดย user ({time.strftime('%Y-%m-%d')})** — ทำออกมา แย่ลง", ""])
+        self.assertEqual(lines[4], "> ไฟล์ธง")
+        self.assertEqual(git("log", "-1", "--format=%s"), "งาน Flash (T-01)")  # ไม่ commit เอง
+        st = json.loads((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").read_text(encoding="utf-8"))
+        self.assertEqual((st["cancelled"]["reason"], st["cancelled"]["rounds"], len(st["rounds"])), ("ทำออกมา แย่ลง", 1, 1))
+        cards = list((self.home / "goals").glob("*.json"))
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(json.loads(cards[0].read_text(encoding="utf-8"))["cancelled"]["reason"], "ทำออกมา แย่ลง")
+        r = gq("cancel", "docs/plans/GOAL_x.md", "--reason", "ซ้ำ")
+        self.assertIn("ยกเลิกไว้แล้ว", r.stdout)
+        self.assertEqual(goal.read_text(encoding="utf-8").count("สถานะ: ยกเลิก"), 1)
+        mod = self.load_mod("flashq_goalcancel")
+        mod.GOALS_DIR = self.home / "goals"
+        g = mod.ui_goals([])[0]
+        self.assertEqual((g["verdict"], g["phase"]["step"], g["cancelled"]["reason"]), ("CANCELLED", "result", "ทำออกมา แย่ลง"))
+        self.assertEqual(mod.goal_ui_action(g["id"], "verify", {})[0], 409)
+        self.assertEqual(mod.goal_ui_action(g["id"], "claude", {})[0], 409)
+        cards[0].unlink()
+        for act in ("verify", "check", "human"):
+            r = gq(act, "docs/plans/GOAL_x.md", *(["G-01", "--pass"] if act == "human" else []))
+            self.assertIn("GOAL=CANCELLED", r.stdout, act)
+            self.assertEqual(r.returncode, 1)
+        self.assertIn("GOAL=CANCELLED", gq("check", "docs/plans/GOAL_x.md", "--reset").stdout)  # บรรทัดยกเลิกยังอยู่ = ไม่เปิดใหม่
+        r = gq("status", "docs/plans/GOAL_x.md")
+        self.assertEqual((r.returncode, "GOAL=CANCELLED" in r.stdout), (0, True))
+        self.assertEqual(list((self.home / "goals").glob("*.json")), [])  # ธงที่ยกเลิกไม่สร้างการ์ดใหม่
+        self.assertEqual(len(json.loads((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").read_text(encoding="utf-8"))["rounds"]), 1)
+        gq("cancel", "docs/plans/GOAL_x.md", "--reason", "x")  # สั่ง cancel อีก = การ์ดยกเลิกกลับมา → ซ่อนได้
+        g = mod.ui_goals([])[0]
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 200)
+        self.assertEqual((mod.ui_goals([]), list((self.home / "goals").glob("*"))), ([], []))
+        # เปิดใหม่: user ยืนยัน → ลบบรรทัดสถานะ → check --reset
+        goal.write_text("\n".join(x for x in goal.read_text(encoding="utf-8").splitlines() if "สถานะ: ยกเลิก" not in x) + "\n", encoding="utf-8")
+        self.assertIn("GOAL=CANCELLED", gq("check", "docs/plans/GOAL_x.md").stdout)  # ไม่ --reset = ยังปิดอยู่ (สถานะในไฟล์ .tmp)
+        self.assertIn("GOAL_CHECK=OK", gq("check", "docs/plans/GOAL_x.md", "--reset").stdout)
+        self.assertIn("GOAL=CONTINUE", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        g = mod.ui_goals([])[0]
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 409)  # ธงที่ยังไม่ยกเลิก = ซ่อนไม่ได้
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FLASHQ_HOME": str(self.home), "CLAUDE_CODE_SESSION_ID": ""}):  # ปุ่มเว็บเรียก goal cancel ตัวเดียวกัน
+            self.assertEqual(mod.goal_ui_action(g["id"], "cancel", {})[0], 400)  # ไม่มีเหตุ
+            code, d = mod.goal_ui_action(g["id"], "cancel", {"reason": "จากหน้าเว็บ"})
+        self.assertEqual(code, 200, d)
+        self.assertIn("GOAL=CANCELLED", d["message"])
+        self.assertEqual(mod.ui_goals([])[0]["cancelled"]["reason"], "จากหน้าเว็บ")
+
+    def test_goal_cancel_line_by_hand_and_hint(self):
+        """บรรทัด "สถานะ: ยกเลิกโดย user" ที่เขียนเองในไฟล์ GOAL = ยกเลิก (การ์ดเดิมขึ้นยกเลิก · verify ปฏิเสธ)
+        · คนตรวจไม่ผ่าน 2 รอบติด (ข้าม check --reset) / ถอยหลังซ้ำ = แนะนำพิจารณายกเลิก"""
+        py = f'"{sys.executable}"'
+        body = (f"# GOAL: ค่าใหม่\n\n## เกณฑ์\n- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "- [ ] G-02 อ่านง่าย · คนตรวจ: เปิด src/a.txt\ngoal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n")
+        goal = self.goal_repo(body)
+        gq = lambda *a: self.run_q("goal", *a)  # noqa: E731
+        gq("check", "docs/plans/GOAL_x.md")
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        self.assertIn("GOAL=DONE_NEEDS_USER", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        r = gq("human", "docs/plans/GOAL_x.md", "G-02", "--fail", "อ่านยาก")
+        self.assertNotIn("แนะนำ: พิจารณายกเลิกธง", r.stdout)
+        gq("check", "docs/plans/GOAL_x.md", "--reset")
+        (self.proj / "src" / "a.txt").write_text("new2\n", encoding="utf-8")
+        self.assertIn("GOAL=DONE_NEEDS_USER", gq("verify", "docs/plans/GOAL_x.md").stdout)
+        r = gq("human", "docs/plans/GOAL_x.md", "G-02", "--fail", "ยังอ่านยาก")
+        self.assertIn("แนะนำ: พิจารณายกเลิกธง (flashq goal cancel docs/plans/GOAL_x.md", r.stdout, r.stdout)
+        self.assertIn("คนตรวจให้ไม่ผ่าน 2 รอบติด", r.stdout)
+        gq("check", "docs/plans/GOAL_x.md", "--reset")
+        (self.proj / "src" / "a.txt").write_text("old\n", encoding="utf-8")
+        r = gq("verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=CONTINUE", r.stdout)
+        self.assertIn("แนะนำ: พิจารณายกเลิกธง", r.stdout, r.stdout)
+        mod = self.load_mod("flashq_goalcancel2")
+        mod.GOALS_DIR = self.home / "goals"
+        self.assertIn("คนตรวจให้ไม่ผ่าน 2 รอบติด", mod.ui_goals([])[0]["rounds"][-1]["cancel_hint"])
+        ok, bad = {"G-01": {"ok": True}}, {"G-01": {"ok": False}}
+        self.assertIn("ถอยหลังแล้ว 2 รอบ", mod.goal_cancel_hint({"rounds": [{"results": ok}, {"results": bad}, {"results": ok}, {"results": bad}]}))
+        self.assertEqual(mod.goal_cancel_hint({"rounds": [{"results": ok}, {"results": bad}]}), "")
+        # เขียนบรรทัดเองแบบ D:\AI (มีเหตุยาวหลังขีด) → การ์ดเดิมขึ้นยกเลิก · verify ปฏิเสธ
+        goal.write_text(body.replace("# GOAL: ค่าใหม่\n", "# GOAL: ค่าใหม่\n\n> **สถานะ: ยกเลิกโดย user (2026-10-20)** — หยุดวนที่รอบ R2 · ไม่มีแผน R3\n"), encoding="utf-8")
+        g = mod.ui_goals([])[0]
+        self.assertEqual((g["verdict"], g["cancelled"]["reason"]), ("CANCELLED", "ยกเลิกโดย user (2026-10-20) — หยุดวนที่รอบ R2 · ไม่มีแผน R3"))
+        self.assertEqual(mod.goal_ui_action(g["id"], "hide", {})[0], 200)
+        r = gq("verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=CANCELLED", r.stdout)
+        self.assertIn("หยุดวนที่รอบ R2", r.stdout)
+        self.assertEqual(list((self.home / "goals").glob("*.json")), [])
+        self.assertEqual(mod.goal_cancel_note(self.proj / "README_none.md"), "")
+
+    def test_usage_sums_claude_tokens_per_plan(self):
+        """`flashq usage <แผน>`: สแกน transcript ของ Claude Code เฉพาะโฟลเดอร์ที่ cwd ตรงกับโปรเจกต์ (รวม worktree · ไม่รวมโฟลเดอร์ชื่อคล้าย)
+        · นับเฉพาะ session ที่อ้างถึงชื่อแผน · บรรทัดซ้ำ message.id เดียวกันนับครั้งเดียว · รวม subagent · แยกขั้นวางแผน/ตรวจ/รอบแก้
+        · --since ตัดตาม mtime · บันทึก usage/<stem>.json ให้ UI · ไม่มี session = exit 1 + USAGE=…sessions=0 · โหมดโปรเจกต์รวมทุกแผน"""
+        mod = self.load_mod("flashq_usage")
+        claude = self.tmp / "claude"
+        key = mod.claude_project_key(self.proj.resolve())
+        main = claude / "projects" / key
+        wt = claude / "projects" / (key + "--claude-worktrees-w1")
+        other = claude / "projects" / (key + "-other")  # ชื่อขึ้นต้นเหมือนกันแต่คนละโปรเจกต์ → ห้ามนับ
+        for d in (main, wt, other):
+            d.mkdir(parents=True)
+        (self.proj / "docs" / "plans").mkdir(parents=True)
+        (self.proj / "docs" / "plans" / "PLAN_X.md").write_text("# แผน X\n", encoding="utf-8")
+
+        def jl(f, *entries):
+            f.write_text("".join(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n" for e in entries), encoding="utf-8")
+
+        def asst(mid, model, i, o, cr=0, cw=0, text="ok"):  # key "type" อยู่ท้าย object เหมือนไฟล์จริง (message ยาวมาก่อน)
+            return {"cwd": str(self.proj), "message": {"id": mid, "model": model, "role": "assistant",
+                                                        "content": [{"type": "text", "text": text}],
+                                                        "usage": {"input_tokens": i, "output_tokens": o, "cache_read_input_tokens": cr, "cache_creation_input_tokens": cw}},
+                    "timestamp": "2026-10-20T10:00:00.000Z", "type": "assistant"}
+
+        def user(text):
+            return {"cwd": str(self.proj), "message": {"role": "user", "content": [{"type": "text", "text": text}]}, "timestamp": "2026-10-20T09:59:00.000Z", "type": "user"}
+
+        # a = วางแผน (Opus · response เดียวถูกเขียน 2 บรรทัด → นับครั้งเดียว)
+        jl(main / "sess-a.jsonl", user("<command-name>/flash-plan</command-name> เขียนแผน docs/plans/PLAN_X.md"),
+           asst("m1", "claude-opus-5-5", 100, 50, 1000, 200), asst("m1", "claude-opus-5-5", 100, 50, 1000, 200, text="ซ้ำ"),
+           asst("m2", "claude-opus-5-5", 10, 5))
+        # b = ตรวจ (Sonnet · เรียกสกิลผ่าน tool Skill)
+        jl(main / "sess-b.jsonl", {"type": "user", "message": {"role": "user", "content": "ตรวจงานหน่อย"}},
+           {"type": "assistant", "message": {"id": "m3", "model": "claude-sonnet-5", "role": "assistant", "usage": {"input_tokens": 20, "output_tokens": 10, "cache_read_input_tokens": 500},
+                                             "content": [{"type": "tool_use", "name": "Skill", "input": {"skill": "flash-check", "args": "docs/plans/PLAN_X.md"}}]}})
+        # c = รอบแก้ ใน worktree + subagent ของมัน
+        jl(wt / "sess-c.jsonl", user("ส่งรอบแก้ T-01R ของ PLAN_X ให้ Flash"), asst("m4", "claude-opus-5-5", 30, 15))
+        sub = wt / "sess-c" / "subagents" / "agent-s1.jsonl"
+        sub.parent.mkdir(parents=True)
+        jl(sub, asst("m5", "claude-haiku-5-5", 5, 5))
+        # d = แผนอื่น · e = โฟลเดอร์คนละโปรเจกต์ที่พูดถึง PLAN_X
+        jl(main / "sess-d.jsonl", user("/flash-plan PLAN_Y"), asst("m6", "claude-opus-5-5", 7, 7))
+        jl(other / "sess-e.jsonl", user("/flash-plan PLAN_X"), asst("m7", "claude-opus-5-5", 999, 999))
+        env = {"FLASHQ_CLAUDE_HOME": str(claude)}
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # in ใหม่ = input + cache เขียน: (110+20+35) + 200 · out = 55+10+20 · cache อ่าน = 1000+500
+        self.assertIn("USAGE=PLAN_X claude_in=365 claude_out=85 cache_read=1500 sessions=3", r.stdout)
+        self.assertIn("วางแผน", r.stdout)
+        self.assertIn("ตรวจ", r.stdout)
+        self.assertIn("รอบแก้", r.stdout)
+        self.assertNotIn("sess-e", r.stdout)
+        u = json.loads((self.home / "usage" / "PLAN_X.json").read_text(encoding="utf-8"))
+        self.assertEqual(u["sessions"], 3)
+        self.assertEqual({k: v["sessions"] for k, v in u["by_phase"].items()}, {"plan": 1, "check": 1, "fix": 1})
+        self.assertEqual({x["id"]: x["phase"] for x in u["session_list"]}, {"sess-a": "plan", "sess-b": "check", "sess-c": "fix"})
+        self.assertEqual(u["total"]["tokens"], 365 + 85 + 1500)
+        self.assertEqual(sorted(u["by_model"]), ["claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5"])
+        self.assertGreater(u["total"]["usd"], 0)
+        self.assertEqual(sum(v["pct"] for v in u["by_phase"].values()), 100)
+        # UI: บรรทัดสั้นบนการ์ดงาน/ธง
+        mod.USAGE_DIR = self.home / "usage"
+        b = mod.usage_brief("PLAN_X")
+        self.assertEqual((b["sessions"], b["tokens"], sorted(b["pct"])), (3, 1950, ["check", "fix", "plan"]))
+        self.assertEqual(mod.usage_brief("PLAN_NONE"), {})
+        # --since: session เก่ากว่าช่วงถูกตัดออก
+        old = time.time() - 40 * 86400
+        os.utime(main / "sess-a.jsonl", (old, old))
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", "--since", "30", env=env)
+        self.assertIn("USAGE=PLAN_X claude_in=55 claude_out=30 cache_read=500 sessions=2", r.stdout)
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", "--since", "60", env=env)
+        self.assertIn("sessions=3", r.stdout)
+        # ไม่มี session ที่อ้างถึงแผน → exit 1 แต่ยังพิมพ์บรรทัด USAGE
+        r = self.run_q("usage", "docs/plans/PLAN_Z.md", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("USAGE=PLAN_Z claude_in=0 claude_out=0 cache_read=0 sessions=0", r.stdout)
+        self.assertFalse((self.home / "usage" / "PLAN_Z.json").exists())
+        # โหมดโปรเจกต์: ทุกแผนที่ถูกพูดถึง
+        r = self.run_q("usage", ".", "--since", "60", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("USAGE=PLAN_X ", r.stdout)
+        self.assertIn("USAGE=PLAN_Y claude_in=7 claude_out=7 cache_read=0 sessions=1", r.stdout)
+        self.assertIn("รวมทั้งโปรเจกต์ (session ไม่ซ้ำ 4)", r.stdout)
+        # ไม่เคยเปิดโปรเจกต์ใน Claude Code เลย → exit 1
+        r = self.run_q("usage", "docs/plans/PLAN_X.md", env={"FLASHQ_CLAUDE_HOME": str(self.tmp / "empty")})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sessions=0", r.stdout)
 
 
 class NewProjectTest(unittest.TestCase):

@@ -18,8 +18,10 @@
   python flashq.py verify docs\\PLAN_X.md T-01 [--agent flash-verifier] [--model M]   ส่งผู้ตรวจ (อ่านอย่างเดียว · ไม่ชนงานอื่น)
   python flashq.py run ... --agent <ชื่อ> --title <ชื่อ> --readonly   เลือก agent/ชื่อ session/งานอ่านอย่างเดียวเอง
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
+  python flashq.py wait <job|แผน> [--timeout-min 480]                  รอจนงานจบแล้วพิมพ์ FLASH_RUN=... (รันใน background ของ Claude · ไม่ต้อง sleep/poll)
+  python flashq.py shrink <รูป...> [--max 800]                           ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (รูปใหญ่กิน token ทุก turn)
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
-  python flashq.py install [--force]                                    ติดตั้งคำสั่ง /flash + agent แบบ global ให้ opencode
+  python flashq.py install [--force] [--hooks]                          ติดตั้ง /flash + agent (opencode) · /flash-* + flash-checker + hooks (Claude) แบบ global · --hooks = ลงทะเบียน image_guard ใน ~/.claude/settings.json
   python flashq.py init [--project <dir>] [--force] [--install] [--commit]       ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
@@ -28,7 +30,9 @@
   python flashq.py review start <แผน> [<งาน>] | done <แผน> pass|fail [--note ...] | list   ป้ายให้หน้าออฟฟิศรู้ว่า Claude กำลังตรวจ (/flash-check)
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
   python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
-ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+  python flashq.py goal cancel <GOAL.md> --reason "เหตุ"                  user สั่งเลิกธง → GOAL=CANCELLED (verify/check ปฏิเสธจนกว่าจะเปิดใหม่)
+ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|DENIED|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+  DENIED = opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ เช่น อ่านไฟล์นอกโปรเจกต์) งานไม่ได้ทำ → บรรทัด `DENIED:` บอก path + ทางแก้ (`external_dirs` ใน .flash.json หรือ permission ใน opencode.json)
 """
 import argparse
 import contextlib
@@ -62,6 +66,10 @@ START_LIMIT_SEC = 180
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
+# opencode โหมดไม่โต้ตอบ (`opencode run`) ตอบ "ไม่อนุญาต" ให้เองเมื่อกฎเป็น ask → stderr: `permission requested: <ชนิด> (<path>); auto-rejecting`
+PERM_REQ_RE = re.compile(r"permission requested:\s*([\w.-]+)\s*\((.*?)\)\s*;\s*auto-reject", re.I)
+# tool error ที่ตามมา (subagent ล้มเพราะถูกปฏิเสธ · ข้อความไทย/อังกฤษของ opencode)
+PERM_DENY_RE = re.compile(r"rejected permission|ปฏิเสธสิทธิ์|permission (?:was )?denied", re.I)
 DEFAULTS = {
     "main_branch": "master",          # branch ที่ opencode ต้องอยู่ + ที่แผนต้องถูก push ไป
     "remote": "origin",
@@ -238,6 +246,124 @@ def project_cfg(root: Path) -> dict:
             cfg["main_branch"] = detect_main_branch(root, own.get("remote") or cfg["remote"])
     cfg.update(own)
     return cfg
+
+
+# ---------- สิทธิ์นอกโปรเจกต์ (opencode permission.external_directory) ----------
+def _slash(s: str) -> str:
+    return s.replace("\\", "/")
+
+
+def _native(s: str) -> str:
+    """รูปแบบ path ที่ opencode รายงานบนเครื่องนี้ (Windows = \\) — ใช้ในข้อความแนะนำให้วางลง opencode.json ได้ตรงตัว"""
+    return s.replace("/", "\\") if os.name == "nt" else s
+
+
+def external_dirs(cfg: dict) -> list[str]:
+    """`external_dirs` ใน .flash.json: โฟลเดอร์นอกโปรเจกต์ที่งานต้องอ่าน/แก้ · ไม่มี * = เติม /* ให้ (opencode ขอสิทธิ์เป็น <โฟลเดอร์>\\*)"""
+    out = []
+    for d in cfg.get("external_dirs") or []:
+        d = _slash(str(d).strip())
+        if d:
+            out.append(d if "*" in d else d.rstrip("/") + "/*")
+    return out
+
+
+def perm_allows(perm, path: str) -> bool:
+    """opencode ตัดสินสิทธิ์: ช่องเป็น "allow"/"ask"/"deny" หรือ {รูปแบบ: การกระทำ} · * = ตัวอักษรใด ๆ (รวมตัวคั่นโฟลเดอร์)
+    เลือกกฎที่ตรงและเจาะจงสุด (ยาวสุดเมื่อตัด * ออก · เท่ากัน = อันหลัง) · เทียบโดยไม่สน \\ กับ / (ใส่ได้ทั้งสองแบบ)"""
+    if isinstance(perm, str):
+        return perm == "allow"
+    if not isinstance(perm, dict):
+        return False
+    best = None  # (ความเจาะจง, ลำดับ, การกระทำ)
+    for i, (pat, act) in enumerate(perm.items()):
+        rx = "^" + ".*".join(re.escape(p).replace(r"\?", ".") for p in _slash(str(pat)).split("*")) + "$"
+        if re.match(rx, _slash(path), re.S):
+            key = (len(str(pat).replace("*", "")), i)
+            if best is None or key > best[:2]:
+                best = (*key, act)
+    return bool(best) and best[2] == "allow"
+
+
+def perm_config_content(dirs: list[str]) -> str:
+    """ค่า OPENCODE_CONFIG_CONTENT (opencode รวมเข้ากับ config ของผู้ใช้ตอนเริ่ม · ไม่แตะไฟล์ opencode.json) — ใส่ทั้ง / และ \\ บน Windows กันตีความต่างกัน"""
+    rules = {}
+    for d in dirs:
+        rules[_slash(d)] = "allow"
+        if os.name == "nt":
+            rules[d.replace("/", "\\")] = "allow"
+    return json.dumps({"permission": {"external_directory": rules}}, ensure_ascii=False)
+
+
+def known_external_dirs(root: Path, extra: list[str] = ()) -> list[str]:
+    """external_dirs ของทุกโปรเจกต์ที่เคยส่งงาน + ของโปรเจกต์นี้ — ให้ server สด (เปิดครั้งเดียว ใช้ร่วมทุกโปรเจกต์) รู้สิทธิ์ตั้งแต่เปิด"""
+    out = list(extra)
+    seen = {str(root)}
+    for j in jobs():
+        p = j.get("project") or ""
+        if p and p not in seen:
+            seen.add(p)
+            out += external_dirs(read_json(Path(p) / ".flash.json"))
+    return list(dict.fromkeys(out))
+
+
+def server_permission(attach: str, root: Path):
+    """ช่อง permission.external_directory ตามที่ server opencode (--attach) ใช้จริง — server โหลด config ตอนเปิด จึงไม่เห็น env ของงาน · None = ถามไม่ได้"""
+    import urllib.parse
+    import urllib.request
+    try:
+        raw = urllib.request.urlopen(f"{attach.rstrip('/')}/config?" + urllib.parse.urlencode({"directory": str(root)}), timeout=3).read()
+        return (json.loads(raw).get("permission") or {}).get("external_directory")
+    except Exception:
+        return None
+
+
+def _perm_pairs(dirs: list[str]) -> str:
+    return ", ".join(json.dumps({_native(d): "allow"}, ensure_ascii=False)[1:-1] for d in dirs)
+
+
+def perm_precheck(dirs: list[str], attach: str, root: Path) -> list[str]:
+    """ก่อนรัน: opencode.json อ่านได้ไหม · external_dirs ถูกอนุญาตแล้วหรือยัง (ไฟล์ของผู้ใช้ / server สด) → บรรทัดแจ้ง/เตือน"""
+    out = []
+    oc = read_json(OC_CONFIG)
+    if not oc and OC_CONFIG.is_file():
+        out.append(f"WARN: อ่าน {OC_CONFIG} ไม่ได้ (JSON เสีย? เช่นลืมคอมมา) → opencode จะเปิดไม่ขึ้นหรือไม่ใช้สิทธิ์ที่ตั้งไว้ — ตรวจด้วย `opencode debug config`")
+    if not dirs:
+        return out
+    file_perm = (oc.get("permission") or {}).get("external_directory") if isinstance(oc.get("permission"), dict) else None
+    miss_file = [d for d in dirs if not perm_allows(file_perm, d)]
+    if attach.startswith("http"):
+        sp = server_permission(attach, root)
+        miss = [d for d in dirs if not perm_allows(sp if sp is not None else file_perm, d)]
+        if miss:
+            pidf = HOME / "live_server.pid"
+            pid = pidf.read_text(encoding="utf-8", errors="replace").strip() if pidf.exists() else "?"
+            out.append(f"WARN: server opencode ({attach}) ยังไม่อนุญาต external_dirs: {', '.join(miss)} → งานที่แตะโฟลเดอร์นี้จะถูกปฏิเสธสิทธิ์ (DENIED) "
+                       f"· server โหลด config ตอนเปิด ไม่เห็นสิทธิ์ที่ flashq ส่งต่อรอบ · แก้ทางใดทางหนึ่ง: ปิด server แล้วสั่งใหม่ (taskkill /PID {pid} /T /F — flashq เปิดใหม่พร้อมสิทธิ์จาก external_dirs) "
+                       f"· เพิ่มใน {OC_CONFIG} ช่อง permission.external_directory: {_perm_pairs(miss)} แล้วรีสตาร์ต server · หรือส่งด้วย --attach none")
+        else:
+            out.append(f"PERM: server opencode อนุญาต external_dirs แล้ว: {', '.join(dirs)}")
+    else:
+        out.append(f"PERM: ส่งสิทธิ์ external_dirs ให้ opencode รอบนี้ผ่าน OPENCODE_CONFIG_CONTENT: {', '.join(dirs)}"
+                   + (f" · {OC_CONFIG} ยังไม่มี allow ของ {', '.join(miss_file)} (ใส่ถาวรได้ที่ permission.external_directory: {_perm_pairs(miss_file)})" if miss_file else ""))
+    return out
+
+
+def perm_fix_lines(items: list[dict], partial: bool = False) -> list[str]:
+    """ข้อความสิทธิ์ที่ opencode ปฏิเสธ + ทางแก้ 2 ทาง (ใช้ร่วม run / wait / หน้าเว็บ) · partial = งานสำเร็จบางส่วน (คง OK แต่เตือน)"""
+    n = len(items)
+    out = [(f"WARN: opencode ปฏิเสธสิทธิ์ {n} รายการระหว่างทำงาน แต่มีงานสำเร็จบางส่วน (commit/DONE) → ตรวจว่างานไหนขาด:" if partial
+            else f"DENIED: opencode ปฏิเสธสิทธิ์ {n} รายการ (รันแบบไม่โต้ตอบ = ตอบ \"ไม่อนุญาต\" ให้เองทันที) — งานไม่ได้ทำ ไม่ต้องไล่หา commit:")]
+    out += [f"  - {it.get('kind') or 'tool'}: {it.get('path') or '?'}" for it in items[:8]]
+    ext = list(dict.fromkeys(it["path"] for it in items if it.get("kind") == "external_directory" and it.get("path")))
+    if ext:
+        out.append("ทางแก้ (เลือกทางเดียว แล้วส่งงานใหม่):")
+        out.append(f"  1) .flash.json ของโปรเจกต์ เพิ่ม \"external_dirs\": {json.dumps([_slash(p) for p in ext], ensure_ascii=False)} → flashq ส่งสิทธิ์ให้ opencode เองทุกครั้งที่รัน (ย่อให้กว้างขึ้นได้ เช่น \"D:/lib/*\")")
+        out.append(f"  2) {OC_CONFIG} ช่อง permission.external_directory เพิ่ม {_perm_pairs(ext)} (ถาวร · ใช้กับ opencode ที่เปิดเองด้วย)")
+    else:
+        kinds = sorted({it.get("kind") or "tool" for it in items})
+        out.append(f"ทางแก้: {OC_CONFIG} ช่อง permission ตั้ง {', '.join(json.dumps({k: 'allow'})[1:-1] for k in kinds)} แล้วส่งงานใหม่ (หรือรันด้วย --auto ถ้ายอมรับความเสี่ยง)")
+    return out
 
 
 def plan_rel(plan: str, root: Path, start: Path) -> str:
@@ -859,8 +985,9 @@ def overlap_report(target: dict) -> dict:
 
 
 # ---------- opencode ----------
-def ensure_live_server(exe: list[str]) -> bool:
-    """เปิด `opencode serve --port 4096` ค้างไว้ (ถ้ายังไม่มี) ให้ desktop ต่อดูสดได้ · cwd กลาง ไม่ผูกโปรเจกต์ (run ส่ง --dir เอง)"""
+def ensure_live_server(exe: list[str], ext_dirs: list[str] = ()) -> bool:
+    """เปิด `opencode serve --port 4096` ค้างไว้ (ถ้ายังไม่มี) ให้ desktop ต่อดูสดได้ · cwd กลาง ไม่ผูกโปรเจกต์ (run ส่ง --dir เอง)
+    ext_dirs = external_dirs ของทุกโปรเจกต์ที่รู้จัก → ส่งเป็น OPENCODE_CONFIG_CONTENT ตอนเปิด (server โหลด config ครั้งเดียว)"""
     import urllib.request
 
     def up() -> bool:
@@ -874,9 +1001,11 @@ def ensure_live_server(exe: list[str]) -> bool:
     flags = 0
     if os.name == "nt":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+    env = {k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"}
+    if ext_dirs:
+        env["OPENCODE_CONFIG_CONTENT"] = perm_config_content(list(ext_dirs))
     sp = subprocess.Popen([*exe, "serve", "--port", "4096", "--hostname", "127.0.0.1"], cwd=str(HOME),
-                          stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags,
-                          env={k: v for k, v in os.environ.items() if k != "OPENCODE_SERVER_PASSWORD"})
+                          stdout=open(HOME / "live_server.log", "ab"), stderr=subprocess.STDOUT, creationflags=flags, env=env)
     try:  # เก็บ pid ไว้ให้ปิดได้ (taskkill /PID <pid> /T /F) — server นี้เปิดค้างโดยตั้งใจ
         (HOME / "live_server.pid").write_text(str(sp.pid), encoding="utf-8")
     except OSError:
@@ -1088,7 +1217,7 @@ class ShellWatch:
 
 
 def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
-             shell_idle: float = 0) -> dict:
+             shell_idle: float = 0, env: dict | None = None) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -1096,8 +1225,9 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
     print(f"START {job['id']} รอบ {attempt} title='{job['title']}' model={job.get('model') or '(ค่าเริ่มต้น config)'} "
           f"attach={attach or '-'} log={log}", flush=True)
     t0, status = time.time(), "OK"
+    head0 = _git(root, "rev-parse", "HEAD")  # มี commit ใหม่หลังรัน = งานสำเร็จบางส่วน (ใช้ตัดสิน DENIED กับ OK)
     with open(log, "wb") as fo, open(err, "wb") as fe:
-        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe)
+        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe, env=env)
         job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
         sid = wait_session(p, log)
@@ -1191,6 +1321,7 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
                         break
 
     session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
+    tool_denied, task_out = [], []  # tool ที่ล้มเพราะ opencode ปฏิเสธสิทธิ์ · ผลที่ subagent (tool task) ส่งกลับ
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             ev = json.loads(line)
@@ -1207,12 +1338,19 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
             recent.append(f"{part.get('tool', '?')} {st.get('status', '')} " + str(inp.get("command") or inp.get("filePath") or inp.get("pattern") or "")[:90])
             if "prevents you from using" in str(st.get("error", "")):
                 denied.append(str(inp.get("command") or part.get("tool"))[:100])
+            elif PERM_DENY_RE.search(str(st.get("error", ""))):
+                tool_denied.append(f"{part.get('tool', '?')} {str(inp.get('description') or inp.get('command') or inp.get('filePath') or '')[:80]}".strip())
+            if part.get("tool") == "task" and isinstance(st.get("output"), str):
+                task_out.append(st["output"])
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
     errtxt = err.read_text(encoding="utf-8", errors="replace")
     last = texts[-1] if texts else ""
+    perm = perm_denials(errtxt, tool_denied)
     if status == "OK" and (rc != 0 or errors):
         status = "FAIL"
+    if status == "OK" and perm and not job_progressed(root, head0, texts + task_out):
+        status = "DENIED"  # opencode ตอบ "ไม่อนุญาต" ให้เอง งานจบ exit 0 โดยไม่ได้ทำอะไร — ไม่ใช่ OK
     if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
         status = "FAIL"
         errors.append("agent ที่ระบุใช้ไม่ได้ (เป็น subagent หรือหาไม่เจอ → opencode ตกไปใช้ agent เริ่มต้นที่แก้ไฟล์ได้) — ตั้ง mode: all/primary ติดตั้ง agent ให้ครบ หรือใช้ --attach none")
@@ -1222,26 +1360,90 @@ def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: in
         status = "QUOTA"
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools,
             "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
-            "denied": denied, "recent": recent[-5:]}
+            "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
+
+
+def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
+    """รายการสิทธิ์ที่ opencode ปฏิเสธเอง: จาก stderr (ชนิด + path) · ไม่มีใน stderr (เช่นถูกปฏิเสธใน subagent) = ใช้ tool error แทน"""
+    out = []
+    for m in PERM_REQ_RE.finditer(errtxt):
+        it = {"kind": m.group(1), "path": m.group(2).strip()}
+        if it not in out:
+            out.append(it)
+    if not out:
+        out = [{"kind": "tool", "path": t} for t in dict.fromkeys(tool_denied)]
+    return out[:20]
+
+
+def job_progressed(root: Path, head0: str, outputs: list[str]) -> bool:
+    """งานสำเร็จบางส่วนไหม: มี commit ใหม่ หรือ worker/subagent รายงาน DONE (flash.md ให้ worker ตอบ `DONE`/`FAIL`)"""
+    head1 = _git(root, "rev-parse", "HEAD")
+    if head0 and head1 and head0 != head1:
+        return True
+    return any(re.search(r"\bDONE\b", t) for t in outputs)
 
 
 # ---------- คำสั่ง ----------
-PLAN_SOFT = (400, 200)  # (บรรทัดทั้งแผน, บรรทัดโค้ดใน ```) เกิน = เตือน
-PLAN_HARD = (800, 400)  # เกิน = ปฏิเสธ (แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว · ต้องแบ่งแผน หรือ --big-plan)
+PLAN_SOFT = (300, 100, 30)  # (บรรทัดทั้งแผน, บรรทัดโค้ดใน ``` รวม, บล็อกโค้ดเดียวยาวสุด) เกิน = เตือน
+PLAN_HARD = (600, 200, 60)  # เกิน = ปฏิเสธ (แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว → เปลี่ยนเป็นสเปก/แบ่งแผน · ไม่มีทางลัด)
+APPENDIX_RE = re.compile(r"^#{1,6}\s.*(ภาคผนวก|คัดลอกตรงตัว|โค้ดเต็ม|appendix|full code|verbatim)", re.I | re.M)
+APPENDIX_CODE_MAX = 20  # หัวข้อภาคผนวกที่มีโค้ดรวมเกินนี้ = Claude เขียนโค้ดให้ Flash วาง → ปฏิเสธ
+
+
+def plan_blocks(text: str) -> list[tuple[int, int]]:
+    """บล็อกโค้ด ``` / ~~~ ในแผน → [(บรรทัดเริ่ม (1-based), จำนวนบรรทัดในบล็อก)] — fence ปิดต้องเป็นตัวเดียวกันและยาวไม่น้อยกว่า"""
+    out, fence, start, n = [], "", 0, 0
+    for i, ln in enumerate(text.splitlines(), 1):
+        m = re.match(r"\s*(`{3,}|~{3,})", ln)
+        if not fence and m:
+            fence, start, n = m.group(1), i, 0
+        elif fence and m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not ln.strip()[len(m.group(1)):].strip():
+            out.append((start, n))
+            fence = ""
+        elif fence:
+            n += 1
+    if fence:
+        out.append((start, n))
+    return out
 
 
 def plan_size(text: str) -> tuple[int, int]:
-    """(จำนวนบรรทัดทั้งแผน, จำนวนบรรทัดใน code block ``` / ~~~ — fence ปิดต้องเป็นตัวเดียวกันและยาวไม่น้อยกว่า)"""
-    lines, code, fence = text.splitlines(), 0, ""
-    for ln in lines:
-        m = re.match(r"\s*(`{3,}|~{3,})", ln)
-        if not fence and m:
-            fence = m.group(1)
-        elif fence and m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not ln.strip()[len(m.group(1)):].strip():
-            fence = ""
-        elif fence:
-            code += 1
-    return len(lines), code
+    """(จำนวนบรรทัดทั้งแผน, จำนวนบรรทัดใน code block รวม)"""
+    return len(text.splitlines()), sum(n for _, n in plan_blocks(text))
+
+
+def plan_lint(text: str) -> tuple[list[str], list[str]]:
+    """กติกา "แผน = สเปก ไม่ใช่โค้ด" → (เหตุปฏิเสธ, คำเตือน)
+    ปฏิเสธ: แผน > PLAN_HARD บรรทัด · โค้ดรวม > PLAN_HARD · บล็อกเดียว > PLAN_HARD (= โค้ดสำเร็จรูปให้ Flash วาง) ·
+    หัวข้อ "ภาคผนวก/คัดลอกตรงตัว/appendix" ที่มีโค้ดรวม > APPENDIX_CODE_MAX บรรทัด · เตือน: เกิน PLAN_SOFT"""
+    lines = text.splitlines()
+    blocks = plan_blocks(text)
+    n, code = len(lines), sum(b for _, b in blocks)
+    big = max(blocks, key=lambda b: b[1]) if blocks else (0, 0)
+    errs, warns = [], []
+    if n > PLAN_HARD[0]:
+        errs.append(f"แผน {n} บรรทัด (เพดาน {PLAN_HARD[0]}) → แบ่งเป็นหลายแผน/หลายรอบ")
+    if code > PLAN_HARD[1]:
+        errs.append(f"โค้ดใน ``` รวม {code} บรรทัด (เพดาน {PLAN_HARD[1]}) → โค้ดใหม่ยาวเขียนเป็นสเปก ให้ Flash เขียนเอง")
+    if big[1] > PLAN_HARD[2]:
+        errs.append(f"บล็อกโค้ดเดียวยาว {big[1]} บรรทัด (บรรทัด {big[0]} · เพดาน {PLAN_HARD[2]}) = โค้ดสำเร็จรูปให้ Flash วาง → เปลี่ยนเป็นสเปก (จุดเสียบ · ชื่อ/พารามิเตอร์ · พฤติกรรม · เทสต์)")
+    heads = [(i, ln) for i, ln in enumerate(lines, 1) if APPENDIX_RE.match(ln)]
+    for i, ln in heads:
+        level = len(ln) - len(ln.lstrip("#"))
+        end = next((j for j, l2 in enumerate(lines[i:], i + 1) if re.match(r"#{1,%d}\s" % level, l2)), n + 1)
+        inside = sum(b for s, b in blocks if i < s < end)
+        if inside > APPENDIX_CODE_MAX:
+            errs.append(f"หัวข้อ `{ln.strip()[:60]}` (บรรทัด {i}) มีโค้ด {inside} บรรทัด → ภาคผนวกโค้ด = Claude ทำงานแทน Flash · ลบออก แล้วใส่สเปกในบล็อก T-xx แทน")
+    if not errs and (n > PLAN_SOFT[0] or code > PLAN_SOFT[1] or big[1] > PLAN_SOFT[2]):
+        warns.append(f"แผน {n} บรรทัด · โค้ดรวม {code} · บล็อกยาวสุด {big[1]} (แนะนำ ≤{PLAN_SOFT[0]}/{PLAN_SOFT[1]}/{PLAN_SOFT[2]}) — โค้ดยาวควรเป็นสเปกให้ Flash เขียนเอง")
+    return errs, warns
+
+
+def plan_has_history(root: Path, plan: str) -> bool:
+    """แผนนี้เคยถูกส่งผ่านคิวนี้แล้วไหม (รอบแก้ T-xxR ของแผนเก่าที่ใหญ่เกินกติกาใหม่ ให้ผ่านพร้อมเตือน)"""
+    return any(os.path.normcase(j.get("project", "")) == os.path.normcase(str(root)) and j.get("plan") == plan
+               and j.get("kind", "work") == "work" and j.get("status") not in ("queued", "busy", "queue_timeout")
+               for j in jobs())
 
 
 # ---------- ตรวจแผนพิการก่อนส่ง Flash (เชิงกลไก ไม่ใช้โมเดล) ----------
@@ -1538,26 +1740,32 @@ def cmd_run(a) -> int:
                         else _git(root, "show", f"{cfg['remote']}/{cfg['main_branch']}:{plan}"))
             except OSError:
                 body = ""
+            errs, warns = plan_lint(body or "")
             n, code = plan_size(body or "")
             why = f"แผน {n} บรรทัด · โค้ดใน ``` {code} บรรทัด"
-            if (n > PLAN_HARD[0] or code > PLAN_HARD[1]) and not getattr(a, "big_plan", False):
-                print(f"FLASH_RUN=FAIL แผนใหญ่เกิน ({why} · เพดาน {PLAN_HARD[0]}/{PLAN_HARD[1]}) = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว "
-                      f"→ เปลี่ยนโค้ดยาวเป็นสเปก (/flash-plan §2) หรือแบ่งเป็นหลายแผน · user อนุญาตแล้ว → ใส่ --big-plan")
-                return 1
-            if n > PLAN_SOFT[0] or code > PLAN_SOFT[1]:
-                print(f"WARN: แผนใหญ่ ({why} · แนะนำ ≤{PLAN_SOFT[0]}/{PLAN_SOFT[1]}) — โค้ดยาวควรเป็นสเปกให้ Flash เขียนเอง", flush=True)
+            if errs:
+                fix_round = bool(a.tasks) and all(re.fullmatch(r"T-\d+R\d*", t.strip(), re.I) for t in re.split(r"[,\s]+", a.tasks.strip()) if t)                     and plan_has_history(root, plan)
+                if fix_round:  # แผนเก่า (เคยส่งแล้ว) ที่สั่งเฉพาะรอบแก้ T-xxR → ผ่านพร้อมเตือน (ไม่งั้นแผนที่ค้างอยู่ติดหมด)
+                    print(f"WARN: แผนใหญ่เกินกติกา ({why}) — ผ่านเพราะเป็นรอบแก้ของแผนที่เคยส่งแล้ว · แผนใหม่ต้องเป็นสเปก: " + " · ".join(errs), flush=True)
+                else:
+                    print(f"FLASH_RUN=FAIL แผนใหญ่เกิน ({why}) = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว → แก้แผนก่อนส่ง (/flash-plan §2 · ไม่มีทางลัด):")
+                    for e in errs:
+                        print(f"  - {e}")
+                    return 1
+            for w in warns:
+                print(f"WARN: แผนใหญ่ ({w})", flush=True)
             if not getattr(a, "skip_precheck", False) and a.tasks:
                 rev = (f"{cfg['remote']}/{cfg['main_branch']}" if cfg["require_plan_in_remote"] else "HEAD") if is_git else ""
                 try:
-                    errs, warns = plan_precheck(body or "", a.tasks, PlanSource(root, rev))
+                    perrs, pwarns = plan_precheck(body or "", a.tasks, PlanSource(root, rev))
                 except (ValueError, OSError) as e:
-                    errs, warns = [], [f"ตรวจแผนเทียบโค้ดไม่ได้ ({e}) → ข้าม"]
-                for w in warns:
+                    perrs, pwarns = [], [f"ตรวจแผนเทียบโค้ดไม่ได้ ({e}) → ข้าม"]
+                for w in pwarns:
                     print(f"WARN: {w}", flush=True)
-                if errs:
-                    print(f"FLASH_RUN=FAIL แผนพิการ {len(errs)} จุด (เทียบ {rev or 'โฟลเดอร์โปรเจกต์'}) — แก้แผนแล้ว push ใหม่ · "
+                if perrs:
+                    print(f"FLASH_RUN=FAIL แผนพิการ {len(perrs)} จุด (เทียบ {rev or 'โฟลเดอร์โปรเจกต์'}) — แก้แผนแล้ว push ใหม่ · "
                           f"มั่นใจว่าแผนถูก → ใส่ --skip-precheck")
-                    for e in errs:
+                    for e in perrs:
                         print(f"  - {e}")
                     return 1
         if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
@@ -1611,11 +1819,17 @@ def cmd_run(a) -> int:
         save_job(job)
         print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
         attach = LIVE_URL if a.attach == "live" else ("" if a.attach == "none" else a.attach)
-        if attach == LIVE_URL and not ensure_live_server(exe):
-            print("WARN: เปิด server 4096 ไม่ขึ้น → รันแยก (ดูสดไม่ได้)", flush=True)
+        ext_dirs = external_dirs(cfg)
+        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext_dirs)} if ext_dirs else None
+        if attach == LIVE_URL and not ensure_live_server(exe, known_external_dirs(root, ext_dirs)):
+            pidf = HOME / "live_server.pid"
+            print(f"WARN: เปิด server 4096 ไม่ขึ้นใน 30 วิ → รันแยก (ดูสดไม่ได้) · log {HOME / 'live_server.log'} · pid "
+                  f"{pidf.read_text(encoding='utf-8', errors='replace').strip() if pidf.exists() else '?'} (ค้าง = taskkill /PID <pid> /T /F แล้วสั่งใหม่)", flush=True)
             attach = ""
         job["attach"] = attach
         save_job(job)
+        for ln in perm_precheck(ext_dirs, attach, root):
+            print(ln, flush=True)
         timeout_min = a.timeout_min or (cfg["agent_timeout_min"] if kind in AGENT_KINDS else cfg["timeout_min"])
         snap0 = dirty_snapshot(root) if job["readonly"] else None
         switches, nostart_retry, attempt = 0, a.retry_nostart, 0
@@ -1640,9 +1854,11 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0))
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env)
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
+            if res.get("perm_denied"):
+                job["perm_denied"] = [x for x in (job.get("perm_denied") or []) + res["perm_denied"] if x][:20]
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
                 stall_retry -= 1
                 if not worker_like and job["model"]:  # ผู้ตรวจ/ผู้สืบ: ค้างที่ผู้ให้บริการนี้ → รอบใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี)
@@ -1713,8 +1929,11 @@ def cmd_run(a) -> int:
         print(f"REASON: {job.get('timeout_reason', '')}")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))
         print("แนะนำ: เปิด log ดูท้ายไฟล์ · บรีฟกว้างเกิน/ไฟล์ใหญ่เกิน → แบ่งงานให้เล็กลง · ผู้ให้บริการช้า → --model ตัวอื่น แล้วสั่งใหม่")
+    if job.get("perm_denied"):
+        for ln in perm_fix_lines(job["perm_denied"], partial=res["status"] != "DENIED"):
+            print(ln)
     if job.get("denied"):
-        print(f"DENIED: {len(job['denied'])} คำสั่งถูกสิทธิ์ของ agent บล็อก (ไม่ใช่งานล้มเหลว · agent ต้องใช้ read/grep แทน): " + " | ".join(job["denied"][:5]))
+        print(f"RULE_DENIED: {len(job['denied'])} คำสั่งถูกกฎของ agent บล็อก (ไม่ใช่งานล้มเหลว · agent ต้องใช้ read/grep แทน): " + " | ".join(job["denied"][:5]))
     for e in res["errors"][-3:]:
         print("ERROR:", e)
     if res["stderr"]:
@@ -1726,6 +1945,110 @@ def cmd_run(a) -> int:
 
 def kind_tag(j: dict) -> str:
     return {"verify": "[ตรวจ] ", "investigate": "[สืบ] "}.get(j.get("kind"), "")
+
+
+def wait_targets(target: str) -> list[dict]:
+    """งานที่ตรงกับ target: id (ขึ้นต้น) หรือชื่อแผน/stem · เลือกงานที่ยังไม่จบก่อน ไม่มี = งานล่าสุดของแผนนั้น"""
+    rows = jobs()
+    hit = [j for j in rows if j["id"].startswith(target)]
+    if not hit:
+        stem = Path(target).stem.lower()
+        hit = [j for j in rows if j.get("plan") and Path(j["plan"]).stem.lower() == stem]
+    live = [j for j in hit if live_state(j) in ("queued", "running")]
+    return live or hit[-1:]
+
+
+def cmd_wait(a) -> int:
+    """บล็อกจนงานจบ (Claude รันคำสั่งนี้ใน background แล้วรอแจ้งเตือน — ไม่ต้อง sleep/poll เอง) · พิมพ์ FLASH_RUN=... ของทุกงานที่รอ
+    exit 0 = OK ทั้งหมด · 1 = มีงานไม่ OK/ไม่พบงาน · 3 = ยังไม่จบในเวลาที่ให้"""
+    t0 = time.time()
+    targets = wait_targets(a.target)
+    if not targets:
+        print(f"FLASH_WAIT=NOJOB ไม่พบงานที่ตรงกับ '{a.target}' (ดู: flashq list --all)")
+        return 1
+    ids = [j["id"] for j in targets]
+    print(f"รอ {len(ids)} งาน: {', '.join(ids)} (เพดาน {a.timeout_min:g} นาที · เช็กทุก {a.poll:g} วิ)", flush=True)
+    noted = time.time()
+    cur = targets
+    while True:
+        cur = [next((j for j in jobs() if j["id"] == i), {"id": i, "status": "?"}) for i in ids]
+        pending = [j for j in cur if live_state(j) in ("queued", "running")]
+        if not pending:
+            break
+        if time.time() - t0 > a.timeout_min * 60:
+            print(f"FLASH_WAIT=TIMEOUT ยังไม่จบใน {a.timeout_min:g} นาที: " + ", ".join(f"{j['id']} ({live_state(j)})" for j in pending)
+                  + " → สั่ง wait ใหม่ หรือ flashq why")
+            return 3
+        if time.time() - noted >= 600:  # บรรทัดเดียวทุก 10 นาที พอให้รู้ว่ายังรอ (ไม่ถมผลลัพธ์)
+            noted = time.time()
+            print(f"  … {(time.time() - t0) / 60:.0f} นาที · " + " · ".join(f"{j['id']} {live_state(j)}" for j in pending), flush=True)
+        time.sleep(a.poll)
+    rc = 0
+    for j in cur:
+        st = live_state(j)
+        res = "DEAD" if st == "dead" else str(j.get("result") or st).upper()
+        mins = ""
+        try:
+            mins = f" เวลา={(_ts(j['finished']) - _ts(j['started'])) / 60:.1f} นาที" if j.get("finished") and j.get("started") else ""
+        except Exception:
+            pass
+        print(f"FLASH_RUN={res} job={j['id']} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}{mins}"
+              + (f" session={j['session']}" if j.get("session") else ""))
+        if res == "DEAD":
+            print("  (process ของงานหายไปก่อนจบ — เครื่อง/terminal ปิด? ดู flashq log แล้วสั่งใหม่)")
+        if j.get("perm_denied"):
+            for ln in perm_fix_lines(j["perm_denied"], partial=res != "DENIED"):
+                print(ln)
+        print("---- สรุปท้าย ----")
+        print((j.get("last") or "(ไม่มีข้อความ)")[-1500:])
+        if res != "OK":
+            rc = 1
+    return rc
+
+
+def shrink_image(src: Path, out_dir: Path, max_px: int, quality: int = 80) -> tuple[Path, str]:
+    """ย่อรูปให้ด้านยาวสุด ≤ max_px แล้วบันทึกเป็น jpg (พื้นโปร่ง → ขาว) · คืน (ไฟล์ผล, "WxH→wxh")"""
+    from PIL import Image
+    im = Image.open(src)
+    w, h = im.size
+    scale = min(1.0, max_px / max(w, h))
+    if scale < 1:
+        im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    if im.mode not in ("RGB", "L"):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[3])
+        im = bg
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / (src.stem + ".jpg")
+    im.save(out, "JPEG", quality=quality, optimize=True)
+    return out, f"{w}x{h}→{im.size[0]}x{im.size[1]}"
+
+
+def cmd_shrink(a) -> int:
+    """ย่อรูปก่อนให้ Claude อ่าน: รูปใหญ่ 1 รูป ≈ 1–1.6k token และค้างใน context ทุก turn จนจบ session · ผล = .tmp/shrink/<ชื่อ>.jpg"""
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        print("SHRINK=FAIL ไม่มี Pillow → pip install pillow")
+        return 1
+    root, _ = project_root(Path(os.getcwd()))
+    out_dir = Path(a.out) if a.out else root / ".tmp" / "shrink"
+    rc = 0
+    for f in a.images:
+        src = Path(f)
+        if not src.is_file():
+            print(f"SHRINK=FAIL ไม่พบไฟล์: {src}")
+            rc = 1
+            continue
+        try:
+            out, dims = shrink_image(src, out_dir, a.max, a.quality)
+        except Exception as e:
+            print(f"SHRINK=FAIL {src}: {e}")
+            rc = 1
+            continue
+        print(f"SHRINK={out} {dims} {out.stat().st_size // 1024}KB (เดิม {src.stat().st_size // 1024}KB) → อ่านไฟล์นี้แทนต้นฉบับ")
+    return rc
 
 
 def cmd_list(a) -> int:
@@ -1976,18 +2299,42 @@ def cmd_switch(a) -> int:
     return 0
 
 
+def register_hook(settings: Path, event: str, matcher: str, command: str, key: str, timeout: int = 10) -> str:
+    """ลงทะเบียน hook ใน settings.json ของ Claude Code แบบทำซ้ำได้ (หา hook ที่ command มี key · มีแล้วเหมือนเดิม = ไม่แตะ · ต่างกัน = อัปเดต)"""
+    data = read_json(settings) if settings.exists() else {}
+    if settings.exists() and not data:  # ไฟล์มีแต่อ่านเป็น JSON ไม่ได้ → ห้ามเขียนทับ
+        return f"ข้าม       {settings} อ่าน JSON ไม่ได้ — ลงทะเบียน hook เอง: {event} matcher {matcher!r} → {command}"
+    groups = data.setdefault("hooks", {}).setdefault(event, [])
+    for grp in groups:
+        for h in grp.get("hooks", []):
+            if key in h.get("command", ""):
+                if h.get("command") == command and grp.get("matcher") == matcher:
+                    return f"เหมือนเดิม  hook {event}:{matcher} → {command}"
+                h["command"], h["timeout"], grp["matcher"] = command, timeout, matcher
+                write_json(settings, data)
+                return f"อัปเดต     hook {event}:{matcher} → {command}"
+    groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command, "timeout": timeout}]})
+    write_json(settings, data)
+    return f"ลงทะเบียน  hook {event}:{matcher} → {command} ใน {settings}"
+
+
 def cmd_install(a) -> int:
-    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ และ claude/commands/*.md ไป ~/.claude/commands/
-    (แทน {{FLASHQ}} ด้วย path repo นี้)"""
+    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ · claude/{commands,agents}/*.md + hooks/*.py ไป ~/.claude/
+    (แทน {{FLASHQ}} ด้วย path repo นี้) · ไฟล์ที่ flashq ติดตั้งเองทับได้เลย (ต้นฉบับอยู่ใน git ของ flashq ไม่ต้องสำรอง)
+    · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) = ข้าม เว้นแต่ --force (สำรอง .bak-flashq-<เวลา> ก่อนทับ) · --hooks = ลงทะเบียน image_guard ใน settings.json"""
     claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
-    pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command"),
-             (REPO / "opencode" / "agent", OC_CONFIG.parent / "agent"),
-             (REPO / "claude" / "commands", claude_home / "commands")]
+    pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command", "*.md"),
+             (REPO / "opencode" / "agent", OC_CONFIG.parent / "agent", "*.md"),
+             (REPO / "claude" / "commands", claude_home / "commands", "*.md"),
+             (REPO / "claude" / "agents", claude_home / "agents", "*.md"),
+             (REPO / "hooks", claude_home / "hooks", "*.py")]
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     rc = 0
-    for src_dir, dst_dir in pairs:
+    for src_dir, dst_dir, pat in pairs:
+        if not src_dir.is_dir():
+            continue
         dst_dir.mkdir(parents=True, exist_ok=True)
-        for src in sorted(src_dir.glob("*.md")):
+        for src in sorted(src_dir.glob(pat)):
             text = src.read_text(encoding="utf-8").replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
             dst = dst_dir / src.name
             if dst.exists():
@@ -1995,13 +2342,25 @@ def cmd_install(a) -> int:
                 if old == text:
                     print(f"เหมือนเดิม  {dst}")
                     continue
-                if "flashq:managed" not in old and not a.force:
-                    print(f"ข้าม       {dst} (มีไฟล์ที่ไม่ได้มาจาก flashq — ใช้ --force เพื่อสำรองแล้วทับ)")
-                    rc = 1
-                    continue
-                shutil.copy2(dst, dst.with_name(dst.name + f".bak-flashq-{ts}"))
+                if "flashq:managed" not in old:
+                    if not a.force:
+                        print(f"ข้าม       {dst} (มีไฟล์ที่ไม่ได้มาจาก flashq — ใช้ --force เพื่อสำรองแล้วทับ)")
+                        rc = 1
+                        continue
+                    shutil.copy2(dst, dst.with_name(dst.name + f".bak-flashq-{ts}"))
             dst.write_text(text, encoding="utf-8")
             print(f"ติดตั้ง     {dst}")
+    guard = claude_home / "hooks" / "image_guard.py"
+    if getattr(a, "hooks", False):
+        if guard.exists():
+            print(register_hook(claude_home / "settings.json", "PreToolUse", "Read", f'python "{guard.as_posix()}"', "image_guard.py"))
+        else:
+            print(f"ข้าม       ไม่พบ {guard} → ลงทะเบียน hook ไม่ได้")
+            rc = 1
+    elif guard.exists():
+        st = claude_home / "settings.json"
+        if "image_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
+            print("หมายเหตุ   ยังไม่ได้ลงทะเบียน image_guard (กันอ่านรูปใหญ่/อ่านรูปรัวใน session หลัก) → install --hooks")
     return rc
 
 
@@ -2073,7 +2432,7 @@ def cmd_init(a) -> int:
                 if p.exists()]
     if need and a.install:
         print("ติดตั้งคำสั่ง global ที่ขาด ...")
-        cmd_install(argparse.Namespace(force=False))
+        cmd_install(argparse.Namespace(force=False, hooks=False))
     elif need:
         print("ยังไม่ได้ติดตั้งคำสั่ง global: " + ", ".join(p.name for p in need))
         todo.append(f"python {REPO / 'flashq.py'} install  (แล้วรีโหลด opencode desktop)")
@@ -2254,7 +2613,8 @@ def ui_state() -> dict:
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
-        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []))
+        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []),
+                   perm_denied=[f"{x.get('kind', '')}: {x.get('path', '')}" for x in j.get("perm_denied") or []][:5])
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
                        child_alive=pid_alive(j.get("child_pid") or 0),
@@ -2290,6 +2650,8 @@ def ui_state() -> dict:
     all_rv = _review_rows()
     for row in running + queued:  # เส้นทางของแผน (ใช้ประวัติทั้งหมดก่อนตัดเหลือ 300)
         row["trail"] = plan_trail(row, rows, all_rv)
+        if row["trail"]:
+            row["trail"]["usage"] = usage_brief(Path(row["trail"]["plan"]).stem)  # ผลล่าสุดของ flashq usage (ไม่มี = {})
     rv_act, rv_done = ui_reviews()
     history = history[::-1][:300]
     goals = ui_goals(running, history, queued)
@@ -2508,7 +2870,8 @@ def log_tail(j: dict, attempt: int, offset: int, limit: int = 256 * 1024) -> dic
     """อ่าน log ต่อจาก offset (ไบต์) เฉพาะบรรทัดที่จบแล้ว — ไม่อ่านทั้งไฟล์ซ้ำ"""
     logs = j.get("logs") or []
     out = {"attempts": len(logs), "attempt": 0, "offset": 0, "size": 0, "lines": [], "reset": False,
-           "state": live_state(j), "last": j.get("last", "")}
+           "state": live_state(j), "last": j.get("last", ""),
+           "denied_help": "\n".join(perm_fix_lines(j["perm_denied"], partial=j.get("result") != "DENIED")) if j.get("perm_denied") else ""}
     if not logs:
         return out
     idx = attempt - 1 if 1 <= attempt <= len(logs) else len(logs) - 1
@@ -2856,7 +3219,7 @@ GOALS_DIR = HOME / "goals"  # สำเนาสถานะเป้าหม�
 
 
 _TITLE_CACHE: dict[str, tuple[float, str]] = {}
-CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"  # transcript ของ Claude Code (<โปรเจกต์>/<session>.jsonl · <session>/subagents/agent-*.jsonl)
+CLAUDE_PROJECTS = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude") / "projects"  # transcript ของ Claude Code (<โปรเจกต์>/<session>.jsonl · <session>/subagents/agent-*.jsonl)
 
 
 def claude_session_title(sid: str) -> str:
@@ -2976,6 +3339,337 @@ def claude_activity(sid: str) -> dict:
         return {}
 
 
+# ---------- usage: โทเคน Claude ต่อแผน (อ่าน transcript ของ Claude Code · ไม่โหลดทั้งไฟล์เข้าหน่วยความจำ) ----------
+USAGE_DIR = HOME / "usage"  # ผลล่าสุดต่อแผน <stem>.json ให้ UI การ์ดงาน/การ์ดธงแสดง
+PRICES_DEFAULT = {  # USD ต่อ 1M token: (in, out, cache_read, cache_write) · ราคา API สาธารณะ ต.ค. 2026 "โดยประมาณ" · ทับได้ใน config.json {"prices": {"<model>": {"in":..,"out":..,"cache_read":..,"cache_write":..}}}
+    "claude-fable-5-1": (10, 50, 0.25, 12.5), "claude-fable-5": (10, 50, 1, 12.5), "claude-mythos": (10, 50, 0.25, 12.5),
+    "claude-opus-5-5": (4, 20, 0.2, 5), "claude-opus-5": (5, 25, 0.5, 6.25), "claude-opus-4": (5, 25, 0.5, 6.25),
+    "claude-sonnet-5-5": (2, 10, 0.2, 2.5), "claude-sonnet-5": (2, 10, 0.2, 2.5), "claude-sonnet-4": (3, 15, 0.3, 3.75),
+    "claude-haiku-5-5": (0.1, 0.5, 0.01, 0.125), "claude-haiku-4": (1, 5, 0.1, 1.25),
+    "fable": (10, 50, 0.25, 12.5), "opus": (5, 25, 0.5, 6.25), "sonnet": (2, 10, 0.2, 2.5), "haiku": (1, 5, 0.1, 1.25),  # ไม่รู้รุ่นย่อย = ราคาตระกูล
+}
+USAGE_KEYS = ("in", "out", "cache_read", "cache_write")
+USAGE_PHASES = (("plan", "วางแผน"), ("check", "ตรวจ"), ("fix", "รอบแก้"), ("goal", "เป้าหมาย"), ("other", "อื่น ๆ"))
+PLAN_STEM_RE = re.compile(r"\bPLAN_[A-Za-z0-9][\w-]*")
+FLASH_CMD_RE = re.compile(r"/flash-(plan|check|goal)\b")
+FIX_ROUND_RE = re.compile(r"\bT-\d{2,3}R\b")
+
+
+def claude_project_key(path) -> str:
+    """ชื่อโฟลเดอร์ transcript ของ Claude Code สำหรับ cwd นี้ (ทุกตัวที่ไม่ใช่ตัวอักษร/ตัวเลข → '-')"""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def transcript_dirs(paths: list[Path]) -> list[Path]:
+    """โฟลเดอร์ transcript ที่ cwd ตรงกับโฟลเดอร์ใดใน paths (รวม worktree ของมัน <key>--claude-worktrees-*)"""
+    keys = {claude_project_key(p).lower() for p in paths}
+    if not CLAUDE_PROJECTS.is_dir():
+        return []
+    out = []
+    for d in sorted(CLAUDE_PROJECTS.iterdir()):
+        n = d.name.lower()
+        if d.is_dir() and any(n == k or n.startswith(k + "--claude-worktrees-") for k in keys):
+            out.append(d)
+    return out
+
+
+def _blocks_text(content) -> str:
+    """ข้อความที่คนเขียน/Claude เขียนใน message (ไม่รวม tool_result ที่เป็นผลลัพธ์ของเครื่องมือ)"""
+    if isinstance(content, str):
+        return content
+    out = []
+    for b in content if isinstance(content, list) else []:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "text":
+            out.append(str(b.get("text", "")))
+        elif b.get("type") == "tool_use":
+            inp = b.get("input") or {}
+            if b.get("name") == "Skill":
+                out.append("/" + str(inp.get("skill", "")) + " " + str(inp.get("args", "")))
+            else:
+                out.append(" ".join(str(v) for v in inp.values() if isinstance(v, str))[:2000])
+    return "\n".join(out)
+
+
+def scan_transcript(f: Path) -> dict:
+    """รวม usage ของ transcript 1 ไฟล์ (อ่านทีละบรรทัด) → models: {model: {in,out,cache_read,cache_write,calls}} · flags: plan/check/goal/fix · stems: ชื่อแผนที่ถูกอ้าง
+    Claude Code เขียน assistant หลายบรรทัดต่อ 1 คำตอบ (block ละบรรทัด usage เท่ากัน) → นับ message.id ซ้ำครั้งเดียว"""
+    res = {"models": {}, "flags": set(), "stems": set(), "first": "", "last": "", "calls": 0}
+    seen = set()
+    try:
+        fh = f.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return res
+    with fh:
+        for line in fh:
+            if '"type":"assistant"' in line:  # key type อยู่หลัง message (ท้ายบรรทัด) → ดูทั้งบรรทัดแล้วยืนยันหลัง parse
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") != "assistant":
+                    continue
+                m = e.get("message") or {}
+                u = m.get("usage") or {}
+                mid = m.get("id") or e.get("requestId") or e.get("uuid")
+                if u and mid not in seen:
+                    seen.add(mid)
+                    row = res["models"].setdefault(m.get("model") or "?", dict.fromkeys(USAGE_KEYS, 0) | {"calls": 0})
+                    row["in"] += int(u.get("input_tokens") or 0)
+                    row["out"] += int(u.get("output_tokens") or 0)
+                    row["cache_read"] += int(u.get("cache_read_input_tokens") or 0)
+                    row["cache_write"] += int(u.get("cache_creation_input_tokens") or 0)
+                    row["calls"] += 1
+                    res["calls"] += 1
+                text = _blocks_text(m.get("content"))
+            elif '"type":"user"' in line:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") != "user":
+                    continue
+                text = _blocks_text((e.get("message") or {}).get("content"))
+            else:
+                continue
+            ts = e.get("timestamp") or ""
+            if ts:
+                res["first"] = min(res["first"] or ts, ts)
+                res["last"] = max(res["last"], ts)
+            for c in FLASH_CMD_RE.findall(text):
+                res["flags"].add(c)
+            if FIX_ROUND_RE.search(text):
+                res["flags"].add("fix")
+            res["stems"].update(PLAN_STEM_RE.findall(text))
+    return res
+
+
+def _merge_usage(dst: dict, src: dict) -> None:
+    for model, u in src["models"].items():
+        row = dst["models"].setdefault(model, dict.fromkeys(USAGE_KEYS, 0) | {"calls": 0})
+        for k in row:
+            row[k] += u[k]
+    dst["flags"] |= src["flags"]
+    dst["stems"] |= src["stems"]
+    dst["calls"] += src["calls"]
+    if src["first"]:
+        dst["first"] = min(dst["first"] or src["first"], src["first"])
+        dst["last"] = max(dst["last"], src["last"])
+
+
+def scan_sessions(dirs: list[Path], since_days: float) -> list[dict]:
+    """ทุก session (transcript หลัก + subagent ของมัน) ในโฟลเดอร์ที่ให้ ที่มีความเคลื่อนไหวใน since_days วันล่าสุด"""
+    cutoff = time.time() - since_days * 86400
+    out = []
+    for d in dirs:
+        for f in sorted(d.glob("*.jsonl")):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+            s = scan_transcript(f)
+            for sf in sorted((d / f.stem / "subagents").glob("agent-*.jsonl")):
+                _merge_usage(s, scan_transcript(sf))
+            if not s["calls"]:
+                continue
+            s.update(id=f.stem, dir=d.name, title=claude_session_title(f.stem))
+            out.append(s)
+    out.sort(key=lambda s: s["first"])
+    return out
+
+
+def session_phase(flags: set) -> str:
+    """ขั้นของ session จากคำสั่งที่เรียก: /flash-check (ไม่มี /flash-plan) = ตรวจ · /flash-plan + T-xxR = รอบแก้ · /flash-plan = วางแผน · /flash-goal = เป้าหมาย · T-xxR อย่างเดียว = รอบแก้"""
+    if "check" in flags and "plan" not in flags:
+        return "check"
+    if "plan" in flags:
+        return "fix" if "fix" in flags else "plan"
+    if "goal" in flags:
+        return "goal"
+    if "fix" in flags:
+        return "fix"
+    return "check" if "check" in flags else "other"
+
+
+def price_table() -> dict:
+    t = {k: dict(zip(USAGE_KEYS, v)) for k, v in PRICES_DEFAULT.items()}
+    for k, v in (read_json(CONFIG).get("prices") or {}).items():
+        if isinstance(v, (list, tuple)):  # รูปย่อ [in, out, cache_read, cache_write]
+            v = dict(zip(USAGE_KEYS, v))
+        if isinstance(v, dict):
+            try:
+                t[k] = {**t.get(k, dict.fromkeys(USAGE_KEYS, 0.0)), **{x: float(v[x]) for x in USAGE_KEYS if x in v}}
+            except (TypeError, ValueError):
+                pass
+    return t
+
+
+def price_for(model: str, table: dict) -> dict | None:
+    """ราคาของโมเดล: ตรงตัว/ขึ้นต้น (ยาวสุดชนะ) → ชื่อตระกูลอยู่ในชื่อโมเดล → ไม่รู้ = None"""
+    m = (model or "").lower()
+    hits = [k for k in table if m.startswith(k.lower())] or [k for k in table if k.lower() in m]
+    return table[max(hits, key=len)] if hits else None
+
+
+def usage_cost(u: dict, model: str, table: dict) -> float | None:
+    p = price_for(model, table)
+    return None if p is None else sum(u[k] * p[k] for k in USAGE_KEYS) / 1e6
+
+
+def usage_summary(stem: str, sessions: list[dict], project: str, since_days: float) -> dict:
+    """รวม token/USD ของ session ที่อ้างแผน stem แยกตามขั้นและโมเดล (เปอร์เซ็นต์คิดจาก USD · ไม่รู้ราคา = จาก token)"""
+    table = price_table()
+    rows, by_phase, by_model = [], {}, {}
+    total = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "tokens": 0}
+    unknown = set()
+    for s in sessions:
+        if stem.lower() not in {x.lower() for x in s["stems"]}:
+            continue
+        ph = session_phase(s["flags"])
+        r = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "id": s["id"], "phase": ph, "flags": sorted(s["flags"]), "title": s["title"],
+                                             "first": s["first"], "last": s["last"], "calls": s["calls"], "dir": s["dir"],
+                                             "models": sorted(s["models"])}
+        for model, u in s["models"].items():
+            c = usage_cost(u, model, table)
+            if c is None:
+                unknown.add(model)
+            bm = by_model.setdefault(model, dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "sessions": 0, "calls": 0})
+            bm["sessions"] += 1
+            bm["calls"] += u["calls"]
+            for k in USAGE_KEYS:
+                r[k] += u[k]
+                bm[k] += u[k]
+            r["usd"] += c or 0
+            bm["usd"] += c or 0
+        r["tokens"] = sum(r[k] for k in USAGE_KEYS)
+        bp = by_phase.setdefault(ph, dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "sessions": 0, "tokens": 0})
+        bp["sessions"] += 1
+        for k in USAGE_KEYS + ("usd", "tokens"):
+            bp[k] += r[k]
+            total[k] += r[k]
+        rows.append(r)
+    base = total["usd"] if total["usd"] > 0 else total["tokens"]
+    for ph, bp in by_phase.items():
+        bp["pct"] = round(100 * (bp["usd"] if total["usd"] > 0 else bp["tokens"]) / base) if base else 0
+    return {"stem": stem, "project": project, "at": now(), "since_days": since_days, "sessions": len(rows),
+            "total": total, "by_phase": by_phase, "by_model": by_model, "unknown_price": sorted(unknown),
+            "pct_by": "usd" if total["usd"] > 0 else "tokens", "session_list": rows}
+
+
+def fmt_tok(n) -> str:
+    n = int(n or 0)
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1000 else str(n)
+
+
+def usage_brief(stem: str) -> dict:
+    """บรรทัดสั้นสำหรับ UI จาก usage/<stem>.json (ไม่มี = {})"""
+    u = read_json(USAGE_DIR / f"{stem}.json")
+    if not u.get("sessions"):
+        return {}
+    ph = u.get("by_phase") or {}
+    return {"tokens": u["total"]["tokens"], "usd": round(u["total"]["usd"], 2), "sessions": u["sessions"], "at": u.get("at", ""),
+            "pct": {k: ph[k]["pct"] for k, _ in USAGE_PHASES if k in ph}, "pct_by": u.get("pct_by", "usd")}
+
+
+def usage_brief_topic(topic: str) -> dict:
+    """รวมทุกแผนของเรื่องเดียวกัน (GOAL_<เรื่อง> ↔ PLAN_FLASH_<เรื่อง>_R<n>) สำหรับการ์ดธง"""
+    out, pct, n = {}, {}, 0
+    for f in USAGE_DIR.glob("*.json") if USAGE_DIR.is_dir() else []:
+        if goal_topic(f.stem) != topic:
+            continue
+        b = usage_brief(f.stem)
+        if not b:
+            continue
+        n += 1
+        out = {"tokens": out.get("tokens", 0) + b["tokens"], "usd": round(out.get("usd", 0) + b["usd"], 2),
+               "sessions": out.get("sessions", 0) + b["sessions"], "at": max(out.get("at", ""), b["at"]), "pct_by": b["pct_by"]}
+        for k, v in b["pct"].items():
+            pct[k] = pct.get(k, 0) + v
+    if n:
+        out["pct"] = {k: round(v / n) for k, v in pct.items()}
+        out["plans"] = n
+    return out
+
+
+def cmd_usage(a) -> int:
+    """`flashq usage <แผน|โปรเจกต์> [--since วัน]`: สแกน transcript ของ Claude Code ที่ cwd ตรงกับโปรเจกต์ (รวม worktree)
+    → session ที่อ้างชื่อแผน รวม token แยกขั้น/โมเดล + USD โดยประมาณ · บันทึก ~/.flashq/usage/<stem>.json ให้ UI"""
+    target = Path(a.target)
+    is_plan = target.suffix.lower() == ".md" or target.name.upper().startswith("PLAN_")
+    if is_plan:
+        plan = target if target.is_absolute() else Path.cwd() / target
+        start = plan.parent if plan.parent.is_dir() else Path.cwd()
+        stems = [plan.stem]
+    else:
+        start = target if target.is_absolute() else Path.cwd() / target
+        if not start.is_dir():
+            print(f"ไม่พบโฟลเดอร์/ไฟล์แผน '{a.target}' (ให้ path ไฟล์ PLAN_*.md หรือโฟลเดอร์โปรเจกต์)")
+            return 1
+        stems = []
+    if a.project:
+        root = Path(a.project).resolve()
+    else:
+        root, is_git = project_root(start)
+        if not is_git and start.resolve().is_relative_to(Path.cwd().resolve()):  # ไม่ใช่ git → รากคือโฟลเดอร์ที่สั่ง (ถ้าแผนอยู่ใต้มัน)
+            root = Path.cwd().resolve()
+    anc = [start.resolve()] + [p for p in start.resolve().parents]  # cwd ของ Claude อาจลึกกว่า/ตื้นกว่ารากโปรเจกต์ → รับทุกชั้นระหว่างแผนกับราก
+    try:
+        anc = anc[:anc.index(root.resolve()) + 1]
+    except ValueError:
+        anc = [start.resolve(), root.resolve()]
+    dirs = transcript_dirs(anc)
+    if not dirs:
+        print(f"ไม่พบโฟลเดอร์ transcript ของ {root} ใน {CLAUDE_PROJECTS} (Claude Code ยังไม่เคยเปิดโปรเจกต์นี้?)")
+        print(f"USAGE={stems[0] if stems else root.name} claude_in=0 claude_out=0 cache_read=0 sessions=0")
+        return 1
+    sessions = scan_sessions(dirs, a.since)
+    if not stems:  # โปรเจกต์: ทุกแผน PLAN_* ที่ถูกพูดถึงใน session ช่วงนี้ (ตัวพิมพ์ตามที่เจอครั้งแรก)
+        names = {}
+        for x in sessions:
+            for s in sorted(x["stems"]):
+                names.setdefault(s.lower(), s)
+        stems = [names[k] for k in sorted(names)]
+    print(f"transcript {len(dirs)} โฟลเดอร์ · {len(sessions)} session ใน {a.since:g} วันล่าสุด · โปรเจกต์ {root}")
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    rc, grand, seen_sessions, ph_th = 0, dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0}, set(), dict(USAGE_PHASES)
+    for stem in stems:
+        u = usage_summary(stem, sessions, str(root), a.since)
+        if not u["sessions"]:
+            if is_plan:
+                print(f"ไม่พบ session ของ Claude ที่อ้างถึง {stem} ใน {a.since:g} วันล่าสุด (ลอง --since มากขึ้น หรือ --project <โฟลเดอร์>)")
+                print(f"USAGE={stem} claude_in=0 claude_out=0 cache_read=0 sessions=0")
+                rc = 1
+            continue
+        write_json(USAGE_DIR / f"{stem}.json", u)
+        t = u["total"]
+        print(f"\n== {stem} · {u['sessions']} session · Claude ใช้ ~{fmt_tok(t['tokens'])} token (~${t['usd']:.2f} โดยประมาณ)")
+        print(f"{'ขั้น':<10}{'session':>8}{'in ใหม่':>10}{'cache เขียน':>12}{'cache อ่าน':>12}{'out':>9}{'~USD':>9}{'%':>5}")
+        for k, th in USAGE_PHASES:
+            bp = u["by_phase"].get(k)
+            if bp:
+                print(f"{th:<10}{bp['sessions']:>8}{fmt_tok(bp['in']):>10}{fmt_tok(bp['cache_write']):>12}{fmt_tok(bp['cache_read']):>12}{fmt_tok(bp['out']):>9}{bp['usd']:>9.2f}{bp['pct']:>4}%")
+        print(f"{'รวม':<10}{u['sessions']:>8}{fmt_tok(t['in']):>10}{fmt_tok(t['cache_write']):>12}{fmt_tok(t['cache_read']):>12}{fmt_tok(t['out']):>9}{t['usd']:>9.2f}")
+        print("โมเดล: " + " · ".join(f"{m} {bm['sessions']} session {bm['calls']} ครั้ง ~${bm['usd']:.2f}" for m, bm in sorted(u["by_model"].items())))
+        if u["unknown_price"]:
+            print(f"  (ไม่รู้ราคาของ {', '.join(u['unknown_price'])} → ตั้งใน {CONFIG} ช่อง prices)")
+        for r in u["session_list"]:
+            print(f"  {r['id'][:8]} {ph_th[r['phase']]:<8} {r['first'][:16].replace('T', ' ')} {fmt_tok(r['tokens']):>7} ~${r['usd']:.2f} [{' '.join(r['flags']) or '-'}] {r['title'][:50]}")
+            if r["id"] not in seen_sessions:
+                seen_sessions.add(r["id"])
+                for k in USAGE_KEYS + ("usd",):
+                    grand[k] += r[k]
+        print(f"USAGE={stem} claude_in={t['in'] + t['cache_write']} claude_out={t['out']} cache_read={t['cache_read']} sessions={u['sessions']} usd={t['usd']:.2f}")
+    if not is_plan:
+        if not stems:
+            print("ไม่พบ session ที่พูดถึงแผน PLAN_* ในช่วงนี้")
+            rc = 1
+        print(f"\nรวมทั้งโปรเจกต์ (session ไม่ซ้ำ {len(seen_sessions)}): in ใหม่ {fmt_tok(grand['in'] + grand['cache_write'])} · cache อ่าน {fmt_tok(grand['cache_read'])} · out {fmt_tok(grand['out'])} · ~${grand['usd']:.2f}")
+    print(f"(ราคาโดยประมาณจากตารางในตัว · ทับได้ที่ {CONFIG} ช่อง prices · บันทึกผลไว้ที่ {USAGE_DIR})")
+    return rc
+
+
 def goal_next_plan(gl: dict, n: int) -> dict:
     """แผนรอบ n (PLAN_FLASH_<เรื่อง>_R<n>.md) เขียนเสร็จหรือยัง — ดูโฟลเดอร์แผนของโปรเจกต์ + โฟลเดอร์ของ session ที่ทำ (worktree)"""
     proj = Path(gl.get("project", ""))
@@ -3022,6 +3716,9 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
     def ph(step, label, ago=None, what="เคลื่อนไหวล่าสุด", warn=False, rnd=None, **kw):
         return dict(step=step, label=label, ago_sec=ago, ago_what=what, warn=warn, notes=notes, round=rnd or n_next, **kw)
 
+    if verdict == "CANCELLED":
+        return ph("result", "🚫 ยกเลิกโดย user — ไม่วนต่อ" + (" · งาน Flash ของธงนี้ยังรัน/รอคิวอยู่" if runs or queued else ""),
+                  _secs((gl.get("cancelled") or {}).get("at", "")), "ยกเลิกมา", bool(runs or queued))
     if busy.get("what") == "verify":
         return ph("verify", "🔍 กำลังรันเกณฑ์ตรวจทุกข้อ (goal verify)", _secs(busy.get("at", "")), "เริ่ม")
     if busy.get("what") == "claude":
@@ -3072,7 +3769,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             if line.startswith("# "):
                 title = re.sub(r"^#\s*GOAL\s*:\s*", "", line).strip()
                 break
-        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res", "flash", "rechecks", "warn")} for r in st.get("rounds", [])]
+        rounds = [{k: r.get(k) for k in ("at", "verdict", "fail", "stop", "human", "human_res", "flash", "rechecks", "warn", "cancel_hint")} for r in st.get("rounds", [])]
         if rounds:
             rounds[-1]["results"] = st["rounds"][-1].get("results", {})
         GOALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -3081,7 +3778,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
             "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
             "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
             "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds,
-            "owner": st.get("owner") or {}, "goal_abs": str(goal)})
+            "owner": st.get("owner") or {}, "goal_abs": str(goal), "cancelled": goal_cancelled(goal, st)})
     except Exception:
         pass
 
@@ -3130,21 +3827,27 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
         if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
             continue
         verdict = last["verdict"] if last else "START"
+        if not gl.get("cancelled"):  # user เขียนบรรทัด "สถานะ: ยกเลิก…" ในไฟล์ GOAL เอง (ไม่ได้สั่ง goal cancel) ก็นับ
+            note = goal_cancel_note(Path(gl.get("goal_abs") or Path(gl.get("project", "")) / gl.get("goal", "")))
+            gl["cancelled"] = {"at": "", "reason": note, "src": "file"} if note else {}
+        if gl["cancelled"]:
+            verdict = "CANCELLED"
         upd = _secs(gl.get("updated", "")) or 0
-        if verdict in ("DONE", "DONE_NEEDS_USER", "STOP") and upd > 3 * 86400:
+        if verdict in ("DONE", "DONE_NEEDS_USER", "STOP", "CANCELLED") and upd > 3 * 86400:
             continue
         res = (last or {}).get("results") or {}
         machine = [i for i in gl.get("items", []) if not i.get("human")]
-        final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP")
+        final = verdict in ("DONE", "DONE_NEEDS_USER", "STOP", "CANCELLED")
+        end = gl["cancelled"].get("at") or (last or {}).get("at", "") if final else ""
         own = dict(gl.get("owner") or {})
         if own.get("session"):
             own["title"] = claude_session_title(own["session"]) or own.get("title", "")
         bz = read_json(GOALS_DIR / f"{gl['id']}.busy.json")
         busy = bz if bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0)) else {}
         lj = dict(last_job, ago_sec=_secs(last_job["finished"])) if last_job else {}
-        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict != "DONE" else {}, unv)
-        out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd,
-                        elapsed_sec=_secs(gl.get("started", ""), last["at"]) if final else _secs(gl.get("started", "")),
+        phase = goal_phase(gl, verdict, last, busy, runs, qs, lj, claude_activity(own.get("session", "")) if verdict not in ("DONE", "CANCELLED") else {}, unv)
+        out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd, usage=usage_brief_topic(topic),
+                        elapsed_sec=_secs(gl.get("started", ""), end) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
                         jobs=jobs_now, last_job=lj, phase=phase, unverified=unv,
                         project_name=Path(gl.get("project", "")).name))
@@ -3261,6 +3964,9 @@ def goal_human(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, ro
     goal_publish(root, goal, rel, g, st, rounds_max)
     if bad:
         print("ไม่ผ่าน: " + " · ".join(f"{k} {res[k]['reason']}" for k in bad) + " → ให้ Claude แปลงเหตุเป็นเกณฑ์ที่วัดได้ แล้ว `goal check --reset` วนต่อ")
+        hint = goal_cancel_hint(st)
+        if hint:
+            print(f"แนะนำ: พิจารณายกเลิกธง (flashq goal cancel {rel} --reason \"…\") — {hint} · ให้ user เลือก วนต่อ / ยกเลิกธง")
     left = [k for k in hum if k not in res]
     print(f"GOAL={last['verdict']} คนตรวจผ่าน {sum(1 for k in hum if res.get(k, {}).get('ok'))}/{len(hum)}" + (f" · ยังไม่ตรวจ {', '.join(left)}" if left else ""))
     return 0
@@ -3301,6 +4007,7 @@ def open_link(url: str) -> None:
 def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     """ปุ่มบนการ์ดเป้าหมาย: verify (ตรวจใหม่เบื้องหลัง) · human (ผ่าน/ไม่ผ่านข้อคนตรวจ) · open (เปิดไฟล์/โฟลเดอร์)
     claude (ทำต่อ: แอป Claude desktop = session ใหม่พิมพ์ /flash-goal รอไว้ · ไม่มีแอป/body.cli = หน้าต่าง CLI) · session (เปิด session เดิมในแอป) · archive (✖ เก็บการ์ดที่จบแล้ว)
+    cancel (ยกเลิกธง + เหตุ = goal cancel) · hide (ซ่อนการ์ดธงที่ยกเลิก = ลบสำเนาใน ~/.flashq/goals)
     path ทุกตัวมาจากสำเนาสถานะใน ~/.flashq/goals เท่านั้น ไม่รับ path จากหน้าเว็บ"""
     if not re.fullmatch(r"[0-9a-f]{12}", gid or ""):
         return 400, {"ok": False, "message": "id ไม่ถูกต้อง"}
@@ -3334,6 +4041,21 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         gl["archived"] = now()
         write_json(GOALS_DIR / f"{gid}.json", gl)
         return 200, {"ok": True, "message": "เก็บแล้ว — ไฟล์ GOAL และประวัติยังอยู่ครบ · สั่ง goal check/verify เรื่องนี้ใหม่ = กลับมาแสดงเอง"}
+    if action == "cancel":  # ตรรกะเดียวกับ `goal cancel` (บรรทัดสถานะในไฟล์ GOAL · ไฟล์สถานะ · การ์ด)
+        if ((gl.get("rounds") or [{}])[-1]).get("verdict") == "DONE":
+            return 409, {"ok": False, "message": "ธงนี้ผ่านแล้ว ยกเลิกไม่ได้ (ใช้ ✖ เก็บ)"}
+        reason = " ".join(str(body.get("reason") or "").split())
+        if not reason:
+            return 400, {"ok": False, "message": "ใส่เหตุที่เลิกก่อน"}
+        r = subprocess.run(me + ["cancel", str(goal), "--reason", reason, "--project", str(root)],
+                           cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        return (200 if r.returncode == 0 else 400), {"ok": r.returncode == 0, "message": (r.stdout or r.stderr).strip()}
+    if action == "hide":  # ซ่อนการ์ดธงที่ยกเลิกแล้ว = ลบเฉพาะสำเนาใน ~/.flashq/goals (ไฟล์ GOAL/สถานะในโปรเจกต์อยู่ครบ)
+        if not (gl.get("cancelled") or goal_cancel_note(goal)):
+            return 409, {"ok": False, "message": "ซ่อนได้เฉพาะธงที่ยกเลิกแล้ว"}
+        for f in [GOALS_DIR / f"{gid}.json", bp] + list(GOALS_DIR.glob(f"{gid}.*.log")):
+            f.unlink(missing_ok=True)
+        return 200, {"ok": True, "message": "ซ่อนการ์ดแล้ว — ไฟล์ GOAL และสถานะในโปรเจกต์ยังอยู่ · ธงที่ยกเลิกไม่สร้างการ์ดใหม่เอง"}
     if action == "session":
         host =(gl.get("owner") or {}).get("host") or ""
         url = claude_app_link("continue", {"session": host}) if re.fullmatch(r"local_[A-Za-z0-9-]{1,64}", host) else ""
@@ -3342,6 +4064,8 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
         open_link(url)
         return 200, {"ok": True, "message": "เปิด session เดิมในแอป Claude แล้ว (ถ้า session ถูกลบ/เก็บถาวร แอปจะไปหน้ารวม)"}
     if action in ("verify", "claude"):
+        if gl.get("cancelled") or goal_cancel_note(goal):
+            return 409, {"ok": False, "message": "ธงนี้ยกเลิกแล้ว — ไม่ตรวจ/ไม่วนต่อ (เปิดใหม่: ลบบรรทัดสถานะในไฟล์ GOAL แล้ว goal check --reset)"}
         if busy:
             return 409, {"ok": False, "message": f"กำลัง{'ตรวจใหม่' if bz.get('what') == 'verify' else 'เปิด Claude ทำต่อ'}อยู่แล้ว (เริ่ม {bz.get('at')})"}
         topic, proj = goal_topic(gl.get("stem", "")), os.path.normcase(str(root))
@@ -3369,6 +4093,163 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     return 400, {"ok": False, "message": "action ไม่รู้จัก"}
 
 
+GOAL_CANCEL_RE = re.compile(r"^\s*>\s*\*\*\s*สถานะ\s*:\s*(ยกเลิก[^*]*)\*\*\s*(?:[—–-]+\s*)?(.*)$")
+
+
+def goal_cancel_note(goal: Path) -> str:
+    """บรรทัด `> **สถานะ: ยกเลิกโดย user (<วันที่>)** — <เหตุ>` ใต้หัวไฟล์ GOAL (ก่อนหัวข้อ `## ` แรก) → "ยกเลิกโดย user (...) — เหตุ" · ไม่มี = ''"""
+    try:
+        with goal.open(encoding="utf-8", errors="replace") as fh:
+            for k, line in enumerate(fh):
+                if k > 60 or line.startswith("## "):
+                    break
+                m = GOAL_CANCEL_RE.match(line)
+                if m:
+                    return m.group(1).strip() + (f" — {m.group(2).strip()}" if m.group(2).strip() else "")
+    except OSError:
+        pass
+    return ""
+
+
+def goal_cancelled(goal: Path, st: dict) -> dict:
+    """ธงถูกยกเลิกไหม: สถานะที่ goal cancel บันทึก หรือบรรทัด "สถานะ: ยกเลิก…" ในไฟล์ GOAL (เขียนเอง) → {at, reason} · ไม่ได้ยกเลิก = {}"""
+    c = dict((st or {}).get("cancelled") or {})
+    if not c:
+        note = goal_cancel_note(goal)
+        c = {"at": "", "reason": note, "src": "file"} if note else {}
+    return c
+
+
+def goal_round_brief(r: dict, prev: dict | None) -> dict:
+    """ย่อรอบไว้ข้ามการ check --reset: คนตรวจไม่ผ่าน (None = ยังไม่ตรวจ) · จำนวนเกณฑ์ที่ถอยหลัง"""
+    hres = r.get("human_res") or {}
+    pres = (prev or {}).get("results") or {}
+    return {"at": r.get("at", ""), "verdict": r.get("verdict", ""), "human_bad": any(not v.get("ok") for v in hres.values()) if hres else None,
+            "regress": sum(1 for k, v in (r.get("results") or {}).items() if not v.get("ok") and pres.get(k, {}).get("ok"))}
+
+
+def goal_cancel_hint(st: dict) -> str:
+    """เหตุที่ควรพิจารณายกเลิกธง: คนตรวจไม่ผ่าน ≥2 รอบติด · เกณฑ์ถอยหลัง ≥2 รอบ (นับรวมก่อน check --reset) · ไม่มี = ''"""
+    rs = st.get("rounds") or []
+    seq = list(st.get("past") or []) + [goal_round_brief(r, rs[k - 1] if k else None) for k, r in enumerate(rs)]
+    streak = 0
+    for b in reversed([b for b in seq if b.get("human_bad") is not None]):
+        if not b["human_bad"]:
+            break
+        streak += 1
+    if streak >= 2:
+        return f"คนตรวจให้ไม่ผ่าน {streak} รอบติด"
+    back = sum(1 for b in seq if b.get("regress"))
+    return f"เกณฑ์ถอยหลังแล้ว {back} รอบ (เคยผ่านแล้วกลับไม่ผ่าน)" if back >= 2 else ""
+
+
+def _log_shas(text: str) -> list[str]:
+    """เลข commit ในตารางบันทึกผล (§4 / "บันทึกผล" / "บันทึกรอบ") — มีคอลัมน์ commit = อ่านคอลัมน์นั้น · ไม่มี = คำฐาน 16 ที่มีตัวอักษร"""
+    out, on, lvl, fence, cols = [], False, 0, False, None
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        h = None if fence else re.match(r"^(#{1,6})\s+(.*)$", line)
+        if h:
+            if on and len(h.group(1)) <= lvl:
+                on = False
+            t = h.group(2).strip()
+            if re.match(r"(§\s*)?4\s*[.)]", t) or "บันทึกผล" in t or "บันทึกรอบ" in t:
+                on, lvl = True, len(h.group(1))
+            cols = None
+            continue
+        if not on or fence or not line.lstrip().startswith("|"):
+            cols = None
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cols is None:
+            cols = [k for k, c in enumerate(cells) if "commit" in c.lower()]
+            continue
+        if all(re.fullmatch(r":?-+:?", c) for c in cells if c):
+            continue
+        pool = " ".join(cells[k] for k in cols if k < len(cells)) if cols else " ".join(cells)
+        toks = re.findall(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])", pool)
+        out += [t for t in toks if cols or re.search(r"[a-f]", t)]
+    return out
+
+
+def goal_round_commits(root: Path, goal: Path) -> list[dict]:
+    """commit ของงานในธงนี้จากบันทึกผลของ GOAL + แผน PLAN_FLASH_<เรื่อง>_R*.md (เฉพาะที่มีจริงใน repo) · ใหม่ → เก่า"""
+    topic, dirs = goal_topic(goal.stem), []
+    for d in (goal.parent, root / (project_cfg(root).get("plan_dir") or "docs/plans")):
+        if d.is_dir() and all(os.path.normcase(str(d.resolve())) != os.path.normcase(str(x.resolve())) for x in dirs):
+            dirs.append(d)
+    plans = sorted({p for d in dirs for p in d.glob("PLAN_FLASH_*.md") if re.search(r"_R\d+\.md$", p.name, re.I) and goal_topic(p.name) == topic},
+                   key=lambda p: int(re.search(r"_R(\d+)\.md$", p.name, re.I).group(1)))
+    found: dict[str, str] = {}
+    for src in [goal] + plans:
+        try:
+            for t in _log_shas(src.read_text(encoding="utf-8", errors="replace")):
+                found.setdefault(t, src.name)
+        except OSError:
+            pass
+    out, seen = [], set()
+    for t, src in found.items():
+        info = _git(root, "show", "-s", "--format=%H%x09%h%x09%ct%x09%s", t + "^{commit}", "--")
+        parts = info.splitlines()[0].split("\t", 3) if info else []
+        if len(parts) == 4 and parts[0] not in seen:
+            seen.add(parts[0])
+            out.append({"sha": parts[0], "short": parts[1], "ts": int(parts[2]), "subject": parts[3], "src": src})
+    return sorted(out, key=lambda c: c["ts"], reverse=True)
+
+
+def goal_cancel(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, rounds_max: int, a, is_git: bool) -> int:
+    """user สั่งเลิกธง: เติมบรรทัดสถานะใต้หัวไฟล์ GOAL · บันทึก cancelled ในไฟล์สถานะ · การ์ดเป็นสถานะยกเลิก (ไม่ลบ)
+    · ไม่ commit/ไม่ถอยโค้ดเอง — พิมพ์ commit ของงานในธง + คำสั่ง git revert ให้ user ตัดสิน"""
+    reason = " ".join((a.reason or "").split())
+    if not reason:
+        print('GOAL_CANCEL=FAIL ต้องระบุ --reason "เหตุที่เลิก"')
+        return 1
+    prev = goal_cancelled(goal, st)
+    if not goal_cancel_note(goal):
+        raw = goal.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        text = raw.decode("utf-8-sig", errors="replace")
+        nl = "\r\n" if "\r\n" in text else "\n"
+        lines = text.splitlines(keepends=True)
+        mark = f"> **สถานะ: ยกเลิกโดย user ({now()[:10]})** — {reason}{nl}"
+        i = next((k for k, x in enumerate(lines) if x.startswith("# ")), -1)
+        if i < 0:
+            lines[:0] = [mark, nl]
+        else:
+            if not lines[i].endswith(("\n", "\r")):
+                lines[i] += nl
+            lines[i + 1:i + 1] = [nl, mark] + ([nl] if i + 1 < len(lines) and lines[i + 1].strip() else [])
+        goal.write_bytes((b"\xef\xbb\xbf" if bom else b"") + "".join(lines).encode("utf-8"))
+    if not st:
+        st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD") if is_git else "", "started": now(), "rounds": []}
+    if not st.get("cancelled"):
+        st["cancelled"] = {"at": now(), "reason": reason if not prev else prev.get("reason") or reason, "by": "user", "rounds": len(st.get("rounds") or [])}
+    st["owner"] = goal_owner() or st.get("owner") or {}
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    write_json(sp, st)
+    goal_publish(root, goal, rel, g, st, rounds_max)
+    c = st["cancelled"]
+    print(("ธงนี้ยกเลิกไว้แล้ว" if prev else "ยกเลิกธงแล้ว") + f" ({c['at']}) — {c['reason']} · ใช้ไป {c.get('rounds', 0)}/{rounds_max} รอบ")
+    topic, proj = goal_topic(goal.stem), os.path.normcase(str(root))
+    live = [j for j in jobs() if live_state(j) in ("running", "queued") and os.path.normcase(j.get("project", "")) == proj
+            and re.search(r"_R\d+\.md$", j.get("plan") or "", re.I) and goal_topic(j["plan"]) == topic]
+    for j in live:
+        print(f"เตือน: งาน Flash ของธงนี้ยัง{'รัน' if live_state(j) == 'running' else 'รอคิว'}อยู่ {j['id']} ({j.get('plan')}) — ไม่หยุดให้เอง · หยุด: `flashq cancel {j['id']}`")
+    cs = goal_round_commits(root, goal) if is_git else []
+    if cs:
+        print("commit ของงานในธงนี้ (จากบันทึกผลของ GOAL/แผน _R*) — ไม่ถอยให้อัตโนมัติ ให้ user ดู diff แล้วตัดสินเอง:")
+        for x in cs:
+            print(f"  {x['short']}  {datetime.fromtimestamp(x['ts']).strftime('%Y-%m-%d %H:%M')}  {x['subject'][:90]}  ({x['src']})")
+        print("ถ้าจะถอยทั้งหมด (ใหม่ → เก่า): git revert --no-edit " + " ".join(x["short"] for x in cs))
+    else:
+        print("ไม่พบ commit ในบันทึกผลของแผน (§4) — ถ้าจะถอย ดูเองด้วย `git log --oneline " + ((st.get("base") or "")[:9] + "..HEAD`" if st.get("base") else "`"))
+    print(f"ต้อง commit ไฟล์ GOAL เอง (flashq ไม่ commit ให้): `git add {rel}` แล้ว `git commit -m \"goal: ยกเลิกธง {goal.stem}\"`")
+    print(f"GOAL=CANCELLED {rel}")
+    return 0
+
+
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -3391,6 +4272,16 @@ def cmd_goal(a) -> int:
         return 1
     rel = goal.relative_to(root).as_posix() if goal.is_relative_to(root) else str(goal)
     rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"]))
+    if a.action == "cancel":
+        return goal_cancel(root, goal, rel, g, st, sp, rounds_max, a, is_git)
+    canc = goal_cancelled(goal, st)
+    if canc and not (a.action == "check" and a.reset and not goal_cancel_note(goal)):  # ธงที่ยกเลิก = ไม่ตรวจ/ไม่วน/ไม่สร้างการ์ดใหม่
+        label = canc.get("reason", "") if canc.get("src") == "file" else f"ยกเลิกโดย user ({canc.get('at', '')}) — {canc.get('reason', '')}"
+        print(f"ธงนี้{label} · ไม่ตรวจ/ไม่วนต่อ")
+        if a.action != "status":
+            print(f"เปิดใหม่: ให้ user ยืนยันก่อน → ลบบรรทัด \"สถานะ: ยกเลิก…\" ใต้หัวไฟล์ GOAL (ถ้ามี) → `goal check {rel} --reset`")
+        print(f"GOAL=CANCELLED {rel}")
+        return 0 if a.action == "status" else 1
     if a.action == "check":
         errs, warns = goal_lint(g)
         if not is_git:
@@ -3406,8 +4297,12 @@ def cmd_goal(a) -> int:
             print("ต้องแก้: เกณฑ์ต่างจากตอนเริ่ม (ย้ายเสาประตู) → ให้ user ยืนยันเกณฑ์ใหม่แล้วรัน `goal check --reset`")
             print("GOAL_CHECK=FAIL")
             return 1
+        old = st
         if not st or a.reset:
             st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": [], "owner": st.get("owner", {}) if st else {}}
+        if a.reset and old:  # ประวัติย่อข้ามการ reset → ยังรู้ว่าคนตรวจไม่ผ่านซ้ำ/ถอยหลังซ้ำ (เตือนพิจารณายกเลิก)
+            ors = old.get("rounds") or []
+            st["past"] = (list(old.get("past") or []) + [goal_round_brief(r, ors[k - 1] if k else None) for k, r in enumerate(ors)])[-30:]
         st["owner"] = goal_owner() or st.get("owner") or {}
         sp.parent.mkdir(parents=True, exist_ok=True)
         write_json(sp, st)
@@ -3480,8 +4375,9 @@ def cmd_goal(a) -> int:
             stop.append(f"เกินงบเวลา {g['hours']:g} ชม. (ผ่านไป {hrs:.1f})")
         verdict = "STOP" if stop else "CONTINUE"
     since = _ts(prev["at"]) if prev else _ts(st["started"]) - 5
-    rnd = {"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope, "locked": locked,
-           "stop": stop, "human": human, "warn": warn, "fp": fp, "flash": sum(1 for a, _ in windows if a >= since)}
+    rnd = {"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope[:50], "locked": locked[:50],
+           "stop": stop, "human": human, "warn": warn[:50], "fp": fp, "flash": sum(1 for a, _ in windows if a >= since),
+           "out_scope_n": len(out_scope), "warn_n": len(warn)}  # เก็บแค่ 50 รายการ (เคยบวม 1.3MB เพราะโฟลเดอร์ untracked ทั้งโปรเจกต์)
     if recheck:
         rnd["flash"] = popped.get("flash", 0)
         rnd["rechecks"] = popped.get("rechecks", 0) + 1
@@ -3491,6 +4387,9 @@ def cmd_goal(a) -> int:
             if all(hres.get(i["id"], {}).get("ok") for i in g["items"] if not i["cmd"]):
                 rnd["verdict"] = verdict = "DONE"
     st["rounds"].append(rnd)
+    hint = goal_cancel_hint(st) if verdict not in ("DONE", "DONE_NEEDS_USER") else ""
+    if hint:
+        rnd["cancel_hint"] = hint
     st["owner"] = goal_owner() or st.get("owner") or {}
     write_json(sp, st)
     goal_publish(root, goal, rel, g, st, rounds_max)
@@ -3507,6 +4406,8 @@ def cmd_goal(a) -> int:
         print("ให้ user ตรวจเอง:\n  " + "\n  ".join(human))
         if recheck and verdict == "DONE_NEEDS_USER":
             print("ข้อคนตรวจ: ให้ user กด ✅/❌ ที่การ์ดในหน้าเว็บ flashq หรือสั่ง `goal human <GOAL> <G-xx> --pass|--fail \"เหตุ\"` (verify ซ้ำไม่ช่วย)")
+    if hint:
+        print(f"แนะนำ: พิจารณายกเลิกธง (flashq goal cancel {rel} --reason \"…\") — {hint} · ให้ user เลือก วนต่อ / ยกเลิกธง")
     left = rounds_max - n
     print(f"GOAL={verdict} รอบ {n}/{rounds_max} · ไม่ผ่าน {', '.join(fail) or '-'}" + (f" · เหลือ {left} รอบ" if verdict == "CONTINUE" else ""))
     return 0 if verdict in ("DONE", "DONE_NEEDS_USER", "CONTINUE") else 1
@@ -3521,7 +4422,6 @@ def main() -> int:
     r.add_argument("plan", nargs="?")
     r.add_argument("tasks", nargs="?")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
-    r.add_argument("--big-plan", action="store_true", help=f"ยอมรับแผนที่ใหญ่เกินเพดาน ({PLAN_HARD[0]} บรรทัด / โค้ด {PLAN_HARD[1]} บรรทัด) — ใช้เมื่อ user อนุญาต")
     r.add_argument("--skip-precheck", action="store_true", help="ข้ามด่านตรวจแผนพิการ (path ไม่มีจริง · ข้อความ ก่อน: ไม่เจอ/เจอหลายที่)")
     r.set_defaults(kind="", prompt="")
     vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
@@ -3565,11 +4465,23 @@ def main() -> int:
     ca = sp.add_parser("cancel", help="ยกเลิกงาน (รอคิวหรือกำลังทำ)")
     ca.add_argument("id")
     ca.set_defaults(fn=cmd_cancel)
+    wt = sp.add_parser("wait", help="รอจนงานจบแล้วพิมพ์ FLASH_RUN=... (Claude รันใน background · ไม่ต้อง sleep/poll)")
+    wt.add_argument("target", help="job id (ขึ้นต้น) หรือชื่อแผน/ไฟล์แผน (= ทุกงานของแผนนั้นที่ยังไม่จบ)")
+    wt.add_argument("--timeout-min", type=float, default=480, help="รอได้นานสุด (นาที) · เกิน = FLASH_WAIT=TIMEOUT exit 3")
+    wt.add_argument("--poll", type=float, default=15, help="เช็กทุกกี่วินาที")
+    wt.set_defaults(fn=cmd_wait)
+    sh = sp.add_parser("shrink", help="ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (ประหยัด context)")
+    sh.add_argument("images", nargs="+")
+    sh.add_argument("--max", type=int, default=800, help="ด้านยาวสุด (px)")
+    sh.add_argument("--quality", type=int, default=80)
+    sh.add_argument("--out", default="", help="โฟลเดอร์ผล (ค่าเริ่มต้น <โปรเจกต์>/.tmp/shrink)")
+    sh.set_defaults(fn=cmd_shrink)
     sw = sp.add_parser("switch", help="สลับบัญชีโมเดล flash-worker")
     sw.add_argument("target", nargs="?")
     sw.set_defaults(fn=cmd_switch)
-    ins = sp.add_parser("install", help="ติดตั้ง /flash + flash-worker แบบ global")
-    ins.add_argument("--force", action="store_true")
+    ins = sp.add_parser("install", help="ติดตั้ง /flash + agent (opencode) และ /flash-* + flash-checker + hooks (Claude) แบบ global")
+    ins.add_argument("--force", action="store_true", help="ทับไฟล์ของผู้ใช้ที่ชื่อซ้ำ (สำรอง .bak-flashq ก่อน)")
+    ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) ใน ~/.claude/settings.json")
     ins.set_defaults(fn=cmd_install)
     ini = sp.add_parser("init", help="ตั้งค่าโปรเจกต์ใหม่ (.flash.json ตรวจ branch หลักเอง · .gitignore · แม่แบบแผน)")
     ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")
@@ -3596,15 +4508,21 @@ def main() -> int:
     rn.add_argument("id")
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
     rn.set_defaults(fn=cmd_runnow)
-    go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status")
-    go.add_argument("action", choices=["check", "verify", "status", "human"])
+    go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status · cancel (user สั่งเลิกธง)")
+    go.add_argument("action", choices=["check", "verify", "status", "human", "cancel"])
     go.add_argument("goal", help="ไฟล์เป้าหมาย เช่น docs/plans/GOAL_<เรื่อง>.md")
     go.add_argument("item", nargs="?", default="", help="human: ข้อคนตรวจ เช่น G-07")
     go.add_argument("--pass", dest="passed", action="store_true", help="human: ข้อนี้ผ่าน")
     go.add_argument("--fail", default="", help='human: ข้อนี้ไม่ผ่าน + เหตุ')
+    go.add_argument("--reason", default="", help="cancel: เหตุที่ user สั่งเลิกธง (เขียนลงบรรทัดสถานะใต้หัวไฟล์ GOAL)")
     go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
     go.set_defaults(fn=cmd_goal)
+    us = sp.add_parser("usage", help="โทเคน Claude ต่อแผน: สแกน transcript ของ Claude Code (วางแผน · ตรวจ · รอบแก้) + USD โดยประมาณ")
+    us.add_argument("target", help="ไฟล์แผน PLAN_*.md หรือโฟลเดอร์โปรเจกต์ (= ทุกแผนที่ถูกพูดถึง)")
+    us.add_argument("--since", type=float, default=30, help="ย้อนดู transcript กี่วัน (ค่าเริ่มต้น 30)")
+    us.add_argument("--project", default="", help="รากโปรเจกต์ (ค่าเริ่มต้น = หาจาก git ของโฟลเดอร์แผน · worktree → checkout หลัก)")
+    us.set_defaults(fn=cmd_usage)
     ui = sp.add_parser("ui", help="หน้าเว็บ dashboard ในเครื่อง (127.0.0.1)")
     ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")

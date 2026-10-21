@@ -6,13 +6,16 @@ description: >-
 
 แผน: $ARGUMENTS · ว่าง → หา `PLAN_*FLASH*` ที่ §4 มีแถวยังไม่ตรวจ แล้วถาม user (AskUserQuestion)
 
-**ขั้นแรก — โปรเจกต์มีคำสั่งของตัวเองไหม**: มีไฟล์ `.claude/commands/flash-check.md` หรือ `.opencode/command/flash-check.md` ในโปรเจกต์ (และไม่มีบรรทัด `flashq:managed`) → **อ่านไฟล์นั้นแล้วทำตามแทนไฟล์นี้ทั้งหมด**
+**ขั้นแรก — ส่วนต่างของโปรเจกต์**: ไฟล์นี้คือกติกากลาง · โปรเจกต์มี `.claude/commands/flash-check.md` หรือ `.opencode/command/flash-check.md` ที่ไม่มีบรรทัด `flashq:managed` → อ่านไฟล์นั้น**เพิ่ม**เป็นส่วนต่าง (ขั้นเฉพาะ เช่น สคริปต์ตรวจขอบเขต · วิธี commit/land ของโปรเจกต์) · ขัดกัน = ของโปรเจกต์ชนะเฉพาะข้อนั้น
 
 คุณ = **ผู้ตรวจ** · **ห้ามเชื่อรายงานของ DeepSeek โดยไม่มีหลักฐาน** · **ห้ามแก้โค้ด/เทสต์เองทุกกรณี แม้บรรทัดเดียว** — ผิดเท่าไรก็ออกเป็น `T-xxR` ให้ Flash ทำ (ข้ออ้างที่ห้ามใช้: "แก้เองเร็วกว่าเขียน T-xxR" · "Flash พลาด 2 รอบแล้ว ผมทำเองดีกว่า" → ครบ 2 รอบ = หยุดรายงาน user ตาม §4 · "ขอรันเทสต์ดูเองนิดเดียว" → ตัดสินจากหลักฐานใน §3 เท่านั้น) · ค่าโปรเจกต์จาก `.flash.json` (`main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git: `git symbolic-ref --short refs/remotes/<remote>/HEAD` → `origin/main`/`origin/master` ที่มีจริง · โปรเจกต์ใหม่ให้รัน `flashq.py init`)
 
 ## 0. ผลจาก flashq
+- **ยังไม่มีบรรทัด `FLASH_RUN=`** (งานยังรัน/รอคิว · เพิ่งเปิด session ใหม่มา) → รัน `python {{FLASHQ}}/flashq.py wait <แผน>` **ใน background** (Bash `run_in_background: true` · timeout ยาว) แล้ว**หยุด**รอแจ้งเตือน — ห้าม sleep / poll / `status` วน (ทุกข้อความที่รอ = จ่าย context) · แจ้งแล้วอ่านบรรทัด `FLASH_RUN=` จากผลของ `wait`
+- **โมเดลผู้ตรวจ**: session นี้เป็น **Opus/Fable** → ห้ามตรวจเอง ส่ง subagent `flash-checker` (Agent tool · `subagent_type: "flash-checker"` · ติดตั้งโดย `flashq.py install`) ทำข้อ 1–3 + เติมช่อง "ตรวจ Claude"/เพิ่ม `T-xxR` ในแผน แล้ว agent หลักทำ §4 (commit แผน · สั่งรอบแก้ · merge/push) · brief ไทย = path แผน + งาน + บรรทัด `FLASH_RUN=` + path log · ไม่มี agent นี้ → ตรวจเองแต่ Grep ก่อน Read ทุกครั้ง · session เป็น **Sonnet** → ตรวจเองได้
 - `FLASH_RUN=OK` → ข้อ 1
 - `QUOTA` (สลับบัญชีครบแล้ว) → หยุด บอก user · `NOSTART` (ลองใหม่แล้ว) → หยุด บอก user
+- `FLASH_RUN=DENIED` → opencode ปฏิเสธสิทธิ์เอง (แตะไฟล์นอกโปรเจกต์ · บรรทัด `DENIED:` บอก path) งานไม่ได้ทำ **ไม่ต้องไล่หา commit/§4** → บอก user แก้สิทธิ์ตามทางแก้ที่ flashq พิมพ์ (`external_dirs` ใน `.flash.json` หรือ `permission.external_directory` ใน `~/.config/opencode/opencode.json`) แล้วส่งงานใหม่ · `OK` แต่มี `WARN: opencode ปฏิเสธสิทธิ์` = สำเร็จบางส่วน → ตรวจตามปกติแล้วบอก user ว่างานไหนขาดเพราะสิทธิ์
 - `BUSY` / `QUEUE_TIMEOUT` → มีงานอื่นในคิวกลาง ห้ามรันซ้อน บอก user (`python {{FLASHQ}}/flashq.py`)
 - `FAIL` / `TIMEOUT` → อ่าน §4 ของแผน + ท้าย log (path ในบรรทัด `START … log=` · `python {{FLASHQ}}/flashq.py log <job>`) แล้วตรวจงานที่ทำเสร็จตามปกติ
 
@@ -42,7 +45,7 @@ description: >-
 
 ## 4. บันทึก + ปิด
 - เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (จุดเล็ก = ก่อน/หลังตรงตัว · ใหญ่ = สเปก ตาม `/flash-plan` §2 · ยืนยัน) · **ห้าม revert/reset เอง**
-- **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → จบแล้ว `/flash-check` ซ้ำ · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
+- **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → `python {{FLASHQ}}/flashq.py wait <แผน>` ใน background (ไม่ poll) → แจ้งแล้ว `/flash-check` ซ้ำ (session Sonnet ทำต่อใน session เดิมได้ · Opus/Fable → subagent `flash-checker` อีกรอบ) · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
 - ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user · **merge ขัดแย้ง (conflict) → `git merge --abort` ทันที แล้วหยุดรายงาน user** (ไฟล์ที่ขัดแย้ง + commit ทั้งสองฝั่ง) · ห้ามแก้ conflict ในไฟล์โค้ดเอง
 - สรุปให้ user: ผ่าน/ไม่ผ่านกี่งาน · รอบแก้ที่ส่งไปแล้ว
 - ปิดป้ายผู้ตรวจ: `python {{FLASHQ}}/flashq.py review done <แผน> pass` (ผ่านทั้งชุด) หรือ `... fail` (มี ❌/T-xxR) — ต้องเรียกก่อนจบ session ทุกครั้ง ไม่งั้นป้ายค้างจน 90 นาทีแล้วหายเอง
