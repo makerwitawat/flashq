@@ -44,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -83,6 +84,8 @@ DEFAULTS = {
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
+PUSH_TIMEOUT_SEC = float(os.environ.get("FLASHQ_PUSH_TIMEOUT_SEC") or 120)  # git push ของ `flashq init --commit` (ห้ามค้างตลอดไปเมื่อเครือข่าย/credential มีปัญหา)
+DESKTOP_OPEN_TIMEOUT_SEC = 30  # สั่ง opencode desktop เปิด session — desktop ไม่ตอบ = ข้าม
 SHELL_POLL_SEC = float(os.environ.get("FLASHQ_SHELL_POLL_SEC") or 30)  # ถามสถานะ tool + วัดโปรเซสถี่แค่ไหนตอน log เงียบ
 SHELL_CONFIRM = 3  # หา shell ไม่เจอแต่ลูกยังอยู่ ต้องเห็นซ้ำกี่รอบ (รอบละ SHELL_POLL_SEC) ก่อนฆ่า
 SHELL_NAMES = {"powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "sh.exe"}
@@ -130,7 +133,10 @@ def pid_alive(pid: int, start: int = 0) -> bool:
 
 def kill_tree(pid: int) -> None:
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
     else:
         try:
             os.kill(pid, 9)
@@ -138,10 +144,47 @@ def kill_tree(pid: int) -> None:
             pass
 
 
+def run_timeout(cmd: list[str], timeout: float = 60, text: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run แบบมีเวลาจำกัดและไม่ถามรหัส: เกินเวลา = ฆ่าทั้งต้น (git push/fetch ติดเครือข่ายหรือรอรหัสผ่านจะค้างตลอดไป) แล้วคืน returncode 124
+    เปิดโปรแกรมไม่ได้ = returncode 127 · ไม่โยน exception เพื่อให้ผู้เรียกจัดการตามรหัสคืนเหมือน subprocess.run(check=False)"""
+    kw = {"encoding": "utf-8", "errors": "replace"} if text else {}
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env, **kw)
+    except OSError as e:
+        return subprocess.CompletedProcess(cmd, 127, "" if text else b"", str(e) if text else str(e).encode("utf-8", "replace"))
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+    except subprocess.TimeoutExpired:
+        kill_tree(p.pid)
+        try:
+            out, err = p.communicate(timeout=5)  # ลูกที่สืบทอด pipe ไปค้างอยู่ได้ → ไม่รอเกิน 5 วิ
+        except subprocess.TimeoutExpired:
+            out, err = "" if text else b"", "" if text else b""
+        note = f"หมดเวลา {timeout:g} วิ → ฆ่าแล้ว"
+        return subprocess.CompletedProcess(cmd, 124, out, (err or ("" if text else b"")) + (note if text else note.encode("utf-8")))
+
+
 def write_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}_{threading.get_ident()}.tmp")  # + thread: หน้า ui เขียนไฟล์เดียวกันพร้อมกันได้หลาย thread
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    replace_file(tmp, path)
+
+
+def replace_file(tmp: Path, path: Path, wait_sec: float = 5) -> None:
+    """os.replace ที่ทนผู้อ่านพร้อมกัน — Windows ปฏิเสธ (WinError 5/32) ถ้ามีใครเปิดอ่านปลายทางอยู่ชั่วขณะ (หน้าเว็บ poll · แอนตี้ไวรัส) → ลองใหม่ถี่ ๆ
+    ไม่สำเร็จภายใน wait_sec = ลบไฟล์ชั่วคราวแล้วโยน error เดิม"""
+    t0, delay = time.time(), 0.005
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if time.time() - t0 >= wait_sec:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.2)
 
 
 @contextlib.contextmanager
@@ -187,21 +230,19 @@ def opencode_cmd() -> list[str]:
 # ---------- โปรเจกต์ ----------
 def project_root(start: Path) -> tuple[Path, bool]:
     """รากของ checkout หลัก (worktree → checkout หลัก) · ไม่ใช่ git = โฟลเดอร์นั้นเอง"""
-    r = subprocess.run(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = run_timeout(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--git-common-dir"], 30)
     if r.returncode != 0:
         return start.resolve(), False
     common = Path(r.stdout.strip())
     if common.name != ".git":  # .git แยกที่ (--separate-git-dir / submodule) → parent ของมันไม่ใช่รากโปรเจกต์
-        top = subprocess.run(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir"],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.splitlines()
+        top = run_timeout(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir"], 30).stdout.splitlines()
         if len(top) >= 2 and top[0].strip() and Path(top[1].strip()) == common:  # ไม่ใช่ linked worktree → toplevel คือราก
             return Path(top[0].strip()), True
     return common.parent, True
 
 
-def _git(root: Path, *args: str) -> str:
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+def _git(root: Path, *args: str, timeout: float = 60) -> str:
+    r = run_timeout(["git", "-C", str(root), *args], timeout)
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
@@ -596,6 +637,10 @@ def clear_stale_lock() -> None:
         except OSError:
             continue
         if read_json(f) == held:  # ยังเป็นล็อกเดิมที่ตายแล้ว
+            if held and held.get("id"):  # เจ้าของตาย → ลูก opencode ที่รอดต้องไม่ถือไฟล์งานต่อ (ไม่งั้นแก้ซ้อนกับงานที่ได้ช่องต่อไป)
+                oj = read_json(JOBS / f"{held['id']}.json")
+                if oj.get("status") in ("queued", "running"):
+                    reap_orphan(oj, abort=oj.get("status") == "running")
             f.unlink(missing_ok=True)
 
 
@@ -1039,9 +1084,8 @@ def open_in_desktop(sid: str, server: str) -> None:
     node = shutil.which("node")
     if not node:
         return
-    r = subprocess.run([node, str(REPO / "oc_desktop_open.mjs"), sid, server or "sidecar"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
-    print((r.stdout.strip() or f"DESKTOP_OPEN=FAIL rc={r.returncode}"), flush=True)
+    r = run_timeout([node, str(REPO / "oc_desktop_open.mjs"), sid, server or "sidecar"], DESKTOP_OPEN_TIMEOUT_SEC)  # ไม่ให้งานค้างก่อนเริ่มเฝ้า
+    print((r.stdout.strip() or (f"DESKTOP_OPEN=FAIL หมดเวลา {DESKTOP_OPEN_TIMEOUT_SEC:g} วิ" if r.returncode == 124 else f"DESKTOP_OPEN=FAIL rc={r.returncode}")), flush=True)
 
 
 def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
@@ -1216,8 +1260,20 @@ class ShellWatch:
         return best
 
 
-def run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
-             shell_idle: float = 0, env: dict | None = None) -> dict:
+def run_once(*args, **kw) -> dict:
+    """รันหนึ่งรอบ — ถ้า `flashq run` เองล้ม/ถูกกด Ctrl+C กลางทาง ต้องไม่ทิ้ง opencode ลูกไว้แก้ไฟล์ต่อเงียบ ๆ"""
+    job = args[0]
+    try:
+        return _run_once(*args, **kw)
+    except BaseException:
+        note = reap_orphan(job, abort=True)
+        if note:
+            print(note, flush=True)
+        raise
+
+
+def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
+              shell_idle: float = 0, env: dict | None = None) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -1560,9 +1616,9 @@ class PlanSource:
     def __init__(self, root: Path, rev: str = ""):
         self.root, self.rev, self.cache = root, rev, {}
         if rev:
-            r = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", "--name-only", rev], capture_output=True)
+            r = run_timeout(["git", "-C", str(root), "ls-tree", "-r", "-z", "--name-only", rev], 60, text=False)
             if r.returncode != 0:
-                raise ValueError(f"อ่าน {rev} ไม่ได้")
+                raise ValueError(f"อ่าน {rev} ไม่ได้" + (" (หมดเวลา)" if r.returncode == 124 else ""))
             files = [x.decode("utf-8", "replace") for x in r.stdout.split(b"\0") if x]
         else:
             files = []
@@ -1583,7 +1639,7 @@ class PlanSource:
     def read(self, p: str) -> str:
         if p not in self.cache:
             if self.rev:
-                r = subprocess.run(["git", "-C", str(self.root), "show", f"{self.rev}:{p}"], capture_output=True)
+                r = run_timeout(["git", "-C", str(self.root), "show", f"{self.rev}:{p}"], 30, text=False)
                 data = r.stdout if r.returncode == 0 else b""
             else:
                 try:
@@ -1719,8 +1775,7 @@ def cmd_run(a) -> int:
                                stdin=subprocess.DEVNULL, timeout=120, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
             except subprocess.TimeoutExpired:
                 print(f"WARN: git fetch {cfg['remote']} เกิน 120 วิ → ตรวจแผนจาก ref ในเครื่องแทน", flush=True)
-            if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{plan}"],
-                              capture_output=True).returncode != 0:
+            if run_timeout(["git", "-C", str(root), "cat-file", "-e", f"{ref}:{plan}"], 30).returncode != 0:
                 print(f"FLASH_RUN=FAIL ไม่พบแผนใน {ref}: {plan} (push แผนก่อน)")
                 have = [b for b in ("main", "master")
                         if _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{cfg['remote']}/{b}")]
@@ -1769,8 +1824,7 @@ def cmd_run(a) -> int:
                         print(f"  - {e}")
                     return 1
         if is_git:  # /flash หยุดทันทีถ้า checkout ไม่อยู่บน main_branch → บอกสาเหตุจริงตรงนี้ แทนที่จะรอ NOSTART/FAIL
-            br = subprocess.run(["git", "-C", str(root), "branch", "--show-current"],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+            br = run_timeout(["git", "-C", str(root), "branch", "--show-current"], 30).stdout.strip()
             if br != cfg["main_branch"]:
                 print(f"FLASH_RUN=FAIL checkout หลัก {root} อยู่บน branch '{br or '(detached)'}' ไม่ใช่ "
                       f"{cfg['main_branch']} → สลับกลับ {cfg['main_branch']} (git switch {cfg['main_branch']}) แล้วสั่งใหม่")
@@ -2166,6 +2220,21 @@ def cmd_log(a) -> int:
     return 0
 
 
+def reap_orphan(j: dict, abort: bool = False) -> str:
+    """ฆ่า `opencode run` ลูกที่ยังรอดหลัง process `flashq run` เจ้าของตาย (ถูกฆ่าตรง ๆ/ไฟดับ/crash — ไม่ได้ฆ่าทั้งต้น) แล้วยังแก้ไฟล์ซ้อนกับงานถัดไป
+    ฆ่าเฉพาะเมื่อยังเป็น process เดิม (เทียบเวลาเริ่ม — กัน pid ถูกใช้ซ้ำ) · abort=True = สั่ง server หยุด session ด้วย · คืนข้อความผล ("" = ไม่มีอะไรต้องทำ)"""
+    notes = []
+    cp, cs = j.get("child_pid") or 0, j.get("child_pid_start") or 0
+    if cp and cs and cp != os.getpid() and pid_alive(cp, cs):
+        kill_tree(cp)
+        notes.append(f"ฆ่า opencode ลูกที่ค้าง (pid {cp}) แล้ว")
+    if abort and (notes or j.get("session")) and str(j.get("attach", LIVE_URL)).startswith("http"):
+        n = abort_session(j)
+        if n:
+            notes.append(n)
+    return " · ".join(notes)
+
+
 def abort_session(j: dict) -> str:
     """สั่ง opencode server หยุด session ของงาน (ฆ่า `opencode run --attach` อย่างเดียว session บน server ยังเดินต่อ)
     คืนข้อความผล ("" = ไม่ต้องทำ)"""
@@ -2186,13 +2255,16 @@ def abort_session(j: dict) -> str:
 def cancel_job(j: dict) -> tuple[bool, str]:
     """ยกเลิกงานที่รอคิว/กำลังทำ (ใช้ร่วมกับ cmd_cancel และหน้า ui)"""
     st = live_state(j)
-    if st not in ("queued", "running"):
+    orphan = st == "dead" and j.get("status") in ("queued", "running")  # process หลักตายแล้วแต่สถานะค้าง — ยังมีลูกรอดอยู่ได้ → ยกเลิกเพื่อเก็บกวาด
+    if st not in ("queued", "running") and not orphan:
         return False, f"job {j['id']} ไม่ได้ทำงานอยู่ (สถานะ {st})"
-    note = abort_session(j) if st == "running" else ""
-    kill_tree(j["pid"])
+    note = abort_session(j) if st == "running" or (orphan and j.get("status") == "running") else ""
+    if not orphan:
+        kill_tree(j["pid"])
     # ลูกถูกฆ่าไปพร้อม /T แล้ว · ฆ่าซ้ำเฉพาะเมื่อยังเป็น process เดิม (pid ของรอบก่อนที่จบไปอาจถูกนำไปใช้ซ้ำโดยโปรแกรมอื่น)
-    if j.get("child_pid") and j.get("child_pid_start") and pid_alive(j["child_pid"], j["child_pid_start"]):
-        kill_tree(j["child_pid"])
+    reaped = reap_orphan(j)
+    if reaped and orphan:
+        note = (note + " · " if note else "") + reaped
     j.update(status="cancelled", finished=now())
     save_job(j)
     release(j)
@@ -2277,7 +2349,7 @@ def switch_account(arg: str) -> str:
     cfg.setdefault("agent", {}).setdefault(agent, {})["model"] = target
     tmp = OC_CONFIG.with_name(OC_CONFIG.name + f".{os.getpid()}.tmp")  # เขียนแล้วสลับไฟล์ — opencode ที่อ่านพร้อมกันไม่เจอไฟล์ครึ่ง ๆ
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, OC_CONFIG)
+    replace_file(tmp, OC_CONFIG)
     print(f"{agent}: {current or '(ยังไม่ตั้ง)'} → {target}")
     return target
 
@@ -2451,19 +2523,21 @@ def cmd_init(a) -> int:
                 if (root / p).exists()]
         dirty = _git(root, "status", "--porcelain", "--", *mine)
         if dirty:
-            subprocess.run(["git", "-C", str(root), "add", "--", *mine], check=False)
-            r = subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
-                                "--", *mine], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            run_timeout(["git", "-C", str(root), "add", "--", *mine], 60)
+            r = run_timeout(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
+                             "--", *mine], 120)
             print("commit     " + ("สำเร็จ" if r.returncode == 0 else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
             todo = [t for t in todo if not t.startswith("commit")]
         else:
             print("commit     ไม่มีอะไรต้อง commit")
         branch, remote = _git(root, "branch", "--show-current"), new.get("remote", "origin")
         if _git(root, "remote") and branch == new["main_branch"]:
-            r = subprocess.run(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")
+            r = run_timeout(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"], PUSH_TIMEOUT_SEC,  # ห้ามถามรหัส + จำกัดเวลา: เครือข่ายค้าง/รอ credential จะไม่ทำให้ init ค้างตลอดไป
+                            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
             print("push       " + (f"{remote}/{new['main_branch']} สำเร็จ" if r.returncode == 0
                                      else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+            if r.returncode == 124:
+                todo.append(f"push ไม่เสร็จใน {PUSH_TIMEOUT_SEC:g} วิ → ตรวจเครือข่าย/สิทธิ์ แล้ว `git push {remote} HEAD:{new['main_branch']}` เอง")
         elif _git(root, "remote"):
             todo.append(f"อยู่ branch '{branch}' ไม่ใช่ {new['main_branch']} → merge เข้า {new['main_branch']} แล้ว push เอง")
 
@@ -2617,7 +2691,7 @@ def ui_state() -> dict:
                    perm_denied=[f"{x.get('kind', '')}: {x.get('path', '')}" for x in j.get("perm_denied") or []][:5])
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
-                       child_alive=pid_alive(j.get("child_pid") or 0),
+                       child_alive=pid_alive(j.get("child_pid") or 0, j.get("child_pid_start") or 0),
                        rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
                               if j.get("plan") else ""))
             dead.append(row)
@@ -2661,6 +2735,7 @@ def ui_state() -> dict:
             "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
+            "submit_fails": submit_failures(),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
             "review_ttl_min": REVIEW_TTL_MIN,
             "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
@@ -2775,6 +2850,8 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
             argv.append(f"--agent={agent}")
         if body.get("readonly") and not kind:
             argv.append("--readonly")
+        if body.get("skip_precheck") and not kind and not message:  # เฉพาะ run ตามแผน (verify/investigate ไม่มีด่านนี้) · ต้องสั่งทุกครั้ง ไม่จำค่า
+            argv.append("--skip-precheck")
         prompt = str(body.get("prompt") or "").strip()
         if prompt and kind == "verify":
             argv.append(f"--prompt={prompt}")
@@ -2787,7 +2864,7 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         return [], str(e)
 
 
-def spawn_run(argv: list[str], project: str, wait_sec: float = 8) -> dict:
+def spawn_run(argv: list[str], project: str, wait_sec: float = 8, body: dict | None = None) -> dict:
     """รัน `flashq.py run` แบบแยกขาด (detached) ให้ใช้คิวเดิม · รอจนเห็นไฟล์งานใหม่ หรือ process จบก่อน (= ผิดพลาด)"""
     LOGS.mkdir(parents=True, exist_ok=True)
     JOBS.mkdir(parents=True, exist_ok=True)
@@ -2808,7 +2885,43 @@ def spawn_run(argv: list[str], project: str, wait_sec: float = 8) -> dict:
             text = out.read_text(encoding="utf-8", errors="replace").strip()
             return {"ok": False, "rc": p.returncode, "out": str(out), "message": text[-1500:] or f"จบทันที rc={p.returncode}"}
         time.sleep(0.2)
-    return {"ok": True, "job": "", "pid": p.pid, "out": str(out), "message": "ส่งแล้ว (ยังไม่เห็นไฟล์งาน — ดูในคิวอีกครู่)"}
+    # ด่านตรวจ (git fetch ช้า · แผนใหญ่/พิการ) อาจล้มหลังหน้าต่างนี้ → วางป้ายไว้ให้ ui_state รายงานเมื่อ process จบโดยไม่มีไฟล์งาน (ไม่ให้เงียบ)
+    try:
+        write_json(Path(str(out) + ".pending"), {"at": now(), "project": project, "pid": p.pid,
+                                                  "body": {k: v for k, v in (body or {}).items() if k in SUBMIT_KEYS}})
+    except OSError:
+        pass
+    return {"ok": True, "job": "", "pid": p.pid, "out": str(out), "message": "ส่งแล้ว (ยังไม่เห็นไฟล์งาน — ถ้าด่านตรวจล้ม จะมีป้ายเตือนขึ้นบนหน้านี้)"}
+
+
+SUBMIT_KEYS = ("project", "plan", "tasks", "kind", "agent", "message", "switch_on_quota", "timeout_min", "attach", "no_open", "auto", "readonly", "prompt")
+
+
+def submit_failures() -> list[dict]:
+    """คำสั่งส่งงานจากหน้าเว็บที่ process จบแล้วโดยไม่เคยสร้างงาน (ด่านตรวจล้มหลังหน้าต่างรอ 8 วิ) → รายการให้หน้าเว็บเตือน · ป้ายเก่าเกิน 1 วัน/ที่งานเริ่มแล้วถูกล้างทิ้ง"""
+    out = []
+    if not LOGS.exists():
+        return out
+    for mark in sorted(LOGS.glob("submit_*.out.pending")):
+        log = Path(str(mark)[:-len(".pending")])
+        info = read_json(mark)
+        try:
+            age = time.time() - mark.stat().st_mtime
+        except OSError:
+            continue
+        if age > 86400 or not log.exists():
+            mark.unlink(missing_ok=True)
+            continue
+        if pid_alive(info.get("pid", 0)):
+            continue  # ยังทำงานอยู่ (ด่านยังไม่จบ/งานเข้าคิวแล้ว)
+        text = log.read_text(encoding="utf-8", errors="replace").strip()
+        if re.search(r"^(SLOT |START |QUEUED )", text, re.M):  # งานถูกสร้างและเดินแล้ว = ไม่ใช่ด่านล้ม (ผลงานดูที่คิว/ประวัติ)
+            mark.unlink(missing_ok=True)
+            continue
+        out.append({"id": mark.name[:-len(".out.pending")], "at": info.get("at", ""), "project": info.get("project", ""),
+                    "body": info.get("body") or {}, "message": text[-1200:] or "process จบโดยไม่มีข้อความ (อาจ crash)",
+                    "can_skip": "แผนพิการ" in text})
+    return out
 
 
 def prune_jobs(days: float, dry: bool = False) -> dict:
@@ -2829,7 +2942,7 @@ def prune_jobs(days: float, dry: bool = False) -> dict:
         for lg in j.get("logs") or []:
             files += [Path(lg), Path(lg).with_suffix(".err")]
     if LOGS.exists():
-        files += [f for f in LOGS.glob("submit_*.out") if f.stat().st_mtime < cutoff]
+        files += [f for f in LOGS.glob("submit_*.out*") if f.stat().st_mtime < cutoff]
     files = [f for f in files if f.exists()]
     size = sum(f.stat().st_size for f in files)
     if not dry:
@@ -3013,19 +3126,26 @@ def make_ui_server(port: int = 4097):
                     msgs.append(msg)
                 return self._send(200, {"ok": True, "max_parallel": max_parallel(), "schedule": schedule_mode(),
                                         "message": " · ".join(msgs)})
+            if path == "/api/dismiss" and body.get("submit"):  # รับทราบป้าย "ส่งงานแล้วล้มหลังหน้าต่างรอ" → ลบป้าย
+                name = str(body["submit"])
+                if not re.fullmatch(r"submit_[\d_]+", name):
+                    return self._send(400, {"ok": False, "message": "ชื่อไม่ถูกต้อง"})
+                (LOGS / f"{name}.out.pending").unlink(missing_ok=True)
+                return self._send(200, {"ok": True, "message": "รับทราบแล้ว"})
             if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
                 if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
                     return self._send(409, {"ok": False, "message": "ไม่ใช่งานที่ process ตายค้างสถานะ"})
+                note = reap_orphan(j, abort=j.get("status") == "running")  # ลูกที่ยังรอดอยู่ต้องถูกเก็บกวาดด้วย ไม่งั้นแก้ไฟล์ต่อโดยไม่มีใครเห็น
                 j.update(status="dead", dismissed=now())  # ไม่ใส่ finished: ไม่รู้ว่าตายเมื่อไร
                 save_job(j)
                 release(j)
-                return self._send(200, {"ok": True, "message": f"บันทึก {j['id']} เป็น 'ตาย' แล้ว"})
+                return self._send(200, {"ok": True, "message": f"บันทึก {j['id']} เป็น 'ตาย' แล้ว" + (f" · {note}" if note else "")})
             if path == "/api/submit":
                 argv, err = build_run_argv(body)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
-                r = spawn_run(argv, str(body["project"]).strip().strip('"'))
+                r = spawn_run(argv, str(body["project"]).strip().strip('"'), body=body)
                 return self._send(200 if r["ok"] else 400, r)
             if path == "/api/retry":  # สั่งงานเดิมซ้ำ (เข้าคิวใหม่) · ตัวเลือกใน body ทับได้
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
@@ -3039,7 +3159,7 @@ def make_ui_server(port: int = 4097):
                 argv, err = build_run_argv(spec)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
-                r = spawn_run(argv, spec["project"])
+                r = spawn_run(argv, spec["project"], body=spec)
                 return self._send(200 if r["ok"] else 400, r)
             if path == "/api/prune":
                 try:
@@ -4251,14 +4371,21 @@ def goal_cancel(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, r
 
 
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
-    p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    try:
-        out, _ = p.communicate(timeout=timeout_min * 60)
-    except subprocess.TimeoutExpired:
-        kill_tree(p.pid)
-        out = (p.communicate()[0] or b"") + f"\n[flashq goal: เกิน {timeout_min:g} นาที → ฆ่าแล้ว]".encode("utf-8")
-        return 124, out.decode("utf-8", errors="replace")
-    return p.returncode, (out or b"").decode("utf-8", errors="replace")
+    # output ลงไฟล์ชั่วคราว ไม่ใช่ pipe: ลูกที่สืบทอด pipe ไปแล้วค้างเบื้องหลัง (เช่น `start /b server`) จะไม่ทำให้ communicate() รอตามไปจน timeout ไม่ทำงาน
+    with tempfile.TemporaryFile() as buf:
+        p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=buf, stderr=subprocess.STDOUT)
+        timed_out = False
+        try:
+            p.wait(timeout=timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            kill_tree(p.pid)
+            p.wait()
+        buf.seek(0)
+        out = buf.read()
+    if timed_out:
+        return 124, (out + f"\n[flashq goal: เกิน {timeout_min:g} นาที → ฆ่าแล้ว]".encode("utf-8")).decode("utf-8", errors="replace")
+    return p.returncode, out.decode("utf-8", errors="replace")
 
 
 def cmd_goal(a) -> int:

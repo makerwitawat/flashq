@@ -1633,6 +1633,103 @@ class FlashqTest(unittest.TestCase):
         time.sleep(0.5)
         self.assertIsNone(other.poll())  # ยังมีชีวิต
 
+    def test_write_json_retries_while_reader_holds_file(self):
+        """Windows ปฏิเสธ os.replace ถ้ามีคนเปิดอ่านไฟล์ปลายทางอยู่ (หน้าเว็บ poll) → ต้องรอแล้วเขียนสำเร็จ ไม่ crash งานกลางทาง"""
+        import threading
+        mod = self.load_mod("flashq_wj")
+        target = self.tmp / "job.json"
+        target.write_text("{}", encoding="utf-8")
+        reader = open(target, "rb")
+        t = threading.Timer(0.4, reader.close)
+        t.start()
+        self.addCleanup(lambda: (t.cancel(), reader.close()))
+        mod.write_json(target, {"v": 2})
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"v": 2})
+        self.assertEqual([p.name for p in self.tmp.glob("job.json.*.tmp")], [])
+        reader2 = open(target, "rb")  # ถูกถือไว้ตลอด → หมดเวลาแล้วโยน error เดิม และไม่ทิ้งไฟล์ .tmp
+        self.addCleanup(reader2.close)
+        if os.name == "nt":
+            tmp = self.tmp / "x.tmp"
+            tmp.write_text("x", encoding="utf-8")
+            with self.assertRaises(PermissionError):
+                mod.replace_file(tmp, target, wait_sec=0.3)
+            self.assertFalse(tmp.exists())
+
+    def test_orphan_child_is_reaped_by_cancel_dismiss_stale_lock_and_crash(self):
+        """`flashq run` ตายแต่ opencode ลูกรอด: ยกเลิก/ล้างช่องตาย/run_once ล้ม ต้องฆ่าลูก · pid ที่เวลาเริ่มไม่ตรงห้ามแตะ"""
+        mod = self.load_mod("flashq_orphan")
+        mod.JOBS = self.tmp / "jobs"
+        mod.JOBS.mkdir()
+        mod.HOME, mod.RUN_NOW, mod.LOCK = self.tmp, self.tmp / "run_now", self.tmp / "running.lock"
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait(timeout=30)
+        kids = []
+
+        def child():
+            p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+            kids.append(p)
+            return p
+
+        self.addCleanup(lambda: [(p.kill(), p.wait(timeout=30)) for p in kids])
+
+        def job(jid, c, **kw):
+            return {"id": jid, "status": "running", "pid": dead.pid, "pid_start": 0, "attach": "none",
+                    "child_pid": c.pid, "child_pid_start": mod.proc_start(c.pid), "created": "2099-01-01 00:00:00", **kw}
+
+        # 1) reap_orphan ฆ่าเฉพาะ process เดิม
+        c = child()
+        self.assertIn("ฆ่า", mod.reap_orphan(job("O1", c)))
+        c.wait(timeout=30)
+        reused = child()
+        self.assertEqual(mod.reap_orphan({**job("O1b", reused), "child_pid_start": 12345}), "")
+        time.sleep(0.3)
+        self.assertIsNone(reused.poll())
+        # 2) cancel งานที่ process หลักตายแต่สถานะยังค้าง running → ฆ่าลูกด้วย
+        c = child()
+        j = job("O2", c)
+        mod.save_job(j)
+        self.assertEqual(mod.live_state(j), "dead")
+        ok, msg = mod.cancel_job(j)
+        self.assertTrue(ok, msg)
+        c.wait(timeout=30)
+        self.assertEqual(mod.read_json(mod.JOBS / "O2.json")["status"], "cancelled")
+        # งานที่จบแล้วยังยกเลิกไม่ได้
+        self.assertFalse(mod.cancel_job({**j, "status": "done"})[0])
+        # 3) ช่องของ process ที่ตาย → ถูกล้าง และลูกของงานนั้นถูกฆ่า
+        c = child()
+        mod.save_job(job("O3", c))
+        mod.LOCK.write_text(json.dumps({"id": "O3", "pid": dead.pid, "pid_start": 0, "since": "x", "extra": False}), encoding="utf-8")
+        mod.clear_stale_lock()
+        self.assertFalse(mod.LOCK.exists())
+        c.wait(timeout=30)
+        # 4) run_once ล้มกลางทาง (exception) → ฆ่าลูกก่อนโยนต่อ
+        c = child()
+        j = job("O4", c, pid=os.getpid())
+
+        def boom(*a, **k):
+            raise RuntimeError("boom")
+
+        mod._run_once = boom
+        with self.assertRaises(RuntimeError):
+            mod.run_once(j, [], self.proj, "none", 1, True, 1)
+        c.wait(timeout=30)
+
+    def test_goal_cmd_not_blocked_by_background_child_holding_output(self):
+        """เกณฑ์ที่เปิดโปรเซสเบื้องหลัง (start /b · &) ไม่ต้องทำให้ goal verify รอจนโปรเซสนั้นจบ · เกิน timeout ต้องฆ่าแล้วคืน 124"""
+        mod = self.load_mod("flashq_gcmd")
+        py = f'"{sys.executable}" -c "import time; time.sleep(%d)"'
+        bg = ('start /b "" ' if os.name == "nt" else "") + py % 12 + ("" if os.name == "nt" else " &")
+        t0 = time.time()
+        rc, out = mod.goal_run_cmd(self.proj, "echo hello && " + bg if os.name == "nt" else "echo hello; " + bg, 0.05)
+        self.assertLess(time.time() - t0, 8, out)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("hello", out)
+        t0 = time.time()
+        rc, out = mod.goal_run_cmd(self.proj, py % 60, 0.03)  # timeout 1.8 วิ
+        self.assertLess(time.time() - t0, 15)
+        self.assertEqual(rc, 124)
+        self.assertIn("ฆ่าแล้ว", out)
+
     def test_switch_account_empty_list_and_file_lock(self):
         mod = self.load_mod("flashq_switch")
         mod.OC_CONFIG = self.oc_cfg
@@ -2169,6 +2266,13 @@ class NewProjectTest(unittest.TestCase):
     """โปรเจกต์ใหม่ที่ branch หลักไม่ใช่ master: ตรวจอัตโนมัติ + flashq init"""
     setUp, tearDown, run_q, base = (FlashqTest.setUp, FlashqTest.tearDown, FlashqTest.run_q, FlashqTest.base)
 
+    def load_mod(self, name):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def git(self, cwd, *args):
         r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
                            capture_output=True, text=True, encoding="utf-8")
@@ -2266,6 +2370,90 @@ class NewProjectTest(unittest.TestCase):
         self.assertIn("?? other.txt", self.git(self.proj, "status", "--short"))
         r2 = self.run_q("init", "--commit")  # รันซ้ำ = ไม่มีอะไรต้อง commit
         self.assertIn("ไม่มีอะไรต้อง commit", r2.stdout)
+
+    def test_init_commit_push_timeout_does_not_hang(self):
+        """remote ที่ไม่ตอบ: init --commit ต้องเลิก push ตามเวลา (ฆ่า git) แล้วบอกให้ push เอง ไม่ค้างตลอดไป"""
+        import socket
+        self.make_repo("main")
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(5)
+        self.addCleanup(srv.close)
+        self.git(self.proj, "remote", "set-url", "origin", f"http://127.0.0.1:{srv.getsockname()[1]}/x.git")
+        t0 = time.time()
+        r = self.run_q("init", "--commit", env={"FLASHQ_PUSH_TIMEOUT_SEC": "3"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertLess(time.time() - t0, 60)
+        self.assertIn("push       ล้มเหลว", r.stdout)
+        self.assertIn("หมดเวลา", r.stdout)
+        self.assertIn("push ไม่เสร็จใน 3 วิ", r.stdout)
+
+    def test_run_timeout_kills_hung_command_and_reports(self):
+        """run_timeout: คำสั่งที่ค้างถูกฆ่าตามเวลา (124) · คำสั่งปกติได้ output · หาโปรแกรมไม่เจอ = 127 ไม่โยน exception"""
+        mod = self.load_mod("flashq_rt")
+        t0 = time.time()
+        r = mod.run_timeout([sys.executable, "-c", "import time; time.sleep(60)"], 1)
+        self.assertEqual(r.returncode, 124)
+        self.assertIn("หมดเวลา", r.stderr)
+        self.assertLess(time.time() - t0, 20)
+        r = mod.run_timeout([sys.executable, "-c", "print('สวัสดี')"], 30)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "สวัสดี"))
+        self.assertEqual(mod.run_timeout(["flashq-no-such-program-xyz"], 5).returncode, 127)
+        r = mod.run_timeout([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\0b')"], 30, text=False)
+        self.assertEqual(r.stdout, b"a\0b")
+
+    def test_open_in_desktop_times_out(self):
+        """oc_desktop_open.mjs ค้าง (desktop ไม่ตอบ) → ข้ามตามเวลา ไม่ให้งานค้างก่อนเริ่มเฝ้า"""
+        import contextlib
+        import io
+        mod = self.load_mod("flashq_desk")
+        fake = self.tmp / "repo"
+        fake.mkdir()
+        (fake / "oc_desktop_open.mjs").write_text("import time; time.sleep(60)\n", encoding="utf-8")  # รันด้วย python แทน node
+        mod.REPO, mod.DESKTOP_OPEN_TIMEOUT_SEC = fake, 1
+        orig_which = mod.shutil.which  # shutil เป็นโมดูลร่วมทั้ง process → คืนค่าเดิมเสมอ
+        self.addCleanup(setattr, mod.shutil, "which", orig_which)
+        mod.shutil.which = lambda name, *a, **k: sys.executable if name == "node" else orig_which(name, *a, **k)
+        buf = io.StringIO()
+        t0 = time.time()
+        with contextlib.redirect_stdout(buf):
+            mod.open_in_desktop("ses_x", "http://127.0.0.1:1")
+        self.assertLess(time.time() - t0, 20)
+        self.assertIn("DESKTOP_OPEN=FAIL หมดเวลา 1 วิ", buf.getvalue())
+
+    def test_skip_precheck_only_from_plan_form_and_submit_failure_is_reported(self):
+        """หน้าเว็บ: --skip-precheck ส่งได้เฉพาะ run ตามแผน · ด่านตรวจที่ล้มหลังหน้าต่างรอ 8 วิต้องมีป้ายเตือน (ไม่เงียบ) และหายเมื่อรับทราบ"""
+        mod = self.load_mod("flashq_submit")
+        home = self.tmp / "h2"
+        mod.HOME, mod.JOBS, mod.LOGS = home, home / "jobs", home / "logs"
+        base = {"project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}
+        argv, err = mod.build_run_argv({**base, "skip_precheck": True})
+        self.assertEqual(err, "")
+        self.assertIn("--skip-precheck", argv)
+        self.assertNotIn("--skip-precheck", mod.build_run_argv(base)[0])
+        self.assertNotIn("--skip-precheck", mod.build_run_argv({**base, "kind": "verify", "skip_precheck": True})[0])
+        self.assertNotIn("--skip-precheck", mod.build_run_argv({"project": str(self.proj), "message": "x", "skip_precheck": True})[0])
+        # process ที่ล้มหลังหน้าต่างรอ → spawn_run วางป้าย · process จบแล้วไม่มีงาน → รายงาน
+        fail = [sys.executable, "-c", "import time; time.sleep(2); print('FLASH_RUN=FAIL แผนพิการ 1 จุด')"]
+        r = mod.spawn_run(fail, str(self.proj), wait_sec=0.5, body={**base, "secret": "x"})
+        self.assertTrue(r["ok"] and not r["job"], r)
+        self.assertEqual(mod.submit_failures(), [])  # ยังรันอยู่ = ยังไม่ใช่ความล้ม
+        deadline = time.time() + 30
+        while not mod.submit_failures() and time.time() < deadline:
+            time.sleep(0.3)
+        fails = mod.submit_failures()
+        self.assertEqual(len(fails), 1, fails)
+        self.assertTrue(fails[0]["can_skip"])
+        self.assertIn("แผนพิการ", fails[0]["message"])
+        self.assertEqual(fails[0]["body"], base)  # เก็บเฉพาะฟิลด์ฟอร์ม
+        (mod.LOGS / f"{fails[0]['id']}.out.pending").unlink()  # รับทราบ
+        self.assertEqual(mod.submit_failures(), [])
+        # งานที่เดินแล้ว (มี SLOT) ไม่ใช่ด่านล้ม → ป้ายถูกล้างเงียบ ๆ
+        ok = [sys.executable, "-c", "import time; time.sleep(1); print('SLOT ช่อง 1'); print('FLASH_RUN=FAIL x')"]
+        mod.spawn_run(ok, str(self.proj), wait_sec=0.3, body=base)
+        time.sleep(3)
+        self.assertEqual(mod.submit_failures(), [])
+        self.assertEqual(list(mod.LOGS.glob("*.pending")), [])
 
     def test_init_no_remote_disables_plan_in_remote(self):
         shutil.rmtree(self.proj)

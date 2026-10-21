@@ -360,7 +360,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
 <main id="dashView">
   <div class="col" id="colA">
     <section class="panel warn" id="deadBox" hidden data-panel="dead">
-      <div class="ph"><h2>⚠ งานที่ process ตายแล้ว (ไม่ได้ทำต่อ)</h2></div>
+      <div class="ph"><h2>⚠ ต้องรับทราบ: งานที่ process ตาย · งานที่ส่งแล้วไม่เข้าคิว</h2></div>
       <div class="pb" id="dead"></div>
     </section>
     <section class="panel" id="goalBox" hidden data-panel="goals">
@@ -525,6 +525,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <div class="row">
       <label><input type="checkbox" id="fNoOpen"> ไม่สั่ง desktop เปิด session</label>
       <label><input type="checkbox" id="fAuto"> อนุมัติ permission อัตโนมัติ (--auto)</label>
+      <label id="fSkipRow" title="ด่านตรวจแผนพิการ: path ในแผนไม่มีจริง · ข้อความ ก่อน: ไม่เจอ/เจอหลายที่ — ใช้เมื่อมั่นใจว่าแผนถูก (ไม่จำค่าไว้ ต้องติ๊กทุกครั้ง)"><input type="checkbox" id="fSkipPre"> ข้ามด่านตรวจแผนพิการ (--skip-precheck)</label>
     </div>
     <pre id="cmdPreview" class="mono"></pre>
     <p id="submitMsg"></p>
@@ -683,8 +684,16 @@ function render() {
   document.title = runs.length ? `▶${runs.length > 1 ? runs.length + " งาน" : ""} ${dur(runs[0].elapsed_sec)} · ${runs[0].project_name} · flashq`
     : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
 
-  $("deadBox").hidden = !s.dead.length;
-  setHTML("dead", s.dead.map((j) => `<div class="dead-item">
+  const sf = s.submit_fails || [];
+  $("deadBox").hidden = !s.dead.length && !sf.length;
+  setHTML("dead", sf.map((f) => `<div class="dead-item">
+    <div><b>ส่งงานแล้วไม่เข้าคิว</b> <span class="mono">${esc(f.body?.plan || f.body?.message || "")} ${esc(f.body?.tasks || "")}</span>
+      <span class="muted">· ${esc(f.project)} · ${esc(f.at)}</span></div>
+    <pre class="mono" style="white-space:pre-wrap;margin:0.3rem 0;color:var(--fail)">${esc(f.message)}</pre>
+    <div class="row">
+      ${f.can_skip ? `<button data-resubmit="${esc(f.id)}">ส่งใหม่แบบข้ามด่านตรวจแผน</button>` : ""}
+      <button data-ack-submit="${esc(f.id)}">รับทราบ</button>
+    </div></div>`).join("") + s.dead.map((j) => `<div class="dead-item">
     <div><b>${esc(j.project_name)}</b> <span class="mono">${esc(what(j))}</span>
       <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
     ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนสั่งซ้ำ</div>` : ""}
@@ -1068,15 +1077,16 @@ function formBody() {
   return { project: $("fProject").value.trim(), plan: planMode() ? $("fPlan").value.trim() : "", tasks: planMode() ? $("fTasks").value.trim() : "",
     kind: mode() === "verify" || mode() === "investigate" ? mode() : "", agent: mode() === "verify" || mode() === "investigate" ? $("fAgent").value.trim() : "",
     message: msgMode() ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
-    attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked };
+    attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked, skip_precheck: mode() === "plan" && $("fSkipPre").checked };
 }
 function runOpts(b) { return { switch_on_quota: b.switch_on_quota, timeout_min: b.timeout_min, attach: b.attach, no_open: b.no_open, auto: b.auto }; }
 function preview() {
   const b = formBody(), quote = (x) => /\s/.test(x) ? `"${x}"` : x;
   const parts = [b.kind ? "flashq.py " + b.kind : "flashq.py run", ...(b.kind === "investigate" ? [quote(b.message || "<บรีฟ>")] : b.message ? [`--message ${quote(b.message)}`] : [quote(b.plan || "<แผน>"), quote(b.tasks || "<งาน>")]),
     "--project", quote(b.project || "<โปรเจกต์>"), "--switch-on-quota", b.switch_on_quota, ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : []),
-    "--attach", b.attach, ...(b.agent ? ["--agent", quote(b.agent)] : []), ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : [])];
+    "--attach", b.attach, ...(b.agent ? ["--agent", quote(b.agent)] : []), ...(b.no_open ? ["--no-open"] : []), ...(b.auto ? ["--auto"] : []), ...(b.skip_precheck ? ["--skip-precheck"] : [])];
   $("cmdPreview").textContent = parts.join(" ");
+  $("fSkipRow").hidden = mode() !== "plan";
   $("planFields").hidden = !planMode(); $("msgField").hidden = !msgMode(); $("agentField").hidden = !(mode() === "verify" || mode() === "investigate");
   $("msgField").querySelector("span").textContent = mode() === "investigate" ? "บรีฟ (อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ให้คืน)" : "ข้อความ";
   if (mode() === "investigate" && $("fMessage").value === "ตอบแค่คำว่า PONG") $("fMessage").value = "";
@@ -1099,7 +1109,7 @@ function openSubmit(fill) {
   $("fProject").value = f.project || prefs.project || state?.running?.project || state?.project_paths?.[0] || "";
   $("fPlan").value = f.plan || ""; $("fTasks").value = f.tasks || "";
   $("fSwitch").value = prefs.switch_on_quota; $("fTimeout").value = prefs.timeout_min; $("fAttach").value = prefs.attach;
-  $("fNoOpen").checked = !!prefs.no_open; $("fAuto").checked = !!prefs.auto;
+  $("fNoOpen").checked = !!prefs.no_open; $("fAuto").checked = !!prefs.auto; $("fSkipPre").checked = false;
   $("submitMsg").textContent = ""; $("submitMsg").className = "";
   preview(); planFor = null; loadPlans();
   dlg.showModal();
@@ -1125,12 +1135,15 @@ $("submitGo").onclick = async (e) => {
   if (d.ok) {
     Object.assign(prefs, { project: b.project, ...runOpts(b) }); store.set("submit", prefs);
     dlg.close(); toast(d.message); refresh(); if (d.job && view === "dash") setTimeout(() => openLog(d.job), 600);
-  } else { $("submitMsg").className = "err"; $("submitMsg").textContent = d.message || d.error || "ส่งไม่สำเร็จ"; }
+  } else {
+    $("submitMsg").className = "err"; $("submitMsg").textContent = d.message || d.error || "ส่งไม่สำเร็จ";
+    if (/แผนพิการ/.test(d.message || "") && mode() === "plan") $("fSkipRow").hidden = false;  // ด่านตรวจล้ม → ติ๊กข้ามได้ตรงนี้ (ถ้ามั่นใจว่าแผนถูก)
+  }
 };
 
 /* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
+  const t = ev.target.closest("[data-copy],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
   const panel = t.closest(".panel");
   if (t.hasAttribute("data-collapse")) {
@@ -1156,6 +1169,16 @@ document.addEventListener("click", async (ev) => {
     const d = await post("/api/stop", { id, confirm: id }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.dismiss) { const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
+  if (t.dataset.ackSubmit) { const d = await post("/api/dismiss", { submit: t.dataset.ackSubmit }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
+  if (t.dataset.resubmit) {
+    const f = (state?.submit_fails || []).find((x) => x.id === t.dataset.resubmit);
+    if (!f) return;
+    if (!await ask({ title: "ส่งใหม่โดยข้ามด่านตรวจแผน?", detail: `${f.body?.plan || ""} ${f.body?.tasks || ""}`, body: "ด่านตรวจเจอจุดผิดในแผน (path ไม่มีจริง / ข้อความ ก่อน: ไม่เจอ) — ข้ามได้เมื่อมั่นใจว่าแผนถูก", ok: "ส่งโดยข้ามด่าน", cancel: "ไม่ส่ง", tone: "danger" })) return;
+    const d = await post("/api/submit", { ...f.body, skip_precheck: true });
+    toast(d.message || d.error || "ผิดพลาด");
+    if (d.ok) await post("/api/dismiss", { submit: f.id });
+    return refresh();
+  }
   if (t.dataset.retry) {
     const j = [...(state?.history || []), ...(state?.dead || [])].find((x) => x.id === t.dataset.retry);
     if (!await ask({ title: "ส่งงานนี้เข้าคิวอีกครั้ง?", detail: j ? `${j.project_name} · ${what(j)}` : t.dataset.retry, body: "ใช้ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน", ok: "ส่งเข้าคิว", icon: "↻" })) return;
