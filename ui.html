@@ -1759,18 +1759,29 @@ function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง
     <g><path d="M36 328h38l-5 26h-28z" fill="#a0653a"/><circle cx="55" cy="312" r="15" fill="#3f9a57"/><circle cx="42" cy="320" r="11" fill="#58b36e"/><circle cx="68" cy="320" r="11" fill="#4aa862"/></g>`;
 }
 
-// ข้อความป้ายผู้ตรวจ/ยามในฉาก — มีเวลาที่เดินทุกวิ จึงแยกออกมาให้ officeUpdate อัปเดตด้วย setText แทนการวาดฉากใหม่ (อนิเมชันตัวละครเริ่มใหม่ = กระตุก)
-function inspText(m) {
-  const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
-  const rv = m.reviews[0], fin = m.reviewFin;
-  return vr ? `กำลังตรวจ ${trunc(vr.project_name, 14)} ${vr.tasks || ""} (ช่อง ${vi.map((i) => i + 1).join(", ")})`
-    : rv ? `Claude กำลังตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
-      + (rv.age_sec > 1800 ? ` · ⚠ นานผิดปกติ — session ที่ตรวจอาจปิดไปแล้ว (ป้ายหายเองเมื่อครบ ${state.review_ttl_min ?? 90} นาที)` : "")
-    : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
-    : "ว่าง · นั่งพักที่โซฟา รองานตรวจ";
+// ข้อความป้ายผู้ตรวจ/ยาม/นักทดสอบ/ช่างเอกสารในฉาก — มีเวลาที่เดินทุกวิ จึงแยกออกมาให้ officeUpdate อัปเดตด้วย setText แทนการวาดฉากใหม่ (อนิเมชันตัวละครเริ่มใหม่ = กระตุก)
+const STRIP_ROWS = 3;  // ป้ายแต่ละแถบในฉากมีกี่บรรทัด (ทุกงานของคนนั้น · เกินแล้วบรรทัดสุดท้ายบอก "+N รายการอื่น")
+const capRows = (rows, idle) => !rows.length ? [idle]
+  : rows.length > STRIP_ROWS ? [...rows.slice(0, STRIP_ROWS - 1), `+${rows.length - STRIP_ROWS + 1} รายการอื่น (ดูที่การ์ดของแต่ละงาน)`] : rows;
+const stripHead = (ico, name, n) => `${ico} ${name}` + (n ? ` · ${n} งาน` : "");
+const stripTexts = (id, rows, sy) => Array.from({ length: STRIP_ROWS }, (_, i) =>
+  `<text class="of-tm" id="${id}T${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("");
+function setStrip(id, head, rows) { setText(id + "H", head); for (let i = 0; i < STRIP_ROWS; i++) setText(id + "T" + i, rows[i] || ""); }
+const elapsedTxt = (r) => (r.elapsed_sec == null ? "" : ` · ⏱ ${mmss(r.elapsed_sec + (Date.now() - stateAt) / 1000)}`);
+const deskRows = (m, role, ico, what) => m.desks.map((r, i) => (r && roleOf(r) === role ? `${ico} ช่อง ${i + 1} ${trunc(r.project_name, 12)} · ${what(r)}${elapsedTxt(r)}` : null)).filter(Boolean);
+function inspRows(m) {
+  const rows = [], fin = m.reviewFin;
+  if (fin) rows.push((fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 30));
+  rows.push(...deskRows(m, "check", "🔍", (r) => `ตรวจ ${trunc(r.tasks || "", 30)}`));
+  m.reviews.forEach((rv) => rows.push(`🔍 Claude ตรวจ ${trunc(rv.plan_name, 24)} ${rv.tasks || ""} · ตรวจมา ${ago(rv.age_sec)} (เริ่ม ${(rv.started || "").slice(11, 16)})`
+    + (rv.age_sec > 1800 ? ` · ⚠ นานผิดปกติ — session ที่ตรวจอาจปิดไปแล้ว (ป้ายหายเองใน ${state.review_ttl_min ?? 90} นาที)` : "")));
+  return capRows(rows, "ว่าง · นั่งพักที่โซฟา รองานตรวจ");
 }
-const guardHead = (m) => "🛡 ยามเฝ้า shell" + (m.watched.length ? ` · เฝ้า ${m.watched.length} งาน` : "");
-const GUARD_ROWS = 3;  // ป้ายยามในฉากมีกี่บรรทัด (ทุกงานที่ถูกเฝ้า เรียงร้ายแรงสุดก่อน · เกินแล้วบรรทัดสุดท้ายบอก "+N งานอื่น")
+const inspCount = (m) => m.desks.filter((r) => r && roleOf(r) === "check").length + m.reviews.length;
+const qaRows = (m) => capRows(deskRows(m, "qa", "🧪", (r) => (r.qa?.phase === "analyze" ? "Flash อ่าน log อธิบายสาเหตุ" : `รัน ${trunc(r.qa?.current || r.tasks || "", 30)}`)), "ว่าง · นั่งพักที่โซฟา รองานทดสอบ");
+const docRows = (m) => capRows(deskRows(m, "doc", "📝", (r) => (r.doc?.phase === "check" ? "flashq ตรวจผลเอกสาร" : `แก้ ${trunc(r.tasks || "", 30)}`)), "ว่าง · นั่งพักที่โซฟา รองานเอกสาร");
+const roleCount = (m, role) => m.desks.filter((r) => r && roleOf(r) === role).length;
+const guardHead = (m) => stripHead("🛡", "ยามเฝ้า shell", m.watched.length);
 function guardSceneRows(m) {
   const rows = [], k = m.kill;
   if (k) rows.push(`🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`);
@@ -1783,8 +1794,7 @@ function guardSceneRows(m) {
       : sw.state === "killed" ? `🛡 ${head} · ฆ่าคำสั่งค้างแล้ว`
       : `🛡 ${head} · ยังขยับ (${sw.pids} โปรเซส) รัน ${dur(sw.run_sec)}`);
   });
-  if (!rows.length) return ["ว่าง · นั่งพักที่โซฟา พร้อมเฝ้า shell"];
-  return rows.length > GUARD_ROWS ? [...rows.slice(0, GUARD_ROWS - 1), `+${rows.length - GUARD_ROWS + 1} รายการอื่น (ดูที่การ์ดของแต่ละงาน)`] : rows;
+  return capRows(rows, "ว่าง · นั่งพักที่โซฟา พร้อมเฝ้า shell");
 }
 function sceneSVG(m) {
   // จัดโต๊ะ: ≤5 ช่อง = แถวเดียว · มากกว่านั้นแบ่งแถวให้เท่ากัน (≤5 ต่อแถว) · กว้างเกินพื้นที่ = ย่อโต๊ะทั้งชุด (ไม่ล้นขอบ/ไม่เหลือแถวโหรงเหรง)
@@ -1792,8 +1802,16 @@ function sceneSVG(m) {
   const ds = Math.min(1, areaW / (cols * DW)), dw = DW * ds, dh = DH * ds;
   const ox = DESK_X0 + Math.max(0, (areaW - cols * dw) / 2);
   const deskX = (i) => ox + (i % cols) * dw, deskY = (i) => DESK_Y0 + Math.floor(i / cols) * dh, deskPX = (i) => deskX(i) + 72 * ds;
-  const stripY = DESK_Y0 + rows * dh + 6, H = Math.max(530, stripY + 290 + (m.goals.length ? 94 : 0));
+  const stripY = DESK_Y0 + rows * dh + 6, H = Math.max(530, stripY + 478 + (m.goals.length ? 94 : 0));
   const total = m.runs.length;
+  // แถบของนักทดสอบ/ช่างเอกสาร: มีงาน = ยืนที่ช่องแรกของตัวเอง + ป้ายรายการทุกงาน · ว่าง = นั่งโซฟา
+  const workerStrip = (sy, id, ico, name, role, hue, title, rows) => {
+    const vi = m.desks.map((r, i) => (r && roleOf(r) === role ? i : -1)).filter((i) => i >= 0), busy = vi.length > 0;
+    return `<g class="of-st-${role}${busy ? " of-busy" : ""}"><title>${esc(title)}</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+      ${busy ? person({ seed: role, hue, pose: "stand", mood: "flat", x: deskPX(vi[0]), y: sy + 78, s: 0.9, checker: role }) : ""}
+      <text class="of-tb" id="${id}H" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${stripHead(ico, name, vi.length)}</text>
+      ${stripTexts(id, rows, sy)}</g>`;
+  };
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
     <rect class="of-floor" width="${SCENE_W}" height="${H}"/><rect class="of-wall" width="${SCENE_W}" height="58"/>
@@ -1809,11 +1827,11 @@ function sceneSVG(m) {
     const rv = m.reviews[0], fin = m.reviewFin;
     const sy = stripY + 8, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
-    const txt = inspText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ไม่ต้องวาดฉากใหม่)
+    const rows = inspRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่ต้องวาดฉากใหม่)
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
       ${busy || fin ? person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" }) : ""}
-      <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🔍 ผู้ตรวจ</text>
-      <text class="of-tm" id="ofInspT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
+      <text class="of-tb" id="ofInspH" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${stripHead("🔍", "ผู้ตรวจ", inspCount(m))}</text>
+      ${stripTexts("ofInsp", rows, sy)}</g>`;
   }
   {  // ยามเฝ้า shell: ว่าง = นั่งพักที่โซฟา · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
     const sy = stripY + 102, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
@@ -1825,10 +1843,12 @@ function sceneSVG(m) {
       ${sw || caught ? person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" }) : ""}
       ${alert ? `<text x="${(sw ? colX : DESK_X0 + 70) + 22}" y="${sy + 18}" font-size="16" class="of-blinkt">❗</text>` : ""}
       <text class="of-tb" id="ofGuardH" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${guardHead(m)}</text>
-      ${Array.from({ length: GUARD_ROWS }, (_, i) => `<text class="of-tm" id="ofGuardT${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("")}</g>`;
+      ${stripTexts("ofGuard", rows, sy)}</g>`;
   }
-  g += loungeSVG(m.lounge, stripY + 196);
-  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 290);
+  g += workerStrip(stripY + 196, "ofQa", "🧪", "นักทดสอบ", "qa", 150, "นักทดสอบ (flashq รันชุดทดสอบเอง · อ่านอย่างเดียว)", qaRows(m));
+  g += workerStrip(stripY + 290, "ofDoc", "📝", "ช่างเอกสาร", "doc", 35, "ช่างเอกสาร (Flash แก้ไฟล์เอกสาร · flashq ตรวจผล)", docRows(m));
+  g += loungeSVG(m.lounge, stripY + 384);
+  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 478);
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || ""), kico = isDoc(j) ? "📝" : isQa(j) ? "🧪" : isSleuth(j) ? "🕵️" : isVerify(j) ? "🔍" : "";  // ไอคอนชนิดงานข้างเลขคิว (งานแก้ตามแผนไม่มี)
@@ -2072,7 +2092,8 @@ function officeUpdate() {
   }
   const now = Date.now();
   setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
-  setText("ofInspT", inspText(m)); setText("ofGuardH", guardHead(m)); { const gr = guardSceneRows(m); for (let i = 0; i < GUARD_ROWS; i++) setText("ofGuardT" + i, gr[i] || ""); }
+  setStrip("ofInsp", stripHead("🔍", "ผู้ตรวจ", inspCount(m)), inspRows(m)); setStrip("ofGuard", guardHead(m), guardSceneRows(m));
+  setStrip("ofQa", stripHead("🧪", "นักทดสอบ", roleCount(m, "qa")), qaRows(m)); setStrip("ofDoc", stripHead("📝", "ช่างเอกสาร", roleCount(m, "doc")), docRows(m));
   /* งานที่กำลังทำ */
   const infos = m.runs.map(runInfo);
   m.runs.forEach((r, k) => {
