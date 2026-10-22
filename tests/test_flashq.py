@@ -3117,6 +3117,77 @@ class QaTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("adhoc=FAIL", r.stdout)
 
+    def test_detect_standalone_test_scripts_instead_of_pytest(self):
+        """tests/test_*.py ที่รันตรงด้วย python (ไม่มี pytest) → แนะนำ cmds ทีละไฟล์ ไม่ใช่ pytest"""
+        t = self.proj / "tests"
+        t.mkdir()
+        (t / "test_a.py").write_text("def main():\n    pass\n\nif __name__ == '__main__':\n    main()\n", encoding="utf-8")
+        (t / "test_b.py").write_text("print('x')\nif __name__ == \"__main__\":\n    pass\n", encoding="utf-8")
+        mod = self.load_mod("flashq_qa_detect")
+        found = mod.qa_detect(self.proj)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["cmds"], ["python tests/test_a.py", "python tests/test_b.py"])
+        self.assertNotIn("cmd", found[0])
+        r = self.run_q("qa", "--no-analyze")
+        self.assertIn("test_a.py", r.stdout)
+        self.assertNotIn("pytest -q", r.stdout)
+        (t / "test_c.py").write_text("import pytest\ndef test_x():\n    pass\n", encoding="utf-8")  # ไฟล์ที่พึ่ง pytest ไม่นับเป็น standalone
+        self.assertNotIn("tests/test_c.py", json.dumps(mod.qa_detect(self.proj)))
+        (self.proj / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")  # ตั้ง pytest ชัด ๆ → ใช้ pytest
+        self.assertEqual(mod.qa_detect(self.proj)[0]["cmd"], "python -m pytest -q")
+
+    def test_cmds_preset_reports_each_command_separately_with_default_retry(self):
+        """preset แบบ cmds: แยกผลทีละคำสั่ง (สคริปต์ที่ผ่านไม่ถูกบังด้วยตัวที่ล้ม) · retry เริ่มต้น 1 → ล้มชั่วคราวแล้วผ่าน = FLAKY · retry:0 ปิดได้"""
+        for n in ("a", "c"):
+            (self.proj / f"test_{n}.py").write_text("print('ok')\n", encoding="utf-8")
+        (self.proj / "test_b.py").write_text("import os, sys\nif os.path.exists('b.mark'):\n    sys.exit(0)\nopen('b.mark', 'w').close()\nsys.exit(1)\n", encoding="utf-8")
+        py = f'"{sys.executable}"'
+        self.presets(unit={"cmds": [f"{py} test_a.py", f"{py} test_b.py", {"cmd": f"{py} test_c.py"}]})
+        r = self.run_q("qa", "--no-analyze")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("unit:test_b=FLAKY", r.stdout.split("----")[0])
+        j = self.job_files()[-1]
+        rows = {s["name"]: s for s in j["qa"]["specs"]}
+        self.assertEqual({k: v["verdict"] for k, v in rows.items()}, {"unit:test_a": "PASS", "unit:test_b": "FLAKY", "unit:test_c": "PASS"})
+        self.assertEqual(rows["unit:test_a"]["runs"], 1)  # ผ่านรอบแรก = ไม่รันซ้ำ
+        self.assertEqual(rows["unit:test_b"]["runs"], 2)
+        self.assertIn("เวลา: รันเทสต์", r.stdout)
+        (self.proj / "b.mark").unlink()
+        self.presets(unit={"cmds": [f"{py} test_b.py"], "retry": 0})
+        r = self.run_q("qa", "--no-analyze")
+        self.assertIn("unit:test_b=FAIL", r.stdout)
+        for bad, want in (({"cmds": []}, "cmds ต้องเป็นรายการ"), ({"cmds": "x"}, "cmds ต้องเป็นรายการ"), ({"cmds": ["echo x"], "cmd": "echo y"}, "อย่างใดอย่างหนึ่ง")):
+            self.presets(t=bad)
+            r = self.run_q("qa", "t", "--no-analyze")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(want, r.stdout)
+
+    def test_key_lines_pick_final_exception_not_traceback_header(self):
+        mod = self.load_mod("flashq_qa_keys")
+        text = ("running\nTraceback (most recent call last):\n  File \"C:\\x\\tests\\test_v3_http.py\", line 42, in <module>\n    main()\n"
+                "  File \"C:\\x\\lib\\http.py\", line 7, in get\n    return s.recv()\nConnectionResetError: [WinError 10054] An existing connection was closed\n")
+        keys = mod.qa_key_lines(text)
+        self.assertEqual(keys, ["ConnectionResetError: [WinError 10054] An existing connection was closed  (http.py:7)"])
+        self.assertFalse(any(k.startswith("Traceback") for k in mod.qa_key_lines("Traceback (most recent call last):\n  File \"a.py\", line 1\nValueError: x\n")))
+        self.assertEqual(mod.qa_key_lines("Traceback (most recent call last):\n"), [])  # traceback ถูกตัดกลางทาง = ไม่มีอะไรให้คัด
+
+    def test_dirty_counts_separate_tracked_changes_from_untracked(self):
+        (self.proj / "keep.txt").write_text("a", encoding="utf-8")
+        self.init_git()
+        mod = self.load_mod("flashq_qa_dirty")
+        self.assertEqual(mod.qa_dirty_counts(self.proj), (0, 0))
+        (self.proj / "keep.txt").write_text("b", encoding="utf-8")
+        big = self.proj / "bigdir"
+        big.mkdir()
+        for i in range(30):
+            (big / f"f{i}.txt").write_text("x", encoding="utf-8")
+        (self.proj / ".tmp").mkdir()
+        (self.proj / ".tmp" / "t.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(mod.qa_dirty_counts(self.proj), (1, 1))  # โฟลเดอร์ใหม่ 30 ไฟล์ = 1 รายการ · .tmp ไม่นับ
+        head, _ = mod.qa_summary({"specs": [{"name": "u", "verdict": "PASS", "secs": 1}], "head": "abc", "dirty": 1, "untracked": 1})
+        self.assertIn("แก้ไฟล์ที่ติดตามอยู่แล้วแต่ยังไม่ commit 1 ไฟล์", head)
+        self.assertIn("ไฟล์/โฟลเดอร์ใหม่ที่ยังไม่ติดตาม 1 รายการ", head)
+
     def test_env_exit_is_env_verdict_not_pass_and_not_retried_or_analyzed(self):
         """exit code ที่ประกาศว่า "สภาพแวดล้อมไม่พร้อม" = ENV (ไม่ผ่านเหมือนกัน แต่บอกชัดว่าไม่ใช่โค้ดผิด · ไม่ลองซ้ำ · ไม่ให้ Flash เดาสาเหตุ)"""
         env3 = self.py("env3.py", "import sys\nprint('server not ready')\nsys.exit(3)\n")

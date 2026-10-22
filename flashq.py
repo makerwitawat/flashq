@@ -2206,9 +2206,35 @@ QA_MAX_CMD = 2000
 QA_LOG_CAP = 100 * 1024 * 1024   # log ของ 1 ชุดเกินนี้ = คำสั่งพ่นข้อความไม่หยุด → ฆ่า (กันดิสก์เต็ม)
 QA_READ_CAP = 600 * 1024         # อ่านท้าย log แค่นี้ตอนตรวจ expect/ดึงบรรทัดสำคัญ
 QA_ANALYZE_MIN = 10
+QA_DEFAULT_RETRY = 1             # ชุดที่ล้มลองซ้ำ 1 รอบ (เหตุชั่วคราว เช่น ConnectionReset) · ผ่านเฉพาะรอบหลัง = FLAKY ไม่ใช่ PASS · ปิดด้วย retry: 0 / --retry 0
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 QA_KEY_RE = re.compile(r"^(?:FAILED|ERROR|FAIL)\b|AssertionError|^E {2,}|^Traceback|\b\d+ (?:passed|failed|errors?|skipped)\b|^Ran \d+ tests?|"
                        r"^(?:OK|FAILED) ?(?:\(|$)|\bnot ok\b|error\[E\d+\]|panicked at|^--- FAIL|BUILD FAILED|✖|✕|\bTests?:\s|\d+ failing|\berror:", re.I)
+
+
+def qa_standalone_tests(root: Path) -> list[str]:
+    """tests/test_*.py ที่เป็นสคริปต์รันตรง (มี `if __name__ == "__main__"` และไม่พึ่ง pytest) → รายชื่อเส้นทางเทียบรากโปรเจกต์ · ไม่มี = []"""
+    out = []
+    for p in sorted((root / "tests").glob("test_*.py"))[:40]:
+        try:
+            src = p.read_text(encoding="utf-8-sig", errors="replace")[:200_000]
+        except OSError:
+            continue
+        if re.search(r"^\s*(?:import|from)\s+pytest\b", src, re.M) or not re.search(r"""__name__\s*==\s*["']__main__["']""", src):
+            continue
+        out.append(p.relative_to(root).as_posix())
+    return out
+
+
+def qa_pytest_missing() -> bool:
+    """python ที่อยู่ใน PATH ไม่มี pytest? (ใช้เตือนตอนแนะนำเท่านั้น · ตรวจไม่ได้ = False)"""
+    exe = shutil.which("python")
+    if not exe:
+        return False
+    try:
+        return subprocess.run([exe, "-c", "import pytest"], capture_output=True, timeout=20).returncode != 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def qa_detect(root: Path) -> list[dict]:
@@ -2220,8 +2246,13 @@ def qa_detect(root: Path) -> list[dict]:
             return (root / name).read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             return ""
-    if (root / "pytest.ini").is_file() or (root / "conftest.py").is_file() or (root / "tests").is_dir() or "pytest" in text("pyproject.toml") or "[tool:pytest]" in text("setup.cfg"):
+    standalone = qa_standalone_tests(root)
+    if (root / "pytest.ini").is_file() or (root / "conftest.py").is_file() or "pytest" in text("pyproject.toml") or "[tool:pytest]" in text("setup.cfg") \
+            or ((root / "tests").is_dir() and not standalone):
         out.append({"name": "unit", "cmd": "python -m pytest -q", "expect": r"\d+ passed", "why": "พบ pytest / โฟลเดอร์ tests"})
+    elif standalone:
+        out.append({"name": "unit", "cmds": [f"python {p}" for p in standalone],
+                    "why": f"tests/ มีสคริปต์ standalone {len(standalone)} ไฟล์ (ไม่ใช้ pytest · สำเร็จ/ล้มด้วย exit code) → แยกผลทีละไฟล์ · ถ้าต้องใช้ python ของโปรเจกต์อื่น (เช่น venv) ให้แก้ path ของ python เอง"})
     scripts = read_json(root / "package.json").get("scripts")
     if isinstance(scripts, dict) and scripts.get("test") and "no test specified" not in str(scripts["test"]):
         out.append({"name": "unit", "cmd": "npm test", "why": "package.json มี scripts.test"})
@@ -2248,9 +2279,12 @@ def qa_suggest_lines(root: Path) -> list[str]:
     found = qa_detect(root)
     if not found:
         return ["ยังเดาไม่ได้ว่าโปรเจกต์นี้ทดสอบด้วยอะไร → ใส่ qa.presets ใน .flash.json เอง หรือสั่งครั้งเดียวด้วย --cmd \"<คำสั่ง>\""]
-    presets = {x["name"]: {k: v for k, v in x.items() if k in ("cmd", "expect")} for x in found}
-    return ["ที่เดาได้จากไฟล์ในโปรเจกต์ (ตรวจแล้วค่อยวางใน .flash.json — flashq ไม่รันคำสั่งที่เดาเอง):",
-            "  " + json.dumps({"qa": {"presets": presets}}, ensure_ascii=False)] + [f"  - {x['name']}: {x['why']}" for x in found]
+    presets = {x["name"]: {k: v for k, v in x.items() if k in ("cmd", "cmds", "expect")} for x in found}
+    lines = ["ที่เดาได้จากไฟล์ในโปรเจกต์ (ตรวจแล้วค่อยวางใน .flash.json — flashq ไม่รันคำสั่งที่เดาเอง):",
+             "  " + json.dumps({"qa": {"presets": presets}}, ensure_ascii=False)] + [f"  - {x['name']}: {x['why']}" for x in found]
+    if any("pytest" in str(x.get("cmd")) for x in found) and qa_pytest_missing():
+        lines.append("  ⚠️ python ใน PATH ยังไม่มี pytest — ถ้าโปรเจกต์ใช้ python/venv ตัวอื่น ให้ใส่ path ของ python นั้นในคำสั่งแทน `python` (ไม่งั้นจะล้มเพราะไม่มี pytest)")
+    return lines
 
 
 def qa_spec(name: str, v, default_min: float) -> dict | str:
@@ -2274,7 +2308,7 @@ def qa_spec(name: str, v, default_min: float) -> dict | str:
         except (TypeError, ValueError):
             return f"ชุดทดสอบ '{name}': {key} ต้องเป็นตัวเลข"
         return x if lo <= x <= hi else f"ชุดทดสอบ '{name}': {key} ต้องอยู่ระหว่าง {lo:g}-{hi:g}"
-    timeout, idle, retry = num("timeout_min", default_min, 0.1, 1440), num("idle_min", 0, 0, 1440), num("retry", 0, 0, 3)
+    timeout, idle, retry = num("timeout_min", default_min, 0.1, 1440), num("idle_min", 0, 0, 1440), num("retry", QA_DEFAULT_RETRY, 0, 3)
     for x in (timeout, idle, retry):
         if isinstance(x, str):
             return x
@@ -2296,6 +2330,29 @@ def qa_spec(name: str, v, default_min: float) -> dict | str:
             "retry": int(retry), "expect": expect, "env_exit": sorted(set(env_exit))}
 
 
+def qa_expand_cmds(name: str, v: dict, errs: list[str]) -> list[tuple[str, dict]]:
+    """preset แบบ {"cmds": [คำสั่ง | {cmd, ...}], ...ตัวเลือกร่วม} → หลายชุดย่อย (ผล ผ่าน/ไม่ผ่านแยกทีละคำสั่ง) · ชื่อชุดย่อย = <ชื่อ>:<ชื่อไฟล์ .py> หรือ <ชื่อ>.<ลำดับ>"""
+    items = v.get("cmds")
+    if "cmd" in v:
+        errs.append(f"ชุดทดสอบ '{name}': ใช้ cmd หรือ cmds อย่างใดอย่างหนึ่ง ไม่ใช่ทั้งสองอย่าง")
+        return []
+    if not isinstance(items, list) or not items or len(items) > 30:
+        errs.append(f"ชุดทดสอบ '{name}': cmds ต้องเป็นรายการคำสั่ง 1-30 รายการ")
+        return []
+    shared = {k: x for k, x in v.items() if k != "cmds"}
+    out, used = [], set()
+    for i, it in enumerate(items, 1):
+        sub = {**shared, **(it if isinstance(it, dict) else {"cmd": it})}
+        cmd = str(sub.get("cmd") or "")
+        m = re.findall(r"([\w.-]+)\.py\b", cmd)
+        label = f"{name}:{m[-1]}" if m else f"{name}.{i}"
+        if label in used:
+            label = f"{name}.{i}"
+        used.add(label)
+        out.append((label, sub))
+    return out
+
+
 def qa_specs(cfg: dict, names: list[str], raw_cmds: list[str], root: Path) -> tuple[list[dict], list[str]]:
     """เลือกชุดทดสอบ: ชื่อจาก qa.presets (ไม่ระบุชื่อและไม่มี --cmd = ทุกชุด) + --cmd เฉพาะกิจ · คืน (ชุด, ข้อผิดพลาด)"""
     qa = cfg.get("qa") if isinstance(cfg.get("qa"), dict) else {}
@@ -2314,6 +2371,13 @@ def qa_specs(cfg: dict, names: list[str], raw_cmds: list[str], root: Path) -> tu
         else:
             todo.append((n, presets[n]))
     todo += [("adhoc" if i == 1 else f"adhoc{i}", {"cmd": c}) for i, c in enumerate(raw_cmds, 1)]
+    expanded = []
+    for n, v in todo:
+        if isinstance(v, dict) and "cmds" in v:
+            expanded += qa_expand_cmds(n, v, errs)
+        else:
+            expanded.append((n, v))
+    todo = expanded
     for n, v in todo:
         s = qa_spec(n, v, dmin)
         if isinstance(s, str):
@@ -2384,8 +2448,50 @@ def qa_text(path: Path, cap: int = QA_READ_CAP) -> str:
 
 def qa_key_lines(text: str, limit: int = 8) -> list[str]:
     """บรรทัดที่บอกผล (สรุปจำนวนผ่าน/ล้ม · ชื่อเทสต์ที่ล้ม · assertion · traceback) ตัดท้าย limit บรรทัด · ไม่ตีความ แค่คัดมา"""
-    hits = [ln.strip()[:200] for ln in text.splitlines() if ln.strip() and QA_KEY_RE.search(ln.strip())]
-    return list(dict.fromkeys(hits))[-limit:]
+    lines = text.splitlines()
+    hits, tb = [], []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("Traceback (most recent call last)"):  # หัว traceback ไม่บอกอะไร → เก็บ "ไฟล์:บรรทัดสุดท้าย + ข้อผิดพลาดจริง" แทน
+            frame, j = "", i + 1
+            while j < len(lines) and (not lines[j].strip() or lines[j][:1] in " \t"):
+                m = re.match(r'\s+File "([^"]+)", line (\d+)', lines[j])
+                if m:
+                    frame = f'{Path(m.group(1)).name}:{m.group(2)}'
+                j += 1
+            if j < len(lines) and lines[j].strip():
+                tb.append((frame, lines[j].strip()[:200], j))
+            continue
+        if QA_KEY_RE.search(s):
+            hits.append((i, s[:200]))
+    own = {j for _, _, j in tb}
+    merged = [(i, s) for i, s in hits if i not in own]
+    for frame, exc, j in tb:
+        merged.append((j, exc + (f"  ({frame})" if frame else "")))
+    merged.sort(key=lambda x: x[0])
+    return list(dict.fromkeys(s for _, s in merged))[-limit:]
+
+
+def qa_dirty_counts(root: Path) -> tuple[int, int]:
+    """(ไฟล์ที่ติดตามอยู่แล้วและถูกแก้ · รายการไฟล์/โฟลเดอร์ใหม่ที่ยังไม่ติดตาม) — โฟลเดอร์ใหม่นับเป็น 1 รายการ ไม่แตกเป็นรายไฟล์ · ไม่รวม .tmp/"""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "status", "--porcelain"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return 0, 0
+    if r.returncode != 0:
+        return 0, 0
+    tracked = untracked = 0
+    for line in r.stdout.splitlines():
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path.startswith((".tmp/", ".tmp\\")):
+            continue
+        if line.startswith("??"):
+            untracked += 1
+        else:
+            tracked += 1
+    return tracked, untracked
 
 
 def qa_kill(p: subprocess.Popen) -> None:
@@ -2464,7 +2570,9 @@ def qa_summary(q: dict) -> tuple[str, str]:
     """(หัวข้อ 1 บรรทัด, รายละเอียด) ภาษาคน — ผู้ใช้/Claude อ่านบรรทัดแรกก็รู้ผลทันที"""
     specs = q["specs"]
     bad = [s for s in specs if s["verdict"] != "PASS"]
-    tested = f"ทดสอบ {q.get('head') or 'โฟลเดอร์ที่ไม่ใช่ git'}" + (f" (+ไฟล์ที่ยังไม่ commit {q['dirty']} ไฟล์)" if q.get("dirty") else "")
+    extra = ([f"แก้ไฟล์ที่ติดตามอยู่แล้วแต่ยังไม่ commit {q['dirty']} ไฟล์"] if q.get("dirty") else []) + \
+            ([f"ไฟล์/โฟลเดอร์ใหม่ที่ยังไม่ติดตาม {q['untracked']} รายการ"] if q.get("untracked") else [])
+    tested = f"ทดสอบ {q.get('head') or 'โฟลเดอร์ที่ไม่ใช่ git'}" + (f" (+{' · '.join(extra)})" if extra else "")
     if not bad:
         head = f"✅ ผ่านทั้ง {len(specs)} ชุด ({', '.join(s['name'] for s in specs)}) · {tested}"
     else:
@@ -2474,16 +2582,19 @@ def qa_summary(q: dict) -> tuple[str, str]:
     lines = []
     for s in specs:
         ic = QA_ICON.get(s["verdict"], "?")
+        cmd_hint = f" `{one_line(s['cmd'], 70)}`" if s.get("cmd") and (s["name"].startswith("adhoc") or ":" in s["name"] or "." in s["name"]) else ""
         if s["verdict"] == "PASS":
-            lines.append(f"{ic} {s['name']} — ผ่าน {s['secs']:g} วิ" + (f" · {s['key'][-1]}" if s.get("key") else ""))
+            lines.append(f"{ic} {s['name']}{cmd_hint} — ผ่าน {s['secs']:g} วิ" + (f" · {s['key'][-1]}" if s.get("key") else ""))
             continue
         why = {"FAIL": f"exit {s.get('rc')}", "TIMEOUT": s.get("why") or "เกินเวลา", "ERROR": s.get("why") or "เปิดคำสั่งไม่ได้",
                "NOEXPECT": f"exit 0 แต่ไม่พบข้อความที่ต้องมี /{s.get('expect', '')}/ → อาจไม่ได้รันเทสต์จริง นับว่าไม่ผ่าน",
                "FLAKY": "ล้มรอบแรกแต่ผ่านรอบหลัง = ผลไม่นิ่ง นับว่าไม่ผ่าน", "SKIPPED": "ข้าม (ชุดก่อนหน้าหยุดการทดสอบ)",
                "CHANGED": "โค้ดเปลี่ยนระหว่างทดสอบ",
                "ENV": f"exit {s.get('rc')} = สภาพแวดล้อมไม่พร้อม (ตามที่ env_exit ประกาศ) — ยังไม่ได้ทดสอบโค้ดจริง นับว่าไม่ผ่าน · เตรียมสภาพแวดล้อมแล้วรันใหม่"}.get(s["verdict"], s["verdict"])
-        lines.append(f"{ic} {s['name']} — {why}" + (f" · {s['secs']:g} วิ" if s["verdict"] != "SKIPPED" else "") + (f" · log {s['log']}" if s.get("log") else ""))
+        lines.append(f"{ic} {s['name']}{cmd_hint} — {why}" + (f" · {s['secs']:g} วิ" if s["verdict"] != "SKIPPED" else "") + (f" · log {s['log']}" if s.get("log") else ""))
         lines += [f"    {k}" for k in (s.get("key") or [])[-5:]]
+    if q.get("test_secs") is not None:
+        lines.append(f"เวลา: รันเทสต์ {q['test_secs']:g} วิ" + (f" · Flash วิเคราะห์ {q['analyze_secs']:g} วิ" if q.get("analyze_secs") else ""))
     if q.get("analysis"):
         lines.append("คำอธิบายจากนักทดสอบ (Flash · ความเห็น ไม่ใช่คำตัดสิน — ตรวจกับ log ก่อนเชื่อ): " + one_line(q["analysis"], 700))
     elif q.get("analysis_note"):
@@ -2592,8 +2703,7 @@ def cmd_qa(a) -> int:
         prob = commit_problem()  # รอคิวมานาน HEAD อาจเปลี่ยนไปแล้ว
         head0 = head_now()
         q.update(head=head0[:10], phase="test")
-        snap = dirty_snapshot(root) if is_git else None
-        q["dirty"] = len([p for p in (snap or {}) if not p.startswith((".tmp/", ".tmp\\"))])
+        q["dirty"], q["untracked"] = qa_dirty_counts(root) if is_git else (0, 0)
         save_job(job)
         if prob:
             q["changed"] = prob
@@ -2636,6 +2746,7 @@ def cmd_qa(a) -> int:
                 elif row["verdict"] != "PASS" and a.fail_fast:
                     stop = True
             q.pop("current", None)
+        q["test_secs"] = round(time.time() - t_start, 1)
         bad = [r for r in q["specs"] if r["verdict"] != "PASS"]
         verdicts = {r["verdict"] for r in q["specs"]}
         if verdicts == {"PASS"} and not q.get("changed"):
@@ -2648,10 +2759,12 @@ def cmd_qa(a) -> int:
         if failing and not a.no_analyze and not q.get("changed"):
             q["phase"] = "analyze"
             save_job(job)
+            t_an = time.time()
             try:
                 q["analysis"] = qa_analyze(job, root, cfg, failing, variant_for("qa", a.variant, root))
             except Exception as e:  # คำอธิบายเป็นของแถม — พังแค่บันทึกเหตุ ไม่เปลี่ยนคำตัดสิน
                 q["analysis_note"] = str(e)[:300]
+            q["analyze_secs"] = round(time.time() - t_an, 1)
         q["phase"] = "done"
         rc_out = 0 if status == "OK" else 1
     finally:
@@ -6385,7 +6498,7 @@ def main() -> int:
     qa.add_argument("qa_names", nargs="*", metavar="ชุด", help="ชื่อชุดจาก .flash.json qa.presets (ไม่ระบุ = ทุกชุด)")
     qa.add_argument("--cmd", dest="qa_cmd", action="append", default=[], metavar="คำสั่ง", help="คำสั่งทดสอบเฉพาะกิจ (ใช้ซ้ำได้ · ชื่อชุด adhoc, adhoc2…) · ใช้ได้เฉพาะจาก CLI")
     qa.add_argument("--commit", dest="qa_commit", default="", help="ยืนยันว่า checkout อยู่ที่ commit นี้ (ไม่ตรง = ไม่ทดสอบ · ไม่สลับ commit ให้เอง)")
-    qa.add_argument("--retry", type=int, default=None, help="ล้มแล้วรันซ้ำกี่ครั้ง (0-3 · ผ่านเฉพาะรอบหลังนับ FLAKY = ไม่ผ่าน) · ค่าเริ่มต้นตาม retry ของชุดนั้น (0)")
+    qa.add_argument("--retry", type=int, default=None, help="ล้มแล้วรันซ้ำกี่ครั้ง (0-3 · ผ่านเฉพาะรอบหลังนับ FLAKY = ไม่ผ่าน) · ค่าเริ่มต้นตาม retry ของชุดนั้น (ไม่ตั้ง = 1) · --retry 0 = ไม่ลองซ้ำ")
     qa.add_argument("--fail-fast", action="store_true", help="ชุดหนึ่งไม่ผ่าน = ไม่รันชุดที่เหลือ")
     qa.add_argument("--no-analyze", action="store_true", help="ล้มแล้วไม่ต้องให้ Flash อ่าน log อธิบาย (ไม่เรียกโมเดลเลย)")
     qa.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
