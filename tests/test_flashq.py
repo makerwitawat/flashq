@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 FLASHQ = REPO / "flashq.py"
@@ -1487,7 +1488,10 @@ class FlashqTest(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location(name, FLASHQ)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        with mock.patch.dict(os.environ, {"FLASHQ_HOME": str(self.home), "FLASHQ_NO_TOAST": "1"}):  # HOME อ่านตอน import — ห้ามเขียนลง ~/.flashq จริง
+            spec.loader.exec_module(mod)
+        for d in ("jobs", "inbox", "logs"):
+            (self.home / d).mkdir(parents=True, exist_ok=True)
         return mod
 
     def test_shell_watch_kills_only_stuck_command(self):
