@@ -772,6 +772,7 @@ function render() {
       <div>แผน</div><div class="mono">${esc(isDoc(r) ? "(ชุดเอกสารของโปรเจกต์)" : isQa(r) ? "(ชุดทดสอบของโปรเจกต์)" : r.message ? "(ทดสอบ --message)" : r.plan)}${isVerify(r) ? ` <span class="badge s-other">${isQa(r) ? "🧪 นักทดสอบ" : isSleuth(r) ? "🕵️ ผู้สืบ" : "🔍 ผู้ตรวจ"}${r.agent ? " · " + esc(r.agent) : ""}</span>` : ""}</div>
       <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}${qaLine(r)}${docLine(r)}</div>
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
+      ${thinkText(r) ? `<div>ความคิด</div><div class="mono" title="ระดับความคิดของโมเดล (opencode --variant)">🧠 ${esc(thinkText(r))}</div>` : ""}
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
       <div id="rnL${i}" style="display:contents"></div>
     </div>
@@ -786,7 +787,7 @@ function render() {
   setHTML("queued", s.queued.length ? `<div class="table-wrap"><table>
     <tr><th>#</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>รอมาแล้ว</th><th></th></tr>
     ${s.queued.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td><td class="nw">${dur(j.wait_sec)}</td>
+      <td><b>${j.position}</b></td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${thinkLine(j)}${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td><td class="nw">${dur(j.wait_sec)}</td>
       <td class="act">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="ให้งานนี้ได้ช่องเพิ่มทันที รันพร้อมงานที่กำลังทำ (ตรวจไฟล์ซ้อนก่อน)">รันเลย (คู่ขนาน)</button>`}
         <button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">ไม่มีงานรอคิว</div>`);
@@ -804,7 +805,7 @@ function render() {
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td>
-      <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
+      <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}${thinkLine(j)}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
 
@@ -1715,7 +1716,7 @@ function deskSVG(i, cx, cy, r, c) {
     else if (r.fix_round) bubble += `<text class="of-goalt" x="${cx + 180}" y="${cy + 62}" text-anchor="end" opacity="0.7">🔁 แก้รอบ ${r.fix_round}<title>แผนแก้ซ้ำ (_R${r.fix_round}) ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย ไม่มีธง</title></text>`;
     bubble += `<g><rect class="of-bubble" x="${cx - 4}" y="${cy + 18}" width="152" height="30" rx="9"/><path class="of-bubble" d="M${px - 6} ${cy + 48} l6 9 l6 -9Z"/>
       <text class="of-t" id="ofB${i}" x="${px}" y="${cy + 37}" text-anchor="middle"></text></g>`;
-    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isQa(r) ? "🧪 " : isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 8 : 10))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 162}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 10))}<title>${esc(modelText(r))}</title></text>` : ""}`;
+    label = `<text class="of-tb" x="${cx + 16}" y="${cy + 162}">${isVerify(r) ? (isQa(r) ? "🧪 " : isSleuth(r) ? "🕵️ " : "🔍 ") : ""}${esc(trunc(r.project_name, isVerify(r) ? 8 : 10))}</text><text class="of-tm" id="ofPT${i}" x="${cx + 16}" y="${cy + 177}"></text>${modelText(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 162}" text-anchor="end">🤖 ${esc(trunc(modelShort(r), 10))}<title>${esc(modelText(r))}</title></text>` : ""}${thinkShort(r) ? `<text class="of-tm" x="${cx + 176}" y="${cy + 177}" text-anchor="end">🧠 ${esc(thinkShort(r))}<title>${esc("ระดับความคิด: " + thinkText(r))}</title></text>` : ""}`;
   } else if (c) {
     const k = CELE[c.state];
     stCls = k.cls;
@@ -1783,7 +1784,7 @@ const stripTexts = (id, rows, sy) => Array.from({ length: STRIP_ROWS }, (_, i) =
   `<text class="of-tm" id="${id}T${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("");
 function setStrip(id, head, rows) { setText(id + "H", head); for (let i = 0; i < STRIP_ROWS; i++) setText(id + "T" + i, rows[i] || ""); }
 const elapsedTxt = (r) => (r.elapsed_sec == null ? "" : ` · ⏱ ${mmss(r.elapsed_sec + (Date.now() - stateAt) / 1000)}`);
-const deskRows = (m, role, ico, what) => m.desks.map((r, i) => (r && roleOf(r) === role ? `${ico} ช่อง ${i + 1} ${trunc(r.project_name, 12)} · ${what(r)}${elapsedTxt(r)}` : null)).filter(Boolean);
+const deskRows = (m, role, ico, what) => m.desks.map((r, i) => (r && roleOf(r) === role ? `${ico} ช่อง ${i + 1} ${trunc(r.project_name, 12)} · ${what(r)}${elapsedTxt(r)}${thinkShort(r) ? ` · 🧠 ${thinkShort(r)}` : ""}` : null)).filter(Boolean);
 function inspRows(m) {
   const rows = [], fin = m.reviewFin;
   if (fin) rows.push((fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 30));
@@ -1946,6 +1947,12 @@ function modelText(j) {
 }
 function modelShort(j) { const raw = (j && j.model) || state.current_model || ""; return raw.split("/").slice(1).join("/") || raw; }
 function modelChip(j) { const t = modelText(j); return t ? `<div class="of-line muted" title="โมเดล · เจ้า (บัญชี)">🤖 ${esc(t)}</div>` : ""; }
+/* ระดับความคิด (opencode --variant) ของงาน: j.variant = ค่าที่ส่งจริง (งานรอคิว = ค่าที่จะส่ง) · ว่าง = ไม่ส่ง ใช้ค่าปกติของ provider
+   นักทดสอบช่วงรันคำสั่งไม่มีโมเดลคิด → ว่างแล้วไม่โชว์ */
+const thinkText = (j) => (j && j.variant) || (j && isQa(j) ? "" : "ค่าปกติของ provider");
+const thinkShort = (j) => (j && j.variant ? trunc(j.variant, 6) : j && isQa(j) ? "" : "ปกติ");
+const thinkChip = (j) => (thinkText(j) ? `<div class="of-line muted" title="ระดับความคิดของโมเดล (opencode --variant) · ตั้งตามชนิดงานใน .flash.json / config.json">🧠 ความคิด ${esc(thinkText(j))}</div>` : "");
+const thinkLine = (j) => (thinkText(j) ? `<div class="muted" title="ระดับความคิดของโมเดล (opencode --variant)">🧠 ${esc(thinkText(j))}</div>` : "");
 /* งานที่เป็นรอบของเป้าหมาย: บอกว่าเป้าหมายอยู่ขั้นไหน (เขียนแผน → Flash ทำ → รอตรวจ → ตรวจ → ผล) + ตรวจแล้ว/ผ่านกี่ข้อ */
 function runGoalHTML(r) {
   const gl = (state.goals || []).find((g) => g.id === r.goal.id) || {}, p = gl.phase;
@@ -2037,7 +2044,7 @@ function runCardHTML(r, k) {
     <div class="of-line of-full"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
     <div class="of-line of-full">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
     <div class="of-line of-full">⏱ <span id="ofCE${k}"></span></div>
-    <div class="of-full">${modelChip(r)}</div>
+    <div class="of-full">${modelChip(r)}${thinkChip(r)}</div>
     <div class="of-line muted of-full" id="ofCM${k}"></div>
     <div class="of-line muted of-full" id="ofCA${k}"></div>
     <div class="of-line muted of-full" id="ofCG${k}"></div>
@@ -2047,7 +2054,7 @@ function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
   return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>คาดการณ์</th></tr>
     ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
-      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span>${modelText(j) ? " · 🤖 " + esc(modelText(j)) : ""}</div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
+      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span>${modelText(j) ? " · 🤖 " + esc(modelText(j)) : ""}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
       <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b><div class="row" style="margin-top:0.3rem">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="บังคับให้เริ่มทันทีในช่องพิเศษ (ตรวจไฟล์ซ้อนก่อน)">รันเลย</button>`}<button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></div></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
@@ -2062,7 +2069,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}${recentCostHTML(j.flash)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */

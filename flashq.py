@@ -4267,6 +4267,9 @@ def ui_state() -> dict:
                        rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
                               if j.get("plan") else ""))
             dead.append(row)
+        row["variant"] = j.get("variant") or ""  # ระดับความคิดที่ส่งให้ opencode จริง (ว่าง = ไม่ส่ง ใช้ค่าปกติของ provider)
+        if st == "queued":  # ยังไม่เริ่ม = ยังไม่มีค่าบันทึก → บอกค่าที่จะใช้ (ชนิดเดียวกับที่ cmd_run จะคำนวณ)
+            row["variant"] = variant_for(j.get("kind") or ("test" if j.get("message") else "work"), None, Path(j.get("project") or "."))
         if st == "running":
             h = slot_of.get(j["id"], {})
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),

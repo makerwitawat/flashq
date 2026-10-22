@@ -1353,6 +1353,30 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ไม่ใช่ชื่อ variant", r.stderr)
         self.assertEqual(self.variant_of(self.last_argv()), "max")  # ชื่อแปลก (อาจแอบเป็นออปชัน) ไม่ถูกส่ง · ข้ามไปใช้ชั้นถัดไป (config.json = max)
 
+    def test_ui_state_shows_variant_of_every_kind(self):
+        """ui: /api/state ใส่ variant ให้ทุกแถว — งานที่จบ/รันแล้ว = ค่าที่บันทึกไว้จริง · งานรอคิว = ค่าที่จะส่ง (คำนวณตามชนิดงานจาก .flash.json > config.json > ค่าเริ่มต้น) · งานทำที่ไม่ส่ง = ว่าง"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        (self.home / "jobs").mkdir(parents=True)
+        (self.home / "config.json").write_text(json.dumps({"variants": {"doc": "medium"}}), encoding="utf-8")
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait(timeout=30)))
+        base_job = {"status": "queued", "pid": sleeper.pid, "pid_start": flashq.proc_start(sleeper.pid), "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}
+        for n, extra in enumerate([{"kind": "investigate"}, {"kind": "verify"}, {"kind": "qa"}, {"kind": "doc"}, {}]):
+            jid = f"20990101_00000{n}_1"
+            (self.home / "jobs" / f"{jid}.json").write_text(json.dumps({**base_job, "id": jid, "created": f"2099-01-01 00:00:0{n}", **extra}), encoding="utf-8")
+        (self.home / "jobs" / "20200101_000000_1.json").write_text(json.dumps(
+            {"id": "20200101_000000_1", "status": "ok", "kind": "verify", "variant": "max", "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01",
+             "created": "2020-01-01 00:00:00", "started": "2020-01-01 00:00:00", "finished": "2020-01-01 00:01:00"}), encoding="utf-8")
+        base = self.start_ui()
+        st = json.loads(self.http(base + "/api/state")[1])
+        got = {j["kind"] or "work": j["variant"] for j in st["queued"]}
+        self.assertEqual(got, {"investigate": "high", "verify": "low", "qa": "high", "doc": "medium", "work": ""})
+        self.assertEqual([j["variant"] for j in st["history"]], ["max"])  # งานที่จบ = ค่าที่บันทึกไว้ ไม่คำนวณใหม่
+        html = self.http(base + "/")[1]
+        for needle in ("thinkText", "thinkShort", "thinkChip", "ความคิด"):
+            self.assertIn(needle, html)
+
     def test_opencode_npm_shim_resolves_to_real_exe(self):
         """opencode.CMD (ตัวห่อ npm) → เรียก opencode.exe ใต้ node_modules ตรง ๆ ไม่ผ่าน cmd.exe · ไม่มี exe ให้ชี้ = คืนตัวห่อเดิม"""
         import importlib.util
