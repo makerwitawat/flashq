@@ -50,7 +50,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -67,7 +67,7 @@ QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รอ
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
-START_LIMIT_SEC = 180
+START_LIMIT_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 180)  # รอ sessionID ใน log นานสุดกี่วิ ก่อนนับเป็น NOSTART (เทสต์ตั้งสั้นได้)
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
@@ -1250,6 +1250,67 @@ def wait_session(p: subprocess.Popen, log: Path) -> str | None:
     return None
 
 
+OC_LOG = Path(os.environ.get("FLASHQ_OPENCODE_LOG") or (Path.home() / ".local" / "share" / "opencode" / "log" / "opencode.log"))
+OC_DB_WARN_GB = 5  # ฐานข้อมูล opencode ใหญ่กว่านี้ = เสี่ยงสร้าง session ช้า/ค้าง (เจอจริง 2026-10-22: 11 GB · NOSTART 4 จาก ~73 งาน)
+OC_LOG_TAIL_BYTES = 8 << 20
+# ขั้นตอนเริ่มระบบของ opencode (เรียงตามลำดับใน log) → ข้อความบอกว่าค้างหลังขั้นไหน
+OC_STAGES = (("loop ", "เริ่มระบบจบและเข้ารอบสนทนาแล้ว — ไม่ได้ค้างตอนเริ่ม (log งานขึ้นช้าเพราะโมเดล/ผู้ให้บริการตอบช้า?)"),
+             ("created id=", "สร้าง session แล้วแต่ยังไม่เข้ารอบสนทนา"),
+             ("init", "ค้างหลังโหลดคอนฟิก/ปิด LSP ก่อนสร้าง session — ขั้นเขียน session ลงฐานข้อมูล opencode.db"),
+             ("loading path=", "ค้างระหว่างโหลดคอนฟิก"), ("bootstrapping", "ค้างตอนเริ่มโปรเจกต์ (bootstrapping)"), ("creating instance", "ค้างตอนสร้าง instance"))
+
+
+def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | None = None) -> str:
+    """NOSTART (log ของ `opencode run` ว่างจนหมดเวลา) → อ่านท้าย log กลางของ opencode หารอบที่เปิดโฟลเดอร์โปรเจกต์นี้หลัง `since` แล้วบอกว่าค้างหลังบรรทัดไหน
+    ไม่เจอรอบนั้นเลย = process ไม่ทันบูต · ใหญ่เกิน OC_DB_WARN_GB = เตือนเรื่องฐานข้อมูล · พังเองคืน "" (ห้ามกระทบสถานะงาน)"""
+    log, db = log or OC_LOG, db or OC_DB
+    parts = []
+    try:
+        with open(log, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - OC_LOG_TAIL_BYTES))
+            lines = f.read().decode("utf-8", errors="replace").splitlines()[1 if size > OC_LOG_TAIL_BYTES else 0:]  # ตัดบรรทัดแรกที่อาจขาดครึ่ง (เมื่ออ่านแค่ท้ายไฟล์)
+        want = os.path.normcase(os.path.normpath(str(root)))
+        runs: dict = {}
+        for ln in lines:
+            m = re.match(r'timestamp=(\S+)Z level=\w+ run=(\w+) message=(.*)', ln)
+            if not m:
+                continue
+            ts = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc).timestamp()
+            if ts < since - 5:
+                continue
+            msg = m.group(3)
+            if msg.startswith('"'):  # message="creating instance" directory=... → ตัดเครื่องหมายคำพูดรอบข้อความ
+                msg = msg[1:].replace('"', "", 1)
+            if msg.startswith("creating instance"):
+                d = re.search(r'directory="((?:[^"\\]|\\.)*)"', msg)
+                dd = d.group(1).replace("\\\\", "\\") if d else ""
+                if os.path.normcase(os.path.normpath(dd)) == want:
+                    runs[m.group(2)] = {"start": ts, "msgs": []}
+            if m.group(2) in runs and not msg.startswith(("cleanup", "duplicate skill")):  # cleanup = งานเบื้องหลังเรียกหลัง 1 นาที ไม่ใช่ขั้นเริ่มระบบ
+                runs[m.group(2)]["msgs"].append((ts, msg))
+        if not runs:
+            parts.append("log กลางของ opencode ไม่มีรอบที่เปิดโฟลเดอร์นี้เลย → process ไม่ทันบูต (เครื่องหน่วง/ติดไวรัสสแกน/ไฟล์ opencode เปิดไม่ขึ้น)")
+        else:
+            for rid, r in sorted(runs.items(), key=lambda kv: kv[1]["start"])[-2:]:
+                msgs = [x[1] for x in r["msgs"]]
+                stage = next((txt for key, txt in OC_STAGES if any(x.startswith(key) for x in msgs)), "")
+                lastts, last = r["msgs"][-1]
+                parts.append(f"รอบ run={rid}: บรรทัดสุดท้าย `{last[:90]}` ({lastts - r['start']:.0f} วิหลังเริ่ม) → {stage or 'ไม่ทราบขั้น'}")
+    except OSError as e:
+        parts.append(f"อ่าน log opencode ไม่ได้ ({e.__class__.__name__})")
+    except Exception:
+        return ""
+    try:
+        gb = Path(db).stat().st_size / (1 << 30)
+        if gb >= OC_DB_WARN_GB:
+            parts.append(f"⚠ ฐานข้อมูล opencode ใหญ่ {gb:.0f} GB (เกณฑ์เตือน {OC_DB_WARN_GB} GB) — การสร้าง session ต้องเขียนลงไฟล์นี้ อาจค้างเมื่อมีโปรเซสอื่นถือไว้/ดิสก์ช้า · แนะนำล้าง session เก่า/หมุนไฟล์ (สำรองก่อน) แล้วลองใหม่")
+    except OSError:
+        pass
+    return " · ".join(parts)
+
+
 def open_in_desktop(sid: str, server: str) -> None:
     node = shutil.which("node")
     if not node:
@@ -1469,6 +1530,11 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             kill_tree(p.pid)
             p.wait()
             rc, status = -1, "NOSTART"
+            nostart = nostart_diag(root, t0)
+            if nostart:
+                job.setdefault("nostart_diag", []).append(nostart)
+                save_job(job)
+                print(f"NOSTART รอบ {attempt}: {nostart}", flush=True)
         else:
             if sid:
                 job["session"] = sid
@@ -2169,7 +2235,7 @@ def cmd_run(a) -> int:
                     print("  ✗", b, flush=True)
     finally:
         job.update(status=res["status"].lower(), result=res.get("status"), rc=res.get("rc"),
-                   finished=now(), last=(res.get("last") or "")[-1500:])
+                   finished=now(), last=(res.get("last") or (f"NOSTART: {job['nostart_diag'][-1]}" if res.get("status") == "NOSTART" and job.get("nostart_diag") else ""))[-1500:])
         save_job(job)
         release(job)
         notify_job(job, res["status"], res.get("mins") or 0.0)
@@ -2179,6 +2245,8 @@ def cmd_run(a) -> int:
     print(f"desktop: โปรเจกต์ {root.name} > session '{title}'")
     if res.get("no_progress"):
         print("WARN: สถานะ OK แต่ไม่มี commit ใหม่และ worker ไม่รายงาน DONE → น่าจะหยุดถามหรือยังไม่ได้ทำงาน · อ่านสรุปท้ายแล้วตอบ/สั่งซ้ำ อย่าเชื่อ OK")
+    if res["status"] == "NOSTART" and job.get("nostart_diag"):
+        print(f"REASON: opencode ไม่เริ่มทำงานภายใน {START_LIMIT_SEC} วิ ทั้ง {len(job['nostart_diag'])} รอบ · รอบสุดท้าย: {job['nostart_diag'][-1]}")
     if res["status"] == "TIMEOUT":
         print(f"REASON: {job.get('timeout_reason', '')}")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))

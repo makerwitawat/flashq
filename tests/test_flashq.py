@@ -1414,6 +1414,68 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
         self.assertIn("ขั้นต่ำ 0.05", r.stdout)
 
+    def oc_log_lines(self, root, run, upto, ts=None, other_dir=False):
+        """บรรทัด log กลางของ opencode (เวลา UTC · path ทับ backslash เหมือนของจริง) ของ 1 รอบ: เดินตามลำดับจริงจนถึงขั้น upto"""
+        t = ts or time.time()
+        d = str(self.tmp / "other" if other_dir else root).replace("\\", "\\\\")
+        steps = [("creating instance", f'"creating instance" directory="{d}"'), ("bootstrapping", "bootstrapping"), ("loading", 'loading path="x.json"'),
+                 ("all LSPs are disabled", '"all LSPs are disabled"'), ("init", "init"), ("created", "created id=ses_x"), ("loop", "loop step=0")]
+        out = []
+        for i, (key, msg) in enumerate(steps):
+            out.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(t + i))}.000Z level=INFO run={run} message={msg}")
+            if key == upto:
+                break
+        return out
+
+    def test_nostart_diag_names_stage_and_warns_big_db(self):
+        """NOSTART: อ่านท้าย log กลางของ opencode บอกว่ารอบของโปรเจกต์นี้ค้างหลังขั้นไหน (ข้าม cleanup เบื้องหลัง · ไม่ปนรอบของโฟลเดอร์อื่น) + เตือนฐานข้อมูลใหญ่"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("flashq_nostart", FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        log, db = self.tmp / "opencode.log", self.tmp / "opencode.db"
+        now_ts = time.time()
+        # รอบ a = โปรเจกต์นี้ ค้างหลัง init (cleanup เบื้องหลังตามมาเองหลัง 1 นาที) · รอบ b = โฟลเดอร์อื่นที่ไปถึง loop · รอบ c = โปรเจกต์นี้แต่เก่ากว่า since
+        lines = self.oc_log_lines(self.proj, "aaaa1111", "init", now_ts - 1)
+        lines.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now_ts + 60))}.000Z level=INFO run=aaaa1111 message=cleanup prune=7.days")
+        lines += self.oc_log_lines(self.proj, "bbbb2222", "loop", now_ts, other_dir=True)
+        lines += self.oc_log_lines(self.proj, "cccc3333", "loop", now_ts - 3600)
+        log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        db.write_bytes(b"x" * 200)
+        mod.OC_DB_WARN_GB = 100 / (1 << 30)  # ตั้งเกณฑ์ให้ไฟล์เล็กในเทสต์ถือว่า "ใหญ่"
+        d = mod.nostart_diag(self.proj, now_ts, log, db)
+        self.assertIn("run=aaaa1111", d)
+        self.assertIn("`init`", d)
+        self.assertIn("opencode.db", d)
+        self.assertNotIn("cleanup", d)  # บรรทัดสุดท้ายต้องเป็น init ไม่ใช่ cleanup เบื้องหลัง
+        self.assertNotIn("bbbb2222", d)
+        self.assertNotIn("cccc3333", d)
+        self.assertIn("ฐานข้อมูล opencode ใหญ่", d)
+        mod.OC_DB_WARN_GB = 5
+        self.assertNotIn("ใหญ่", mod.nostart_diag(self.proj, now_ts, log, db))
+        # ไม่มีรอบของโปรเจกต์นี้เลย → process ไม่ทันบูต · log หาย/ไฟล์ db หาย = ไม่พัง
+        self.assertIn("ไม่ทันบูต", mod.nostart_diag(self.tmp / "ไม่มีโปรเจกต์นี้", now_ts, log, self.tmp / "no.db"))
+        self.assertIn("อ่าน log opencode ไม่ได้", mod.nostart_diag(self.proj, now_ts, self.tmp / "no.log", self.tmp / "no.db"))
+
+    def test_nostart_run_prints_reason_and_records_it(self):
+        """opencode ไม่ขึ้น sessionID (ปลอมให้นอนเฉย ๆ) → ลองใหม่ 1 ครั้ง · แต่ละรอบพิมพ์ "NOSTART รอบ n: ..." · ท้ายผลมี REASON · ใส่ในงาน (nostart_diag + last)"""
+        log = self.tmp / "opencode.log"
+        log.write_text("\n".join(self.oc_log_lines(self.proj.resolve(), "dddd4444", "init", time.time())) + "\n", encoding="utf-8")
+        t0 = time.time()
+        r = self.run_q("investigate", "--no-open", "ไม่เริ่ม", env={"FAKE_MODE": "nostart", "FLASHQ_START_LIMIT_SEC": "3", "FLASHQ_OPENCODE_LOG": str(log)})
+        out = r.stdout + r.stderr
+        self.assertLess(time.time() - t0, 60)
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("FLASH_RUN=NOSTART", out)
+        self.assertIn("NOSTART → ลองใหม่อัตโนมัติ", out)
+        self.assertIn("NOSTART รอบ 1:", out)
+        self.assertIn("NOSTART รอบ 2:", out)
+        self.assertIn("REASON: opencode ไม่เริ่มทำงานภายใน 3 วิ ทั้ง 2 รอบ", out)
+        self.assertIn("run=dddd4444", out)
+        job = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertEqual(len(job["nostart_diag"]), 2)
+        self.assertTrue(job["last"].startswith("NOSTART: "))
+
     def test_server_activity_sees_child_session_and_running_tool(self):
         """ถามเซิร์ฟเวอร์: session ลูกขยับเมื่อไร + tool ไหนกำลังรัน (ใช้บอกสาเหตุค้าง และกันฆ่างานที่ subagent ยังทำอยู่)"""
         import http.server

@@ -71,6 +71,8 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | `FLASHQ_HOME` | ที่เก็บข้อมูล (ค่าเริ่มต้น `~/.flashq`) — เทสต์และ server ทดสอบใช้ตัวนี้ |
 | `FLASHQ_OPENCODE` | คำสั่ง opencode (เทสต์ใช้ opencode ปลอม) |
 | `FLASHQ_OPENCODE_CONFIG` | path `opencode.json` |
+| `FLASHQ_OPENCODE_LOG` | path log กลางของ opencode ที่ใช้วินิจฉัย NOSTART (ค่าเริ่มต้น `~/.local/share/opencode/log/opencode.log`) |
+| `FLASHQ_START_LIMIT_SEC` | รอ sessionID ใน log นานสุดกี่วิก่อนนับเป็น NOSTART (ค่าเริ่มต้น 180 · เทสต์ตั้งสั้น) |
 | `FLASHQ_LIVE_URL` | URL ของ `opencode serve` (ค่าเริ่มต้น `http://127.0.0.1:4096`) |
 | `FLASHQ_CLAUDE_HOME` | ที่ของ `~/.claude` ที่ `install` ติดตั้งคำสั่ง/agent/hook ลงไป (transcript ของ Claude Code อ่านจาก `~/.claude/projects` เสมอ) |
 | `FLASHQ_SHELL_POLL_SEC` | ความถี่ของตัวเฝ้า shell (วินาที) |

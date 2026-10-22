@@ -196,6 +196,8 @@ python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
 
 ผลลัพธ์: บรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|BUSY|QUEUE_TIMEOUT` + `job=<id>` · exit 0 = OK · 2 = BUSY · 3 = รอคิวเกินเวลา · อื่น ๆ = 1
 
+`NOSTART` = opencode ไม่ขึ้น sessionID ใน log ภายใน 180 วิ (ลองใหม่เอง 1 ครั้ง · `--retry-nostart`) — flashq อ่านท้าย log กลางของ opencode (`~/.local/share/opencode/log/opencode.log`) หารอบที่เปิดโฟลเดอร์โปรเจกต์นี้ แล้วพิมพ์ `NOSTART รอบ n: …` ว่าค้างหลังบรรทัดไหน (เช่น `init` ก่อนสร้าง session = ขั้นเขียนฐานข้อมูล) และ `REASON:` ท้ายผล · ฐานข้อมูล `opencode.db` ใหญ่ ≥ 5 GB เตือนเพิ่ม · เก็บใน job (`nostart_diag`, `last`) · ไม่เจอรอบเลย = process ไม่ทันบูต
+
 ## `.flash.json` (ทุกช่องไม่บังคับ · `main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git · `flashq init` สร้างให้)
 ```json
 {
