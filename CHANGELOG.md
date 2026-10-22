@@ -7,6 +7,7 @@
 - **แจ้งผลงานจบกลับ Claude เอง**: งานจบทุกสถานะ → inbox (`~/.flashq/inbox/`) + toast Windows · hook `inbox_notify.py` (`UserPromptSubmit` · `install --hooks`) แทรกผลพร้อมคำแนะนำ (OK → `/flash-check` · ไม่ OK → `flashq log`) ให้ session ที่สั่งหรือโปรเจกต์เดียวกันตอนผู้ใช้พิมพ์ข้อความถัดไป · งานบันทึก `claude_session` · ปิดด้วย `notify: false` · ไม่เรียกโมเดล ไม่เสีย token ระหว่างรอ
 - **ปุ่ม "เปิด Claude ตรวจ" บนการ์ดงานที่จบแล้ว** (ประวัติ + ป้ายงานตาย): กดแล้วเปิด session Claude ใหม่ที่โฟลเดอร์โปรเจกต์ พิมพ์ข้อความรอไว้ (OK = `/flash-check <แผน>` · ล้ม/ตาย = ให้ดู `flashq log` หาสาเหตุแล้วรายงานก่อนสั่งซ้ำ) แล้วกด Enter เอง · ใช้แอป Claude desktop (`claude://code/new`) ไม่มีแอป = หน้าต่าง claude CLI · เปิดไม่ได้ = คัดลอกข้อความให้ · กดซ้ำใน 60 วิ = ปฏิเสธ · `POST /api/claude_check` (ผ่านตรวจ Host/token)
 - **งาน DEAD (process ตายกลางคัน) แจ้งด้วย**: `flashq sweep` ลง inbox/toast ครั้งเดียวต่องาน (ธง `dead_notified`) · hook `inbox_notify` เรียกให้เองก่อนอ่าน inbox · เทสต์รันเลยไม่นิ่ง (`test_ui_run_now_extra_slot`) ยืดเวลางานแรกกันเครื่องโหลด
+- **เตือน "OK แต่ไม่ได้ทำงาน"**: งานแผนที่ exit 0 แต่ไม่มี commit ใหม่และ worker ไม่รายงาน `DONE` (เช่นหยุดถามผู้ใช้เพราะ repo ไม่มี remote — เจอจริงตอนทดลอง) → บรรทัด `WARN:` ท้ายผลรัน · สถานะยังเป็น OK แต่ต้องอ่านสรุปท้ายก่อนเชื่อ · ไม่เตือนงานอ่านอย่างเดียว/ข้อความตรง
 
 ## 2026-10-21
 - **ระดับความคิดตามชนิดงาน** (`variants`): ผู้สืบ `high` · ผู้ตรวจ `low` · งานทำไม่ส่ง · ทับรายชนิดได้ใน `.flash.json` / `config.json` · `--variant` ใน CLI ชนะทุกอย่าง · บันทึก `variant` ลงงาน

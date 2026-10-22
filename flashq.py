@@ -1480,7 +1480,9 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     # worker รายงานโควตาเองด้วยบรรทัด "FAIL: quota" (flash.md)
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
         status = "QUOTA"
-    return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools,
+    no_progress = status == "OK" and job.get("plan") and not job.get("readonly") and job.get("kind") not in ("verify", "investigate") \
+        and not job_progressed(root, head0, texts + task_out)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
+    return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
             "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
             "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
 
@@ -2063,6 +2065,8 @@ def cmd_run(a) -> int:
     print(f"FLASH_RUN={res['status']} exit={res['rc']} เวลา={res['mins']:.1f} นาที tool={res['tools']} "
           f"session={res['session']} job={jid}")
     print(f"desktop: โปรเจกต์ {root.name} > session '{title}'")
+    if res.get("no_progress"):
+        print("WARN: สถานะ OK แต่ไม่มี commit ใหม่และ worker ไม่รายงาน DONE → น่าจะหยุดถามหรือยังไม่ได้ทำงาน · อ่านสรุปท้ายแล้วตอบ/สั่งซ้ำ อย่าเชื่อ OK")
     if res["status"] == "TIMEOUT":
         print(f"REASON: {job.get('timeout_reason', '')}")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))

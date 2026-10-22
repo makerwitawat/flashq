@@ -62,6 +62,15 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--command") + 1:], ["flash", "--", "PLAN.md", "T-01"])
         self.assertFalse((self.home / "running.lock").exists())
 
+    def test_ok_without_commit_or_done_warns(self):
+        """exit 0 แต่ไม่มี commit ใหม่/DONE (worker หยุดถามผู้ใช้) = ยัง OK แต่ต้องเตือน · ส่งข้อความตรง (ไม่มีแผน) ไม่เตือน"""
+        r = self.run_q(*self.base())
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertIn("WARN: สถานะ OK แต่ไม่มี commit ใหม่", r.stdout)
+        r = self.run_q("run", "--message", "PONG", "--attach", "none", "--no-open")
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertNotIn("ไม่มี commit ใหม่", r.stdout)
+
     def test_missing_plan(self):
         r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
