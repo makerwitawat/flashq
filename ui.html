@@ -670,8 +670,9 @@ function setMax(panel) {
 $("backdrop").onclick = () => setMax(null);
 
 /* ---------- render ---------- */
-function actBtns(j, { retry = true, short = true } = {}) {
+function actBtns(j, { retry = true, short = true, check = false } = {}) {
   let h = "";
+  if (check) h += `<button class="primary" data-cc="${esc(j.id)}" title="เปิด session Claude ใหม่ที่โฟลเดอร์โปรเจกต์ พร้อมข้อความตรวจผลงานนี้ (งาน OK = /flash-check · ล้ม = ดูสาเหตุ) — กด Enter ในแอปเพื่อเริ่ม">${short ? "เปิด Claude" : "เปิด Claude ตรวจ"}</button>`;
   if (j.plan) h += `<button data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอก /flash-check ${esc(j.plan)}">${short ? "คัดลอก" : "คัดลอก /flash-check"}</button>`;
   if (retry) h += `<button data-retry="${esc(j.id)}" title="ส่งงานเดิมเข้าคิวอีกครั้ง">สั่งซ้ำ</button>`;
   return h;
@@ -698,7 +699,7 @@ function render() {
       <span class="muted">· เดิม ${esc(STATUS[j.was]?.[0] || j.was)} · flashq pid ${esc(j.pid)} ไม่อยู่แล้ว · ส่งเมื่อ ${esc(j.created)}</span></div>
     ${j.child_alive ? `<div style="color:var(--fail)">opencode pid ${esc(j.child_pid)} อาจยังทำงานอยู่ — ตรวจใน opencode desktop ก่อนสั่งซ้ำ</div>` : ""}
     <div class="row" style="margin-top:0.3rem">
-      <button data-log="${esc(j.id)}">ดู log</button>${actBtns(j, { retry: false, short: false })}
+      <button data-log="${esc(j.id)}">ดู log</button>${actBtns(j, { retry: false, short: false, check: true })}
       ${j.rerun ? `<button data-copy="${esc(j.rerun)}">คัดลอกคำสั่ง CLI</button>` : ""}
       <button data-dismiss="${esc(j.id)}">รับทราบ (ย้ายไปประวัติ)</button>
     </div></div>`).join(""));
@@ -748,7 +749,7 @@ function render() {
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
       <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
-      <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j)}</td></tr>`).join("")}
+      <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
 
   $("curModel").textContent = s.current_model || "(ยังไม่ตั้ง)";
@@ -1143,7 +1144,7 @@ $("submitGo").onclick = async (e) => {
 
 /* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
+  const t = ev.target.closest("[data-copy],[data-cc],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
   const panel = t.closest(".panel");
   if (t.hasAttribute("data-collapse")) {
@@ -1153,6 +1154,12 @@ document.addEventListener("click", async (ev) => {
   }
   if (t.hasAttribute("data-max")) { setMax(panel); return; }
   if (t.dataset.copy) { ev.stopPropagation(); return copyText(t.dataset.copy); }
+  if (t.dataset.cc) {
+    ev.stopPropagation();
+    const d = await post("/api/claude_check", { id: t.dataset.cc });
+    if (d.prompt) copyText(d.prompt);  // เปิดไม่ได้ → คัดลอกข้อความตรวจให้วางเอง
+    return toast(d.message || d.error || "ผิดพลาด");
+  }
   if (t.dataset.cancel) {
     const j = (state?.queued || []).find((x) => x.id === t.dataset.cancel);
     if (!await ask({ title: "ยกเลิกงานในคิว?", detail: j ? `${j.project_name} · ${what(j)}` : t.dataset.cancel, body: "งานจะถูกเอาออกจากคิว (ยังไม่ได้เริ่มทำ)", ok: "ยกเลิกงาน", cancel: "เก็บไว้", tone: "danger" })) return;

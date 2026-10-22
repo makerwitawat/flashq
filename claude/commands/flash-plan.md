@@ -17,7 +17,7 @@ description: >-
 | "รันเทสต์ดูก่อนว่าล้มจริงไหม" | ข้อความ FAIL ที่คาดมาจากการอ่านโค้ด · Flash เป็นคนรันแดง |
 | "เขียนโค้ดเต็มลงแผนเลย Flash จะได้ไม่พลาด" | เกิน ~20 บรรทัด = สเปก (+ เทสต์ก่อน) ตาม §2 |
 | "ค้นเองอีกนิดก็เจอ" | เกินงบ ~20 นาที / ไม่รู้ว่าอยู่ไหน → ผู้สืบ Flash |
-| "รอ Flash ทำเสร็จใน session นี้ จะได้ตรวจต่อเลย" (sleep · poll · `flashq status` วน) | ส่งแล้ว**จบ session** (§4) · ตรวจใน session ใหม่/subagent ที่ถูกกว่า — session ที่รอ = จ่าย context เต็มทุกข้อความ |
+| "วน sleep · poll · `flashq status` เช็กว่า Flash เสร็จหรือยัง" | ห้ามวน — ทุกข้อความที่วน = จ่าย context เต็ม · ส่งใน background แล้ว**หยุดนิ่ง**รอแจ้งเตือนจากระบบ (§4) ได้ผลแล้วค่อย `/flash-check` |
 | "ใส่ภาคผนวกโค้ดเต็มไว้ท้ายแผน Flash จะได้คัดลอกตรงตัว" | `flashq run` ปฏิเสธ (§2) · เขียนเป็นสเปก + เทสต์ที่ต้องผ่าน |
 
 ## 0. ค่าโปรเจกต์
@@ -58,12 +58,12 @@ description: >-
 - commit เฉพาะไฟล์แผน + push เข้า `<remote>/<main_branch>` (อยู่ worktree/branch อื่น → merge แล้ว `git push <remote> HEAD:<main_branch>` · **ห้าม rebase**) — ทำตามกติกา commit ของโปรเจกต์ถ้ามี
 - **ยืนยัน**: `git fetch <remote> <main_branch>; git merge-base --is-ancestor <hash แผน> <remote>/<main_branch>` ต้อง exit 0
 
-## 4. ส่งเข้าคิวกลาง แล้ว**จบ session นี้**
+## 4. ส่งเข้าคิวกลาง แล้วรอแจ้งผลจากระบบ (ไม่วน)
 - รัน **ใน background** ที่โฟลเดอร์โปรเจกต์ (Bash `run_in_background: true`):
   `python {{FLASHQ}}/flashq.py run <path แผน> T-01..T-NN --switch-on-quota 4`
   (worktree → ใช้ checkout หลักเอง · ตรวจแผนใน remote + ขนาดแผน §2 · มีงานอื่นทั้งเครื่อง = รอคิว · โควตาหมด = สลับบัญชีแล้วสั่งซ้ำ) · ขึ้น `FLASH_RUN=FAIL แผนใหญ่เกิน` = แก้แผนตาม §2 แล้วส่งใหม่ (ห้ามหาทางเลี่ยง)
-- **ส่งแล้ว = งานของ session นี้จบ** · ห้าม sleep / poll / `flashq status` วน / รอแจ้งเตือนใน session นี้ (session วางแผนมี context ใหญ่ ทุกข้อความที่รอ = จ่ายเต็ม) · การตรวจเป็นของ session ใหม่ที่ถูกกว่า:
-  - มี `start_session` (Claude desktop) → เสนอ/เปิด session ใหม่ **fresh · model sonnet** ชื่อ `ตรวจ <ชื่อแผน>` brief ไทย: "รัน `python {{FLASHQ}}/flashq.py wait <path แผน>` ใน background ที่ <โฟลเดอร์โปรเจกต์> รอแจ้งเตือน (ห้าม sleep/poll) → ได้ `FLASH_RUN=...` แล้วทำ `/flash-check <path แผน>`"
-  - ไม่มี → บอก user: "เสร็จแล้วเปิด session ใหม่ พิมพ์ `/flash-check <path แผน>` (session นั้นจะรอเองด้วย `flashq wait`)"
-- บอก user สั้น ๆ: จำนวนงาน · งานที่รอ user ตัดสิน · "DeepSeek กำลังทำ — ดูใน opencode desktop session `flash <ชื่อแผน> <งาน>` · คิว `python {{FLASHQ}}/flashq.py`" · แล้วจบ (ไม่ต่อเรื่องใหม่ใน session นี้ · `/flash-check` §5)
-- สำรอง: ให้บรรทัด `/flash <path แผน> T-01..T-NN` ไปวางใน opencode (เปิดที่ checkout หลัก) แล้วตรวจด้วย `/flash-check <path แผน>` ใน session ใหม่
+- บอก user สั้น ๆ: จำนวนงาน · งานที่รอ user ตัดสิน · "DeepSeek กำลังทำ — ดูใน opencode desktop session `flash <ชื่อแผน> <งาน>` · คิว `python {{FLASHQ}}/flashq.py` · จบแล้วผมตรวจต่อแล้วแจ้ง"
+- **แล้ว หยุดนิ่งรอแจ้งเตือนจากระบบ** (คำสั่ง background จบ = ระบบแจ้งเข้า session นี้เอง · ไม่เสียอะไรระหว่างรอ) · **ห้าม** sleep / poll / `flashq status` วน / เปิดงานเรื่องอื่นต่อ
+- **ได้แจ้งว่าจบ (ทุกสถานะ: OK · FAIL · DENIED · QUOTA · TIMEOUT · NOSTART · BUSY) → เรียก `/flash-check <path แผน>` ทันที** พร้อมบรรทัด `FLASH_RUN=...` (ไม่ OK = `/flash-check` §0 วินิจฉัยและแจ้ง user — ห้ามเงียบ) · session เป็น Opus/Fable → `/flash-check` ส่ง subagent `flash-checker` ตรวจแทน (ถูกกว่าตรวจเอง)
+- **ถ้า session นี้ปิดไปก่อน / user พิมพ์ข้อความมาก่อนงานจบ**: `flashq` เขียนผลลง `~/.flashq/inbox/` + toast Windows ให้เอง · hook `inbox_notify.py` (ลงด้วย `install --hooks`) แทรกผลตอน user พิมพ์ข้อความถัดไป (ทุก session ในโปรเจกต์นี้) → เห็นแล้ว `/flash-check <path แผน>` ต่อ · ไม่มีใครรอแล้วงานจบเงียบ ๆ ไม่ได้
+- สำรอง: ให้บรรทัด `/flash <path แผน> T-01..T-NN` ไปวางใน opencode (เปิดที่ checkout หลัก) แล้วตรวจด้วย `/flash-check <path แผน>`

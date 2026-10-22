@@ -2,6 +2,12 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-10-22
+- **คืน flow "ส่ง → รู้ผล → ตรวจ → แจ้ง"** (ถูกตัดโดยรอบประหยัด token 20 ต.ค. ที่ให้ `/flash-plan` จบ session ทันที ทำให้ไม่มีใครรอผล): `/flash-plan` §4 ส่ง background แล้วหยุดนิ่งรอระบบแจ้ง (ไม่ poll) → `/flash-check` ทุกสถานะ (ไม่ OK = วินิจฉัยแล้วแจ้ง) · Opus/Fable ใช้ subagent `flash-checker` · session ปิดไปก่อน = inbox/toast/hook รับช่วง
+- **แจ้งผลงานจบกลับ Claude เอง**: งานจบทุกสถานะ → inbox (`~/.flashq/inbox/`) + toast Windows · hook `inbox_notify.py` (`UserPromptSubmit` · `install --hooks`) แทรกผลพร้อมคำแนะนำ (OK → `/flash-check` · ไม่ OK → `flashq log`) ให้ session ที่สั่งหรือโปรเจกต์เดียวกันตอนผู้ใช้พิมพ์ข้อความถัดไป · งานบันทึก `claude_session` · ปิดด้วย `notify: false` · ไม่เรียกโมเดล ไม่เสีย token ระหว่างรอ
+- **ปุ่ม "เปิด Claude ตรวจ" บนการ์ดงานที่จบแล้ว** (ประวัติ + ป้ายงานตาย): กดแล้วเปิด session Claude ใหม่ที่โฟลเดอร์โปรเจกต์ พิมพ์ข้อความรอไว้ (OK = `/flash-check <แผน>` · ล้ม/ตาย = ให้ดู `flashq log` หาสาเหตุแล้วรายงานก่อนสั่งซ้ำ) แล้วกด Enter เอง · ใช้แอป Claude desktop (`claude://code/new`) ไม่มีแอป = หน้าต่าง claude CLI · เปิดไม่ได้ = คัดลอกข้อความให้ · กดซ้ำใน 60 วิ = ปฏิเสธ · `POST /api/claude_check` (ผ่านตรวจ Host/token)
+- **งาน DEAD (process ตายกลางคัน) แจ้งด้วย**: `flashq sweep` ลง inbox/toast ครั้งเดียวต่องาน (ธง `dead_notified`) · hook `inbox_notify` เรียกให้เองก่อนอ่าน inbox · เทสต์รันเลยไม่นิ่ง (`test_ui_run_now_extra_slot`) ยืดเวลางานแรกกันเครื่องโหลด
+
 ## 2026-10-21
 - **ระดับความคิดตามชนิดงาน** (`variants`): ผู้สืบ `high` · ผู้ตรวจ `low` · งานทำไม่ส่ง · ทับรายชนิดได้ใน `.flash.json` / `config.json` · `--variant` ใน CLI ชนะทุกอย่าง · บันทึก `variant` ลงงาน
 - **สถานะ `DENIED`**: opencode (โหมดไม่โต้ตอบ) ปฏิเสธสิทธิ์เอง เช่น อ่านไฟล์นอกโปรเจกต์ที่ `permission.external_directory` เป็น `ask` → เดิมบันทึกเป็น OK เพราะ exit 0 · ตอนนี้ตรวจ stderr `auto-rejecting` + tool error "ปฏิเสธสิทธิ์" → `FLASH_RUN=DENIED` + บรรทัด `DENIED:` บอก path + ทางแก้ 2 ทาง (`external_dirs` ใน `.flash.json` / `opencode.json`) · มี commit/`DONE` = คง OK แต่ `WARN:` · `wait` คืน 1 · หน้าเว็บป้าย DENIED + 🚫 path + ทางแก้ในกล่อง log · `.flash.json` ช่อง `external_dirs` → flashq ส่งสิทธิ์ผ่าน `OPENCODE_CONFIG_CONTENT` (ไม่แตะไฟล์ผู้ใช้) + ตรวจก่อนรันว่า `opencode.json`/server สดอนุญาตแล้วหรือยัง (`PERM:`/`WARN:`) + เตือน `opencode.json` อ่านไม่ได้ · บรรทัดคำสั่งที่กฎ agent บล็อกเปลี่ยนชื่อเป็น `RULE_DENIED:`

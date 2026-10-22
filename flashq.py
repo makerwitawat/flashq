@@ -53,6 +53,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
+INBOX = HOME / "inbox"  # ผลงานจบรอส่งถึง Claude (hook inbox_notify.py อ่านตอนผู้ใช้พิมพ์ข้อความถัดไป)
 REVIEWS = HOME / "reviews"   # ป้าย "Claude กำลังตรวจ" ที่ /flash-check ตั้ง (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — ไม่ใช่งานในคิว
 REVIEW_TTL_MIN = 90          # ป้ายที่ค้างเกินนี้ถือว่าถูกทิ้ง (session ตาย/ลืม done)
 CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
@@ -1929,13 +1930,15 @@ def cmd_run(a) -> int:
     job = {"id": jid, "project": str(root), "plan": plan, "tasks": a.tasks or "", "message": a.message or "",
            "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind in AGENT_KINDS),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
-           "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION}
+           "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION,
+           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", "")}
     save_job(job)
 
     got = acquire(job, a.wait_min, a.no_wait)
     if got != "ok":
         job.update(status="busy" if got == "busy" else "queue_timeout", finished=now())
         save_job(job)
+        notify_job(job, job["status"].upper())
         return 2 if got == "busy" else 3
 
     res = {"status": "FAIL", "rc": -1}
@@ -2055,6 +2058,7 @@ def cmd_run(a) -> int:
                    finished=now(), last=(res.get("last") or "")[-1500:])
         save_job(job)
         release(job)
+        notify_job(job, res["status"], res.get("mins") or 0.0)
 
     print(f"FLASH_RUN={res['status']} exit={res['rc']} เวลา={res['mins']:.1f} นาที tool={res['tools']} "
           f"session={res['session']} job={jid}")
@@ -2079,6 +2083,53 @@ def cmd_run(a) -> int:
 
 def kind_tag(j: dict) -> str:
     return {"verify": "[ตรวจ] ", "investigate": "[สืบ] "}.get(j.get("kind"), "")
+
+
+def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
+    """งานจบ (ทุกสถานะ) → ใส่ inbox ให้ hook inbox_notify.py แทรกเข้า session Claude ตอนผู้ใช้พิมพ์ข้อความถัดไป + toast Windows
+    ไม่เรียกโมเดลเลย (ไม่เสีย token ระหว่างรอ) · พังเองไม่กระทบงาน · ปิดทั้งหมด: config.json {"notify": false} · ปิดเฉพาะ toast: {"notify_toast": false}"""
+    try:
+        cfg = read_config()
+        if cfg.get("notify") is False:
+            return
+        INBOX.mkdir(parents=True, exist_ok=True)
+        label = f"{kind_tag(job)}{job.get('plan') or '--message'} {job.get('tasks', '')}".strip()
+        row = {"job": job["id"], "project": job.get("project", ""), "session": job.get("claude_session", ""),
+               "kind": job.get("kind", ""), "plan": job.get("plan", ""), "tasks": job.get("tasks", ""), "status": status,
+               "mins": round(mins, 1), "last": (job.get("last") or "")[-600:], "at": time.time()}
+        write_json(INBOX / f"{time.strftime('%Y%m%d-%H%M%S')}-{job['id']}.json", row)
+        if os.name == "nt" and cfg.get("notify_toast", True) is not False and not os.environ.get("FLASHQ_NO_TOAST"):
+            ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
+                  "$n=New-Object System.Windows.Forms.NotifyIcon;$n.Icon=[System.Drawing.SystemIcons]::Information;$n.Visible=$true;"
+                  "$n.ShowBalloonTip(8000,$env:FQ_T,$env:FQ_B,'Info');Start-Sleep 9;$n.Dispose()")
+            subprocess.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                             env={**os.environ, "FQ_T": f"flashq: {status} ({job.get('id')})", "FQ_B": f"{Path(job.get('project', '')).name} · {label}"[:200]},
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    except Exception:
+        pass
+
+
+def sweep_dead() -> int:
+    """งานที่ process หลักตายกลางคัน (เครื่อง/terminal ปิด) ไม่มีใครเขียน inbox ให้ → ตรวจแล้วแจ้งแทน (ครั้งเดียวต่องาน · ติดธง dead_notified)
+    เรียกจาก hook inbox_notify.py ก่อนอ่าน inbox · คืนจำนวนงานที่แจ้ง"""
+    n = 0
+    for j in jobs():
+        if live_state(j) != "dead" or j.get("dead_notified"):
+            continue
+        try:
+            j["dead_notified"] = True
+            save_job(j)
+            j["last"] = "process ของงานหายไปก่อนจบ (เครื่อง/terminal ปิด?) — " + (j.get("last") or "")
+            notify_job(j, "DEAD")
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def cmd_sweep(a) -> int:
+    print(f"แจ้งงานที่ process ตายแล้ว {sweep_dead()} งาน")
+    return 0
 
 
 def wait_targets(target: str) -> list[dict]:
@@ -2508,6 +2559,12 @@ def cmd_install(a) -> int:
             print(register_hook(claude_home / "settings.json", "PreToolUse", "Read", f'python "{guard.as_posix()}"', "image_guard.py"))
         else:
             print(f"ข้าม       ไม่พบ {guard} → ลงทะเบียน hook ไม่ได้")
+            rc = 1
+        inbox_hook = claude_home / "hooks" / "inbox_notify.py"
+        if inbox_hook.exists():
+            print(register_hook(claude_home / "settings.json", "UserPromptSubmit", "", f'python "{inbox_hook.as_posix()}"', "inbox_notify.py"))
+        else:
+            print(f"ข้าม       ไม่พบ {inbox_hook} → ลงทะเบียน hook ไม่ได้")
             rc = 1
     elif guard.exists():
         st = claude_home / "settings.json"
@@ -3260,6 +3317,12 @@ def make_ui_server(port: int = 4097):
                     open_in_desktop(j["session"], j.get("attach", LIVE_URL))
                 out = buf.getvalue().strip() or "ไม่พบ node — เปิดไม่ได้"
                 return self._send(200, {"ok": "=OK" in out, "message": out})
+            if path == "/api/claude_check":  # ปุ่ม "เปิด Claude ตรวจ" บนการ์ดงานที่จบแล้ว
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                code, d = claude_check_action(j, bool(body.get("cli")))
+                return self._send(code, d)
             if path == "/api/goal":  # ปุ่มบนการ์ดเป้าหมาย
                 code, d = goal_ui_action(str(body.get("id") or ""), str(body.get("action") or ""), body)
                 return self._send(code, d)
@@ -4202,6 +4265,50 @@ def open_link(url: str) -> None:
         subprocess.Popen(["open", url])
 
 
+def claude_check_prompt(j: dict) -> str:
+    """ข้อความตั้งต้นของ session Claude ใหม่ที่เปิดจากปุ่มบนการ์ดงานที่จบแล้ว
+    OK + มีแผน = /flash-check · ผลสืบ = ตรวจเลขอ้างอิงก่อนเชื่อ · ไม่ OK/ตาย = ดู log หาสาเหตุแล้วรายงาน (ยังไม่สั่งซ้ำเอง)"""
+    st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()
+    plan, jid = j.get("plan") or "", j["id"]
+    if st == "ok" and j.get("kind") == "investigate":
+        return f"ผู้สืบ flashq job {jid} จบแล้ว: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` แล้วตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ จากนั้นสรุปให้ผม"
+    if st == "ok" and plan:
+        return f"/flash-check {plan}"
+    if st == "ok":
+        return f"งาน flashq job {jid} จบแล้ว: อ่าน git diff/log ของโปรเจกต์แล้วตรวจผลก่อนรายงานผม"
+    return (f"งาน flashq job {jid} จบด้วยสถานะ {st.upper()}: ดูสาเหตุด้วย `python {REPO / 'flashq.py'} log {jid}` "
+            f"แล้วบอกผมเป็นภาษาไทยว่าเกิดอะไร และแนะนำทางแก้ (ยังไม่ต้องสั่งงานซ้ำจนกว่าผมจะตอบ)")
+
+
+def claude_check_action(j: dict, cli: bool = False) -> tuple[int, dict]:
+    """ปุ่ม "เปิด Claude ตรวจ" บนการ์ดงาน: แอป Claude desktop = session ใหม่พิมพ์ข้อความรอไว้ (กด Enter เอง) · ไม่มีแอป/cli = หน้าต่าง claude CLI
+    รับเฉพาะงานที่จบแล้ว (หรือ process ตาย) · โฟลเดอร์มาจากงานในคิวเท่านั้น ไม่รับ path จากหน้าเว็บ · กดซ้ำภายใน 60 วิ = ปฏิเสธ (กัน session งอกซ้ำ)"""
+    if live_state(j) in ("queued", "running"):
+        return 409, {"ok": False, "message": "งานยังไม่จบ — รอจบก่อน"}
+    cwd = Path(j.get("project") or "")
+    if not cwd.is_dir():
+        return 404, {"ok": False, "message": f"ไม่พบโฟลเดอร์โปรเจกต์ {cwd}"}
+    try:
+        if time.time() - float(j.get("claude_opened") or 0) < 60:
+            return 409, {"ok": False, "message": "เพิ่งเปิด session ตรวจงานนี้ไปเมื่อสักครู่ — ดูในแอป Claude"}
+    except (TypeError, ValueError):
+        pass
+    prompt = claude_check_prompt(j)
+    url = "" if cli else claude_app_link("new", {"q": prompt, "folder": str(cwd)})
+    if url:
+        open_link(url)
+        msg = f"เปิด session ใหม่ในแอป Claude (แท็บ Code) ที่ {cwd} พิมพ์ข้อความตรวจรอไว้แล้ว — กด Enter ในแอปเพื่อเริ่ม"
+    else:
+        exe = claude_exe()
+        if not exe:
+            return 404, {"ok": False, "message": "ไม่พบแอป Claude หรือ claude CLI → ใช้ปุ่มคัดลอกคำสั่งแทน", "prompt": prompt}
+        subprocess.Popen([exe, prompt], cwd=str(cwd), creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        msg = f"เปิดหน้าต่าง Claude Code ที่ {cwd} พร้อมข้อความตรวจแล้ว — ดูและอนุญาตคำสั่งในหน้าต่างนั้น"
+    j["claude_opened"] = time.time()
+    save_job(j)
+    return 200, {"ok": True, "message": msg}
+
+
 def _goal_sub(argv: list[str], root: Path) -> tuple[int, dict]:
     r = run_timeout(argv, GOAL_UI_CMD_TIMEOUT_SEC, cwd=str(root))
     if r.returncode == 124:
@@ -4678,6 +4785,8 @@ def main() -> int:
     wt.add_argument("--timeout-min", type=float, default=480, help="รอได้นานสุด (นาที) · เกิน = FLASH_WAIT=TIMEOUT exit 3")
     wt.add_argument("--poll", type=float, default=15, help="เช็กทุกกี่วินาที")
     wt.set_defaults(fn=cmd_wait)
+    sw = sp.add_parser("sweep", help="แจ้ง (inbox/toast) งานที่ process ตายกลางคัน — hook inbox_notify เรียกให้เอง")
+    sw.set_defaults(fn=cmd_sweep)
     sh = sp.add_parser("shrink", help="ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (ประหยัด context)")
     sh.add_argument("images", nargs="+")
     sh.add_argument("--max", type=int, default=800, help="ด้านยาวสุด (px)")

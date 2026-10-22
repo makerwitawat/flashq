@@ -34,7 +34,8 @@ class FlashqTest(unittest.TestCase):
         self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
         self.args_out = self.tmp / "args.jsonl"
         self.env = {**os.environ, "FLASHQ_HOME": str(self.home), "FLASHQ_OPENCODE": str(FAKE),
-                    "FLASHQ_OPENCODE_CONFIG": str(self.oc_cfg), "FAKE_ARGS_OUT": str(self.args_out)}
+                    "FLASHQ_OPENCODE_CONFIG": str(self.oc_cfg), "FAKE_ARGS_OUT": str(self.args_out),
+                    "FLASHQ_NO_TOAST": "1"}
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -389,6 +390,93 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("install", "--hooks", env=env)
         self.assertIn("เหมือนเดิม  hook", r.stdout)
         self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 1)
+        ups = json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["UserPromptSubmit"]
+        self.assertEqual(len(ups), 1)
+        self.assertIn("inbox_notify.py", ups[0]["hooks"][0]["command"])
+
+    def test_notify_inbox_and_hook(self):
+        """งานจบ → inbox · hook UserPromptSubmit แทรกผลให้ session ที่สั่ง (หรือโปรเจกต์เดียวกัน) ครั้งเดียวแล้วย้ายเข้า done · session อื่นไม่ได้ · notify=false = เงียบ"""
+        hook = REPO / "hooks" / "inbox_notify.py"
+
+        def run_hook(session, cwd):
+            return subprocess.run([sys.executable, str(hook)], input=json.dumps({"session_id": session, "cwd": str(cwd)}),
+                                  capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=30)
+        self.assertEqual(run_hook("s1", self.proj).stdout, "")  # ไม่มี inbox = เงียบ
+        r = self.run_q(*self.base(), env={"CLAUDE_CODE_SESSION_ID": "s1"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        files = list((self.home / "inbox").glob("*.json"))
+        self.assertEqual(len(files), 1)
+        row = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual((row["status"], row["session"], row["plan"]), ("OK", "s1", "PLAN.md"))
+        self.assertEqual(run_hook("s2", self.proj.parent).stdout, "")  # session อื่น คนละโฟลเดอร์ = ไม่ได้
+        self.assertEqual(run_hook("s2", self.proj).stdout, "")  # session อื่นในโปรเจกต์เดียวกัน แต่ยังไม่ค้างเกิน 30 นาที = ไม่ได้
+        out = run_hook("s1", self.proj).stdout
+        self.assertIn(row["job"], out)
+        self.assertIn("/flash-check PLAN.md", out)
+        self.assertFalse(list((self.home / "inbox").glob("*.json")))
+        self.assertTrue(list((self.home / "inbox" / "done").glob("*.json")))
+        self.assertEqual(run_hook("s1", self.proj).stdout, "")  # ส่งครั้งเดียว
+        # session เดิมหายไปนาน → session อื่นในโปรเจกต์เดียวกันรับแทนได้
+        row.update(at=row["at"] - 7200)
+        (self.home / "inbox" / "old.json").write_text(json.dumps(row), encoding="utf-8")
+        self.assertIn(row["job"], run_hook("s9", self.proj).stdout)
+        # งานล้ม → คำแนะนำเป็นการดูสาเหตุ ไม่ใช่ /flash-check
+        row.update(status="DENIED", at=time.time(), last="ถูกปฏิเสธ")
+        (self.home / "inbox" / "d.json").write_text(json.dumps(row), encoding="utf-8")
+        out = run_hook("s1", self.proj).stdout
+        self.assertIn("DENIED", out)
+        self.assertNotIn("/flash-check", out)
+        # ปิดด้วย config
+        (self.home / "config.json").write_text(json.dumps({"notify": False}), encoding="utf-8")
+        (self.home / "inbox" / "e.json").write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(run_hook("s1", self.proj).stdout, "")
+        for f in (self.home / "inbox").glob("*.json"):
+            f.unlink()
+        self.run_q(*self.base(), env={"CLAUDE_CODE_SESSION_ID": "s1"})
+        self.assertFalse(list((self.home / "inbox").glob("*.json")))  # notify=false → flashq ไม่เขียน inbox
+
+    def test_sweep_dead_job_notifies_once(self):
+        """process ของงานตายกลางคัน (ไม่มีใครเขียน inbox) → flashq sweep แจ้ง DEAD ครั้งเดียวต่องาน"""
+        (self.home / "jobs").mkdir(parents=True, exist_ok=True)
+        job = {"id": "deadjob1", "status": "running", "pid": 99999999, "pid_start": 0, "project": str(self.proj),
+               "plan": "PLAN.md", "tasks": "T-01", "claude_session": "s1", "created": "2026-10-22T10:00:00", "last": "ทำไปครึ่งทาง"}
+        (self.home / "jobs" / "deadjob1.json").write_text(json.dumps(job), encoding="utf-8")
+        r = self.run_q("sweep")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        files = list((self.home / "inbox").glob("*.json"))
+        self.assertEqual(len(files), 1)
+        row = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual((row["status"], row["session"], row["job"]), ("DEAD", "s1", "deadjob1"))
+        self.run_q("sweep")
+        self.assertEqual(len(list((self.home / "inbox").glob("*.json"))), 1)  # แจ้งซ้ำไม่ได้
+
+    def test_claude_check_button_opens_new_session(self):
+        """ปุ่ม "เปิด Claude ตรวจ": งานจบ → ลิงก์ session ใหม่พิมพ์ข้อความรอ (OK = /flash-check · ล้ม = ดูสาเหตุ) · งานยังรัน = ปฏิเสธ · กดซ้ำเร็ว ๆ = ปฏิเสธ · ไม่มีแอป+ไม่มี CLI = คืนข้อความให้คัดลอก"""
+        mod = self.load_mod("flashq_ccheck")
+        opened = []
+        mod.open_link = opened.append
+        mod.claude_app_link = lambda path, params: f"claude://code/{path}?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        base = {"project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01", "pid": os.getpid(), "pid_start": 0}
+        ok = dict(base, id="jobok001", status="done", result="ok")
+        bad = dict(base, id="jobbad01", status="done", result="denied")
+        run = dict(base, id="jobrun01", status="running", pid=os.getpid(), pid_start=mod.proc_start(os.getpid()))
+        for j in (ok, bad, run):
+            mod.save_job(j)
+        self.assertEqual(mod.claude_check_action(run)[0], 409)  # ยังรันอยู่
+        code, r = mod.claude_check_action(ok)
+        self.assertEqual(code, 200, r)
+        self.assertTrue(opened[-1].startswith("claude://code/new?q=%2Fflash-check%20PLAN.md"), opened)
+        self.assertIn("&folder=", opened[-1])
+        self.assertEqual(mod.claude_check_action(mod.read_json(mod.JOBS / "jobok001.json"))[0], 409)  # กดซ้ำภายใน 60 วิ
+        code, r = mod.claude_check_action(bad)
+        self.assertEqual(code, 200, r)
+        self.assertIn("DENIED", urllib.parse.unquote(opened[-1]))
+        self.assertNotIn("flash-check", urllib.parse.unquote(opened[-1]))
+        mod.claude_app_link = lambda path, params: ""
+        mod.claude_exe = lambda: ""
+        code, r = mod.claude_check_action(dict(base, id="jobok002", status="done", result="ok"))
+        self.assertEqual(code, 404)
+        self.assertEqual(r["prompt"], "/flash-check PLAN.md")
 
     def start_ui(self):
         with socket.socket() as s:
@@ -799,7 +887,7 @@ class FlashqTest(unittest.TestCase):
     def test_ui_run_now_extra_slot(self):
         """ปุ่มรันเลย: max_parallel=1 งานที่ 2 รอคิว → ตรวจไฟล์ซ้อน (ซ้อน = ต้อง ack) → ได้ช่องพิเศษ รันพร้อมงานแรก"""
         self.overlap_plan()
-        p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "12"}, wait=False)
+        p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "40"}, wait=False)  # นานพอให้ server ขึ้นช้าตอนเครื่องโหลด
         self.wait_for(lambda: self.jobs_by_tasks().get("T-01", {}).get("status") == "running")
         p2 = self.run_q("run", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "1"}, wait=False)
         j2 = self.wait_for(lambda: self.jobs_by_tasks().get("T-02"))
