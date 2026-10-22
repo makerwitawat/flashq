@@ -56,7 +56,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 
 ## `ui.html`
 - หน้าเดียว ไม่มี build step · poll `/api/state` ทุก 3 วิ แล้ว render ใหม่เฉพาะส่วนที่ signature เปลี่ยน
-- สองมุมมอง: แดชบอร์ด และ 🏢 ออฟฟิศ (`sceneSVG` วาดฉาก SVG · `deskSVG` ต่อช่อง · การ์ดงาน `runCardHTML` · แถบขั้น `goalStepsHTML`/`runGoalHTML`/`planTrailHTML`)
+- สองมุมมอง: แดชบอร์ด และ 🏢 ออฟฟิศ (`sceneSVG` วาดฉาก SVG · `deskSVG` ต่อช่อง · `loungeSVG` ห้องพัก/โซฟา (สถานะนั่ง-หลับ-ไปทำงานคำนวณใน `officeModel` → `m.lounge`) · การ์ดงาน `runCardHTML` · แถบขั้น `goalStepsHTML`/`runGoalHTML`/`planTrailHTML`)
 - โหมดสั่งงาน "เอกสาร": เลือกได้แค่ชื่อชุดจาก `doc_presets` · การ์ดงานเอกสารแสดงคำตัดสิน (`DOC_ICON`) + ปุ่มดู diff (`openDocDiff` · `#docDiffDlg`) / รับ / ทิ้ง
 - ค่าที่จำในเบราว์เซอร์ผ่าน `store` (localStorage ห่อ try/catch): มุมมอง · ขนาดฟอนต์ · แผงพับ · ย่อการ์ด (`compactRuns`/`compactGoals`) · เสียง
 
