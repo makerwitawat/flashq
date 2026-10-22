@@ -14,6 +14,10 @@
 | `opencode/command/*.md` `opencode/agent/*.md` | ต้นฉบับที่ `flashq install` คัดลอกไป `~/.config/opencode/` |
 | `templates/*.md` | แม่แบบแผน/เป้าหมายที่ `flashq init` คัดลอกไปโปรเจกต์ |
 | `tests/test_flashq.py` | เทสต์ (opencode ปลอม ไม่เรียกโมเดลจริง) |
+| `accounts.json` | รายการบัญชีโมเดลที่ `flashq switch` ใช้สลับ (ลำดับ = ลำดับสลับ/ย้าย provider) |
+| `oc_desktop_open.mjs` | สั่ง opencode desktop เปิด session (ผ่านพอร์ต debug 9333) |
+| `flashq-ui.bat` | ดับเบิลคลิกเปิดหน้าเว็บ (เปิดค้างอยู่แล้ว = แค่เปิดเบราว์เซอร์) |
+| `docs/ARCHITECTURE.md` `CHANGELOG.md` `README.md` | เอกสาร — แก้โค้ดที่เปลี่ยนสิ่งที่ผู้ใช้เห็นแล้วต้องแก้ให้ตรง (หรือใช้ `/flash-doc`) |
 
 ## หลังแก้ต้องทำอะไร
 - แก้ `flashq.py`: เทสต์ที่เกี่ยวข้อง `python -m pytest tests/test_flashq.py -q -x -k "<คำ>"` · ก่อน merge ควรรันทั้งชุด (~6 นาที · ตั้ง timeout ≥ 500 วิ) · ตั้ง `PYTHONIOENCODING=utf-8` เมื่อรันจาก bash

@@ -4,8 +4,8 @@
 
 ## ภาพรวม
 ```
-Claude Code (/flash-plan · /flash-check · /flash-goal)
-   │  python flashq.py run <แผน> <T-xx>        ← CLI (flashq.py)
+Claude Code (/flash-plan · /flash-check · /flash-goal · /flash-investigate · /flash-qa · /flash-doc)
+   │  python flashq.py run <แผน> <T-xx>        ← CLI (flashq.py) · ชนิดอื่น: verify · investigate · qa · doc
    ▼
 ~/.flashq/jobs/<id>.json  ──คิว──►  ช่องรัน running[-n].lock
    │                                     │ opencode run /flash  (หรือ --agent ผู้ตรวจ/ผู้สืบ)
@@ -20,7 +20,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ## ส่วนต่าง ๆ ใน `flashq.py` (เรียงตามไฟล์)
 | ส่วน | ฟังก์ชันหลัก |
 |---|---|
-| ค่าคงที่/ค่าตั้ง | `CONFIG_DEFAULTS` (config.json) · `DEFAULTS` (`.flash.json` ต่อโปรเจกต์) · `AGENT_KINDS` |
+| ค่าคงที่/ค่าตั้ง | `CONFIG_DEFAULTS` (config.json) · `DEFAULTS` (`.flash.json` ต่อโปรเจกต์ รวม timeout/stall/`variants` ต่อชนิดงาน) · `AGENT_KINDS` (verify/investigate = งานส่ง prompt ตรงให้ agent อ่านอย่างเดียว) · `variant_for` (ลำดับ `--variant` > `.flash.json` > `config.json` > `DEFAULTS`) |
 | process/ไฟล์ | `pid_alive` (เทียบเวลาเริ่มกัน pid ซ้ำ) · `kill_tree` · `write_json`/`read_json` · `file_lock` |
 | โปรเจกต์/git | `project_root` · `detect_remote` · `detect_main_branch` · `project_cfg` |
 | คิว/ช่อง | `jobs` · `save_job` · `take_slot` · `acquire` · `release` · `request_run_now` |
@@ -30,6 +30,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | ช่างเอกสาร | `doc_spec` (ตรวจชุดจาก `.flash.json` · paths กว้างเกิน/ครอบไฟล์ต้องห้าม = ปฏิเสธ) · `doc_guard`/`doc_before`/`doc_changed` (snapshot ก่อน-หลัง · ตรวจการลบไฟล์เองเพราะ `snapshot_changes` ไม่เห็น) · `doc_verdict` (fail-closed: ผ่านได้ทางเดียว `DRAFT` · `doc_secrets`/`doc_badrefs`) · `doc_backup`/`doc_restore` (สำรองไฟล์ที่สกปรกก่อนรัน → `~/.flashq/docbak/<job>` · ย้อนเฉพาะไฟล์ที่แตะ) · `doc_finalize` (`OUTSIDE`/`SECRET` ย้อนทันที) · `doc_since` · `cmd_doc` · `doc_review`/`cmd_doc_review` (รับ/ทิ้ง) · `doc_diff` (diff ใน Python เห็นไฟล์ใหม่) · `doc_row` (ส่วนที่หน้าเว็บใช้ ไม่ส่ง backup) |
 | token/ค่าใช้จ่าย | ฝั่ง Claude: `scan_transcript` · `usage_summary` · `cmd_usage` (ผลเก็บ `~/.flashq/usage/<แผน>.json`) · ฝั่ง Flash: `scan_flash_log` (log ของงาน · แคชตาม mtime/size) · `oc_child_usage` (subagent ใน `opencode.db` อ่านอย่างเดียว) · `claude_overhead_usd` · `flash_usage_summary` · `cmd_usage_flash` |
 | ขนาดแผน | `PLAN_SOFT`/`PLAN_HARD` · `plan_lint` |
+| แจ้งผลกลับ Claude | `notify_job` (งานจบ → `~/.flashq/inbox/` + toast Windows) · `sweep_dead`/`cmd_sweep` (แจ้งงาน process ตาย ครั้งเดียวต่องาน) · hook `hooks/inbox_notify.py` (อ่าน inbox ตอนผู้ใช้พิมพ์ข้อความ แล้วแทรกผล+คำแนะนำเข้า session) |
 | CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
 | server | `make_ui_server` · `cmd_ui` |
@@ -43,7 +44,9 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | `running.lock` · `running-<n>.lock` | ใครถือช่อง 1 / ช่อง n |
 | `docbak/<job>/` | สำเนาไฟล์ที่ "สกปรกอยู่แล้ว" + ไฟล์ต้องห้ามก่อนช่างเอกสารแตะ (ไว้ย้อนตอนทิ้งร่าง/OUTSIDE/SECRET · ไฟล์เกิน 20MB ข้ามการสำรอง) |
 | `run_now/<id>` | สัญญาณ "รันเลย" จากหน้าเว็บ/`runnow` |
-| `config.json` | `max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads` |
+| `config.json` | `max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads` · ทับค่าเริ่มต้นได้: `variants` `prices` `flash_compare` `notify` `notify_toast` ฯลฯ |
+| `inbox/*.json` · `inbox/done/` | ผลงานจบรอส่งถึง Claude · ส่งแล้วย้ายไป `done/` |
+| `usage/<แผน>.json` | ผลล่าสุดของ `flashq usage <แผน>` (token Claude ต่อแผน) ให้การ์ดงาน/ธงแสดง |
 | `goals/<gid>.json` | สำเนาสถานะเป้าหมาย: `items` (G-xx) `rounds` (เพิ่มเฉพาะตอน verify) `rounds_max` `hours` `started` `owner` (session Claude Code) |
 | `reviews/rv_*.json` | ป้าย Claude ตรวจ: `plan_name` `tasks` `status` (reviewing/pass/fail) `started` `finished` |
 | `ui.log` · `live_server.pid/.log` | log ของหน้าเว็บ · server opencode ที่ flashq เปิดให้ |
@@ -52,12 +55,13 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 
 ## API ของหน้าเว็บ (127.0.0.1 เท่านั้น)
 - GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans` (คืน `qa_presets`/`doc_presets` ด้วย) · `/api/flash_usage?days=` (สรุป token/USD ของ Flash + ประมาณการประหยัด · `flash_usage_summary`) · `/api/doc_diff?id=` (diff ของร่างเอกสาร)
-- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/goal` · `/api/switch` · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
+- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/claude_check` (เปิด session Claude ตรวจงาน) · `/api/goal` · `/api/switch` · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
 - คำสั่งที่หน้าเว็บสั่งรัน (`submit`/`retry`) สร้าง argv เป็น list (`build_run_argv`) แล้ว `spawn_run` แบบ detached ไม่ผ่าน shell
 
 ## `ui.html`
 - หน้าเดียว ไม่มี build step · poll `/api/state` ทุก 3 วิ แล้ว render ใหม่เฉพาะส่วนที่ signature เปลี่ยน
 - สองมุมมอง: แดชบอร์ด และ 🏢 ออฟฟิศ (`sceneSVG` วาดฉาก SVG · `deskSVG` ต่อช่อง · `loungeSVG` ห้องพัก/โซฟา (สถานะนั่ง-หลับ-ไปทำงานคำนวณใน `officeModel` → `m.lounge`) · การ์ดงาน `runCardHTML` · แถบขั้น `goalStepsHTML`/`runGoalHTML`/`planTrailHTML`)
+- การ์ด "🪙 token ของ Flash · ประหยัด" (`flashUsageHTML` · ดึง `/api/flash_usage` แยกจากรอบ refresh 3 วิ) และช่องที่ 5 "ประหยัดเทียบ Claude" ในแถบสรุปบนสุดของหน้า office ใช้ข้อมูลชุดเดียวกัน
 - โหมดสั่งงาน "เอกสาร": เลือกได้แค่ชื่อชุดจาก `doc_presets` · การ์ดงานเอกสารแสดงคำตัดสิน (`DOC_ICON`) + ปุ่มดู diff (`openDocDiff` · `#docDiffDlg`) / รับ / ทิ้ง
 - ค่าที่จำในเบราว์เซอร์ผ่าน `store` (localStorage ห่อ try/catch): มุมมอง · ขนาดฟอนต์ · แผงพับ · ย่อการ์ด (`compactRuns`/`compactGoals`) · เสียง
 

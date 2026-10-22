@@ -15,10 +15,10 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 
 ## บทบาท (แบบเดียวกับ IRIS)
 - **Claude = เจ้าของงาน**: สืบข้อเท็จจริง · เขียนแผน/บรีฟให้ชัดถึง file:line · สั่งงาน · ตรวจผลเอง และเป็นคนตัดสินสุดท้าย
-- **OpenCode (Flash) = ผู้ผลิต/ผู้ตรวจ/ผู้สืบ** เพราะโควต้าเยอะกว่า: `flash-worker` ทำตามแผน · `flash-verifier` หาข้อผิดอิสระ · `flash-investigator` ไล่หาต้นตอ (อ่านอย่างเดียว)
+- **OpenCode (Flash) = ผู้ผลิต/ผู้ตรวจ/ผู้สืบ/นักทดสอบ/ช่างเอกสาร** เพราะโควต้าเยอะกว่า: `flash-worker` ทำตามแผน · `flash-verifier` หาข้อผิดอิสระ · `flash-investigator` ไล่หาต้นตอ (อ่านอย่างเดียว) · `flash-tester` อธิบายสาเหตุที่ชุดทดสอบล้ม (อ่านอย่างเดียว) · `flash-writer` อัปเดตเอกสารให้ตรงโค้ด (แก้ได้เฉพาะ path ที่ชุดอนุญาต)
 - ผลของผู้ตรวจ/ผู้สืบเป็นข้อมูลประกอบ ไม่ใช่คำตัดสิน — Claude ต้องเปิดดูโค้ดเองอย่างน้อยจุดหลัก
 - งาน verify/investigate: timeout ค่าเริ่มต้น `agent_timeout_min` = 30 นาที · ถ้าไฟล์ในโปรเจกต์เปลี่ยนระหว่างรัน (git status) จะขึ้น `WARN` ห้ามเชื่อผลจนกว่าจะตรวจ `git diff`
-- **ระดับความคิด** (`variants` · ส่งเป็น `opencode --variant`): ค่าเริ่มต้น ผู้สืบ `high` · ผู้ตรวจ `low` · งานทำ ไม่ส่ง (provider ใช้ค่าของมันเอง) · ทับได้รายชนิดงาน (`work`/`verify`/`investigate`) ใน `.flash.json` หรือ `~\.flashq\config.json` เช่น `{"variants": {"verify": "high", "work": "low"}}` · ลำดับ: `--variant` ใน CLI > `.flash.json` > `config.json` > ค่าเริ่มต้น · `""` หรือ `"none"` = ปิดของชั้นล่าง · ค่าที่ใช้ได้ขึ้นกับโมเดล/provider (opencode-go: low/high/max · commandcode2: low/medium/high/max) · บันทึกลงงานเป็น `variant` และขึ้น `variant=…` ในบรรทัด START
+- **ระดับความคิด** (`variants` · ส่งเป็น `opencode --variant`): ค่าเริ่มต้น ผู้สืบ `high` · ผู้ตรวจ `low` · นักทดสอบตอนอธิบายสาเหตุ `high` · งานทำ ไม่ส่ง (provider ใช้ค่าของมันเอง) · ทับได้รายชนิดงาน (`work`/`verify`/`investigate`/`qa`) ใน `.flash.json` หรือ `~\.flashq\config.json` เช่น `{"variants": {"verify": "high", "work": "low"}}` · ลำดับ: `--variant` ใน CLI > `.flash.json` > `config.json` > ค่าเริ่มต้น · `""` หรือ `"none"` = ปิดของชั้นล่าง · ค่าที่ใช้ได้ขึ้นกับโมเดล/provider (opencode-go: low/high/max · commandcode2: low/medium/high/max) · บันทึกลงงานเป็น `variant` และขึ้น `variant=…` ในบรรทัด START
 - **งานค้าง**: log เงียบเกินเกณฑ์ = max(`stall_floor_min` 8 นาที, 6 × ช่วงเงียบที่นานสุดที่เห็นในงานนี้) แต่ไม่เกินเพดาน `stall_min` 20 นาที (ผู้ตรวจ/ผู้สืบ: `agent_stall_floor_min` 4 / `agent_stall_min` 10) · งานที่ปกติขยับทุกครึ่งนาทีจึงถูกตัดที่ ~8 นาที ไม่ต้องรอ 20 · ผู้ตรวจ/ผู้สืบ รอบลองใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี) หรือเกินเวลารวม → flashq ฆ่า แล้วรายงาน `FLASH_RUN=TIMEOUT` + `REASON` + `DIAG` (tool ล่าสุดก่อนถูกฆ่า) · ถ้าเหตุคือ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) flashq ลองใหม่เองหนึ่งครั้ง (`/flash` ข้ามงานที่ติ๊ก `[x]` แล้ว) · ถ้าซ้ำ/เกินเวลารวม ให้ Claude ดู DIAG + `git status` แล้วแบ่งงานให้เล็กลงก่อนสั่งใหม่ · ตั้ง 0 = ปิดการเฝ้า
 - **ตัวเฝ้า shell** (`shell_idle_min` 4 · 0 = ปิด · Windows + `--attach` server): opencode รันคำสั่งแล้วรอเฉย ๆ ไม่รู้ว่าโปรเซสตายหรือยังทำงาน · เมื่อ log เงียบเกิน 30 วิ flashq ถาม server ว่า bash ตัวไหนกำลังรัน แล้วหาโปรเซสของคำสั่งนั้น (shell + ลูกหลาน) วัด CPU+I/O ทุก 30 วิ · ขยับ = ปล่อยไป (กันเกณฑ์งานค้างไม่ให้ฆ่างาน build ยาวที่ยังทำงานจริง) · นิ่งสนิทเกิน `shell_idle_min` หรือ shell จบแล้วแต่ลูกกำพร้า (`start /b`, `&`, server) ยังถือ handle ไว้ → **ฆ่าเฉพาะคำสั่งนั้น** tool คืน error แล้วโมเดลทำต่อ (ไม่ฆ่าทั้งงาน) · พิมพ์ `SHELL_WATCH:` + บันทึก `shell_kills` ในงาน · หน้าออฟฟิศมี 🛡 ยามเฝ้า shell (ชุดกรมท่า ถือไฟฉาย) แถบล่างสุด + บรรทัด 🛡 บนการ์ดงาน
 - **ตรวจสด ๆ: `flashq why [id]`** (ไม่ระบุ id = ทุกงานที่รัน · ปุ่ม `🔍 ตรวจสาเหตุ` บนการ์ดงานในหน้าออฟฟิศ) — บอก log เงียบกี่นาที · subagent/tool ขยับล่าสุดเมื่อไร · tool ไหนรันอยู่มานานเท่าไร แล้วสรุป: ปกติ / tool นานแต่อาจยาวจริง / **tool ค้าง** (ถ้าคำสั่งเปิดโปรเซสเบื้องหลังจะเตือนว่า tool รอ handle ไม่คืน) / **รอโมเดล** / แยกไม่ได้ (`--attach none`) · ความคืบหน้า "เสร็จ N/M งาน" ในหน้า UI นับจากกล่อง `[x]` ในแผนจริง
@@ -31,11 +31,11 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | ส่วน | ที่ |
 |---|---|
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
-| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads`) · สัญญาณรันเลย `run_now/` · สำเนาสถานะเป้าหมาย `goals/<id>.json` · ป้ายผู้ตรวจ `reviews/rv_*.json` · log ของหน้าเว็บ `ui.log` · server opencode `live_server.pid/.log` · ย้ายที่ได้ด้วย env `FLASHQ_HOME` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
-| คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
-| คำสั่ง Claude Code `/flash-plan` (วางแผน+ส่งเข้าคิว แล้วจบ session) `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) แบบ global | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
+| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads` `notify` `variants` `prices` `flash_compare` ฯลฯ) · สัญญาณรันเลย `run_now/` · สำเนาสถานะเป้าหมาย `goals/<id>.json` · ป้ายผู้ตรวจ `reviews/rv_*.json` · ผลงานจบรอแจ้ง Claude `inbox/` (ส่งแล้ว `inbox/done/`) · ผล `flashq usage <แผน>` `usage/` · ที่สำรองไฟล์ของช่างเอกสาร `docbak/<job>/` · log ของหน้าเว็บ `ui.log` · server opencode `live_server.pid/.log` · ย้ายที่ได้ด้วย env `FLASHQ_HOME` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
+| คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` `flash-verifier` `flash-investigator` `flash-tester` `flash-writer` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
+| คำสั่ง Claude Code แบบ global: `/flash-plan` (วางแผน+ส่งเข้าคิว แล้วรอระบบแจ้งผล) · `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) · `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) · `/flash-investigate` (ส่งผู้สืบ) · `/flash-qa` (สั่งนักทดสอบ) · `/flash-doc` (สั่งช่างเอกสาร) · `/flash-init` (ตั้งค่าโปรเจกต์ใหม่) | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
 | subagent Claude Code `flash-checker` (ผู้ตรวจรุ่น Sonnet — session Opus/Fable ส่งงานตรวจให้ตัวนี้) | `~/.claude/agents/` (ติดตั้งด้วย `install`) |
-| hook `image_guard.py` (กันอ่านรูปใหญ่ >1200px / อ่านรูปเกิน 12 รูปต่อ session — รูปค้างใน context ทุก turn) | `~/.claude/hooks/` (ติดตั้งด้วย `install` · ลงทะเบียนใน `settings.json` ด้วย `install --hooks`) |
+| hook `image_guard.py` (กันอ่านรูปใหญ่ >1200px / อ่านรูปเกิน 12 รูปต่อ session — รูปค้างใน context ทุก turn) · hook `inbox_notify.py` (แทรกผลงานที่จบแล้วเข้า session ตอนผู้ใช้พิมพ์ข้อความ) | `~/.claude/hooks/` (ติดตั้งด้วย `install` · ลงทะเบียนใน `settings.json` ด้วย `install --hooks`) |
 | ค่าเฉพาะโปรเจกต์ | `.flash.json` ที่รากโปรเจกต์ (ไม่มีก็ได้ · `main_branch` `remote` `plan_dir` `rules`) |
 
 โปรเจกต์ที่มี `.opencode/command/flash.md` หรือ `.opencode/agent/flash-worker.md` ของตัวเอง (เช่น IRIS_CODE_1.2) → opencode ใช้ของโปรเจกต์ก่อน
@@ -45,7 +45,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 ```
 python D:\MyCode\flashq\flashq.py install
 ```
-แล้วรีโหลด opencode desktop · ไฟล์ที่ flashq ติดตั้งไว้เอง (`flashq:managed`) ทับได้เลยไม่สำรอง (ต้นฉบับอยู่ใน git ของ repo นี้) · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ) · `--hooks` = ลงทะเบียน `image_guard.py` เป็น PreToolUse(Read) ใน `~/.claude/settings.json` (ทำซ้ำได้ · ปิดชั่วคราว 60 นาที = สร้างไฟล์ `~/.flashq/image_guard_off` · เพดานตั้งใน `~/.flashq/config.json`: `image_max_px` `image_max_reads`)
+แล้วรีโหลด opencode desktop · ไฟล์ที่ flashq ติดตั้งไว้เอง (`flashq:managed`) ทับได้เลยไม่สำรอง (ต้นฉบับอยู่ใน git ของ repo นี้) · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ) · `--hooks` = ลงทะเบียน `image_guard.py` เป็น PreToolUse(Read) และ `inbox_notify.py` เป็น UserPromptSubmit ใน `~/.claude/settings.json` (ทำซ้ำได้ · ปิดชั่วคราว 60 นาที = สร้างไฟล์ `~/.flashq/image_guard_off` · เพดานตั้งใน `~/.flashq/config.json`: `image_max_px` `image_max_reads`)
 
 ## ประหยัด token ของ Claude (เหตุผลที่เครื่องมือนี้มีอยู่)
 - **แผน = สเปก ไม่ใช่โค้ดสำเร็จรูป**: `flashq run` ตรวจขนาดแผนเอง — เตือนเมื่อ >300 บรรทัด / โค้ดใน ``` รวม >100 / บล็อกเดียว >30 · **ปฏิเสธ** เมื่อ >600 / >200 / >60 หรือมีหัวข้อ "ภาคผนวก · คัดลอกตรงตัว · โค้ดเต็ม · appendix · verbatim" ที่มีโค้ด >20 บรรทัด (ไม่มีตัวเลือกเลี่ยง · ยกเว้นส่งเฉพาะรอบแก้ `T-xxR` ของแผนที่เคยรันแล้ว = เตือนผ่าน) — แผนที่ Claude เขียนโค้ดเต็มให้ Flash คัดลอก = Claude ทำงานเองในราคาแพงกว่า
@@ -71,7 +71,10 @@ python D:\MyCode\flashq\flashq.py init --install --commit       # ครบใ�
 python D:\MyCode\flashq\flashq.py run docs\plans\PLAN_X.md T-01..T-03     # ที่โฟลเดอร์โปรเจกต์ (หรือ --project <dir>)
 python D:\MyCode\flashq\flashq.py run --message "ตอบแค่คำว่า PONG"         # ทดสอบการเชื่อมต่อ
 python D:\MyCode\flashq\flashq.py                                          # สถานะ: กำลังทำอะไร + คิว + บัญชี
-python D:\MyCode\flashq\flashq.py list [--all] | log <id> | cancel <id>
+python D:\MyCode\flashq\flashq.py list [--all] | log <id> | cancel <id> | why [id] | wait <job|แผน>
+python D:\MyCode\flashq\flashq.py verify|investigate|qa|doc ...            # งานชนิดอื่น (หัวข้อด้านล่าง)
+python D:\MyCode\flashq\flashq.py goal check|verify|status|human|cancel <GOAL>   # โหมดเป้าหมาย
+python D:\MyCode\flashq\flashq.py usage <แผน|โปรเจกต์> | usage --flash        # token ของ Claude / ของ Flash
 python D:\MyCode\flashq\flashq.py switch [next|cc|cc2|go2|go3|inferx]
 python D:\MyCode\flashq\flashq.py config [max_parallel [1-8]]                 # ดู/ตั้งจำนวนงานที่รันพร้อมกัน
 python D:\MyCode\flashq\flashq.py config schedule auto|fifo                # จัดคิวอัตโนมัติ/ตามลำดับ
