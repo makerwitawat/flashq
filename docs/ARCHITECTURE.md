@@ -1,6 +1,6 @@
 # โครงสร้าง flashq
 
-> สำหรับคนที่จะแก้โค้ด · วิธีใช้ → [README.md](../README.md) · กติกาการแก้ repo → [AGENTS.md](../AGENTS.md)
+> สำหรับคนที่จะแก้โค้ด · วิธีใช้ → [README.md](../README.md) · [REFERENCE.md](REFERENCE.md) · กติกาการแก้ repo → [AGENTS.md](../AGENTS.md)
 
 ## ภาพรวม
 ```

@@ -1,6 +1,6 @@
 # AGENTS.md — กติกาสำหรับคน/AI ที่แก้ repo flashq
 
-> ใช้ร่วมกันทั้ง Claude Code (`CLAUDE.md` ชี้มาที่นี่) และ opencode · คู่มือการใช้งาน → [README.md](README.md) · โครงสร้างโค้ด → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> ใช้ร่วมกันทั้ง Claude Code (`CLAUDE.md` ชี้มาที่นี่) และ opencode · คู่มือการใช้งาน → [README.md](README.md) · อ้างอิงเต็ม → [docs/REFERENCE.md](docs/REFERENCE.md) · โครงสร้างโค้ด → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## ภาษา
 - ข้อความที่ผู้ใช้เห็น (ข้อความ UI · output ของ CLI · commit message · เอกสาร) เป็นภาษาไทย · ศัพท์เทคนิค/ชื่อคำสั่ง/ชื่อไฟล์เป็นอังกฤษได้
@@ -17,7 +17,7 @@
 | `accounts.json` | รายการบัญชีโมเดลที่ `flashq switch` ใช้สลับ (ลำดับ = ลำดับสลับ/ย้าย provider) |
 | `oc_desktop_open.mjs` | สั่ง opencode desktop เปิด session (ผ่านพอร์ต debug 9333) |
 | `flashq-ui.bat` | ดับเบิลคลิกเปิดหน้าเว็บ (เปิดค้างอยู่แล้ว = แค่เปิดเบราว์เซอร์) |
-| `docs/ARCHITECTURE.md` `CHANGELOG.md` `README.md` | เอกสาร — แก้โค้ดที่เปลี่ยนสิ่งที่ผู้ใช้เห็นแล้วต้องแก้ให้ตรง (หรือใช้ `/flash-doc`) |
+| `docs/ARCHITECTURE.md` `docs/REFERENCE.md` `CHANGELOG.md` `README.md` | เอกสาร — แก้โค้ดที่เปลี่ยนสิ่งที่ผู้ใช้เห็นแล้วต้องแก้ให้ตรง (หรือใช้ `/flash-doc`) |
 
 ## หลังแก้ต้องทำอะไร
 - แก้ `flashq.py`: เทสต์ที่เกี่ยวข้อง `python -m pytest tests/test_flashq.py -q -x -k "<คำ>"` · ก่อน merge ควรรันทั้งชุด (~6 นาที · ตั้ง timeout ≥ 500 วิ) · ตั้ง `PYTHONIOENCODING=utf-8` เมื่อรันจาก bash
