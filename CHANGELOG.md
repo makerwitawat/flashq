@@ -9,6 +9,8 @@
 - **งาน DEAD (process ตายกลางคัน) แจ้งด้วย**: `flashq sweep` ลง inbox/toast ครั้งเดียวต่องาน (ธง `dead_notified`) · hook `inbox_notify` เรียกให้เองก่อนอ่าน inbox · เทสต์รันเลยไม่นิ่ง (`test_ui_run_now_extra_slot`) ยืดเวลางานแรกกันเครื่องโหลด
 - **เตือน "OK แต่ไม่ได้ทำงาน"**: งานแผนที่ exit 0 แต่ไม่มี commit ใหม่และ worker ไม่รายงาน `DONE` (เช่นหยุดถามผู้ใช้เพราะ repo ไม่มี remote — เจอจริงตอนทดลอง) → บรรทัด `WARN:` ท้ายผลรัน · สถานะยังเป็น OK แต่ต้องอ่านสรุปท้ายก่อนเชื่อ · ไม่เตือนงานอ่านอย่างเดียว/ข้อความตรง
 
+- **รายงานผลงานให้เข้าใจง่าย**: `/flash-check` ต้องรายงานผู้ใช้ 5 หัวข้อทุกครั้ง — งานนี้คืออะไร · ผล ✅/⚠️/❌ · **ได้ผลงานอะไรแบบไหน** (ผู้ใช้เห็นอะไรต่าง · ไฟล์หลัก · commit · หลักฐาน) · สาเหตุภาษาคนถ้าล้ม · ต้องการให้ผู้ใช้ทำอะไร · hook `inbox_notify` สั่งให้รายงานตามนี้ด้วย (ต้อง `install` ใหม่ + session ใหม่)
+
 ## 2026-10-21
 - **ระดับความคิดตามชนิดงาน** (`variants`): ผู้สืบ `high` · ผู้ตรวจ `low` · งานทำไม่ส่ง · ทับรายชนิดได้ใน `.flash.json` / `config.json` · `--variant` ใน CLI ชนะทุกอย่าง · บันทึก `variant` ลงงาน
 - **สถานะ `DENIED`**: opencode (โหมดไม่โต้ตอบ) ปฏิเสธสิทธิ์เอง เช่น อ่านไฟล์นอกโปรเจกต์ที่ `permission.external_directory` เป็น `ask` → เดิมบันทึกเป็น OK เพราะ exit 0 · ตอนนี้ตรวจ stderr `auto-rejecting` + tool error "ปฏิเสธสิทธิ์" → `FLASH_RUN=DENIED` + บรรทัด `DENIED:` บอก path + ทางแก้ 2 ทาง (`external_dirs` ใน `.flash.json` / `opencode.json`) · มี commit/`DONE` = คง OK แต่ `WARN:` · `wait` คืน 1 · หน้าเว็บป้าย DENIED + 🚫 path + ทางแก้ในกล่อง log · `.flash.json` ช่อง `external_dirs` → flashq ส่งสิทธิ์ผ่าน `OPENCODE_CONFIG_CONTENT` (ไม่แตะไฟล์ผู้ใช้) + ตรวจก่อนรันว่า `opencode.json`/server สดอนุญาตแล้วหรือยัง (`PERM:`/`WARN:`) + เตือน `opencode.json` อ่านไม่ได้ · บรรทัดคำสั่งที่กฎ agent บล็อกเปลี่ยนชื่อเป็น `RULE_DENIED:`

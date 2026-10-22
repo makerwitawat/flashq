@@ -4279,7 +4279,7 @@ def claude_check_prompt(j: dict) -> str:
     if st == "ok" and plan:
         return f"/flash-check {plan}"
     if st == "ok":
-        return f"งาน flashq job {jid} จบแล้ว: อ่าน git diff/log ของโปรเจกต์แล้วตรวจผลก่อนรายงานผม"
+        return f"งาน flashq job {jid} จบแล้ว: อ่าน git diff/log ของโปรเจกต์แล้วตรวจผลก่อนรายงานผม (บอกว่างานนี้ได้ผลงานอะไรแบบไหน)"
     return (f"งาน flashq job {jid} จบด้วยสถานะ {st.upper()}: ดูสาเหตุด้วย `python {REPO / 'flashq.py'} log {jid}` "
             f"แล้วบอกผมเป็นภาษาไทยว่าเกิดอะไร และแนะนำทางแก้ (ยังไม่ต้องสั่งงานซ้ำจนกว่าผมจะตอบ)")
 
