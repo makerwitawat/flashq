@@ -2646,7 +2646,14 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(s["claude_overhead"], {"usd": 5.0, "sessions": 1})
         self.assertEqual([g["name"] for g in s["by_project"]], [self.proj.name])
         self.assertEqual(s["by_kind"][0]["name"], "work")
-        s60 = mod.flash_usage_summary(60)
+        # ตาราง "เพิ่งจบ": แถวที่จบแล้วได้ row["flash"] (token · USD จริง · ราคาถ้าเป็น Claude) · ไม่มีข้อมูล/ยังไม่จบ = ไม่ใส่
+        rows = [{"id": "j1", "finished": "x"}, {"id": "j3", "finished": "x"}, {"id": "j1", "finished": ""}]
+        mod.flash_brief_rows(rows, {j["id"]: j for j in mod.jobs()})
+        self.assertEqual(rows[0]["flash"], {"tokens": 2027, "usd": 0.02, "sub_tokens": 337,
+                                            "compare": [{"model": "claude-sonnet-5-5", "usd": 427.0}]})
+        self.assertNotIn("flash", rows[1])
+        self.assertNotIn("flash", rows[2])
+        s60 =mod.flash_usage_summary(60)
         self.assertEqual((s60["jobs"], s60["total"]["in"]), (2, 180 + 1000))
         self.assertEqual(mod.flash_usage_summary(30, str(self.tmp / "other"))["jobs"], 0)
         # ไม่มี DB → log หลักอย่างเดียว

@@ -3993,7 +3993,9 @@ def ui_state() -> dict:
     sch = schedule(held)
     slot_of = {h.get("id"): h for h in held}
     running, queued, history, dead, kills = [], [], [], [], []
+    raw = {}
     for j in jobs():
+        raw[j.get("id")] = j
         st = live_state(j)
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
@@ -4039,6 +4041,7 @@ def ui_state() -> dict:
             row["trail"]["usage"] = usage_brief(Path(row["trail"]["plan"]).stem)  # ผลล่าสุดของ flashq usage (ไม่มี = {})
     rv_act, rv_done = ui_reviews()
     history = history[::-1][:300]
+    flash_brief_rows(history[:8], raw)
     goals = ui_goals(running, history, queued)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
@@ -4053,6 +4056,25 @@ def ui_state() -> dict:
             "review_ttl_min": REVIEW_TTL_MIN,
             "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
             "goals": goals}
+
+
+def flash_brief_rows(rows: list, raw: dict) -> None:
+    """ใส่ row["flash"] = token/ค่าจ่ายจริง/ราคาถ้าเป็น Claude ให้งานที่จบแล้วที่หน้าเว็บจะโชว์ (ตาราง "เพิ่งจบ") · อ่านพลาด = ไม่ใส่"""
+    todo = [r for r in rows if r.get("finished") and r.get("id")]
+    if not todo:
+        return
+    con, table = oc_open_db(), price_table()
+    try:
+        for r in todo:
+            try:
+                b = job_flash_brief(raw.get(r["id"]) or {}, con, table)
+            except Exception:
+                b = None
+            if b:
+                r["flash"] = b
+    finally:
+        if con is not None:
+            con.close()
 
 
 def doc_row(j: dict) -> dict | None:
@@ -5307,6 +5329,52 @@ def claude_overhead_usd(since_days: float, project: str) -> dict:
     return {"usd": round(usd, 4), "sessions": len(seen)}
 
 
+def job_flash_usage(j: dict, con) -> tuple | None:
+    """token + USD ของงาน 1 งาน (log หลัก + subagent) → (row, kid) · ไม่มีข้อมูล token เลย = None"""
+    main = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0}
+    sids: set = set()
+    for lp in j.get("logs") or []:
+        r = scan_flash_log(Path(lp))
+        for k in USAGE_KEYS + ("usd", "steps"):
+            main[k] += r[k]
+        sids.update(r["sessions"])
+    if j.get("session"):
+        sids.add(j["session"])
+    kid = oc_child_usage(con, sorted(sids))
+    if not main["steps"] and not kid["steps"]:
+        return None
+    row = {k: main[k] + kid[k] for k in USAGE_KEYS + ("usd", "steps")}
+    row["tokens"] = sum(row[k] for k in USAGE_KEYS)
+    return row, kid
+
+
+def flash_compare_names() -> list:
+    names = read_json(CONFIG).get("flash_compare") or list(FLASH_COMPARE_DEFAULT)
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+_JOB_FLASH_CACHE: dict = {}  # job id → ผลของงานที่จบแล้ว (log ไม่เปลี่ยนอีก จึงไม่ต้องเปิด opencode.db ซ้ำทุกรอบ refresh)
+
+
+def job_flash_brief(j: dict, con, table: dict) -> dict | None:
+    """สรุปสั้นของงานที่จบแล้วสำหรับตาราง "เพิ่งจบ": token · ค่าจ่ายจริงที่ opencode คิด · ถ้า Claude ทำ token เท่ากันจะเสียเท่าไร (ต่อรุ่นใน flash_compare)"""
+    key = (j.get("id"), j.get("finished"), len(j.get("logs") or []))
+    hit = _JOB_FLASH_CACHE.get(key[0])
+    if hit and hit[0] == key:
+        return hit[1]
+    got = job_flash_usage(j, con)
+    brief = None
+    if got:
+        row, kid = got
+        brief = {"tokens": row["tokens"], "usd": round(row["usd"], 4), "sub_tokens": sum(kid[k] for k in USAGE_KEYS),
+                 "compare": [{"model": n, "usd": round(c, 2)} for n in flash_compare_names()
+                             if (c := usage_cost(row, n, table)) is not None]}
+    if len(_JOB_FLASH_CACHE) > 600:
+        _JOB_FLASH_CACHE.clear()
+    _JOB_FLASH_CACHE[key[0]] = (key, brief)
+    return brief
+
+
 def flash_usage_summary(since_days: float = 30, project: str = "") -> dict:
     """token + USD ของ Flash (งานที่รันผ่าน flashq) ใน since_days วันล่าสุด แยกวัน/โปรเจกต์/ชนิดงาน/โมเดล
     + ประมาณการว่าถ้า Claude ทำ token เท่ากันจะเสียเท่าไร (compare) และประหยัดไปเท่าไร (หักค่า Claude ที่ยังใช้วางแผน/ตรวจ)"""
@@ -5321,22 +5389,12 @@ def flash_usage_summary(since_days: float = 30, project: str = "") -> dict:
         for j in jobs():
             if (j.get("created") or "") < cutoff or (want and os.path.normcase(j.get("project", "")) != want):
                 continue
-            main = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0}
-            sids: set = set()
-            for lp in j.get("logs") or []:
-                r = scan_flash_log(Path(lp))
-                for k in USAGE_KEYS + ("usd", "steps"):
-                    main[k] += r[k]
-                sids.update(r["sessions"])
-            if j.get("session"):
-                sids.add(j["session"])
-            kid = oc_child_usage(con, sorted(sids))
-            if not main["steps"] and not kid["steps"]:
+            got = job_flash_usage(j, con)
+            if got is None:
                 n_nodata += 1
                 continue
+            row, kid = got
             n_jobs += 1
-            row = {k: main[k] + kid[k] for k in USAGE_KEYS + ("usd", "steps")}
-            row["tokens"] = sum(row[k] for k in USAGE_KEYS)
             for k in USAGE_KEYS + ("usd",):
                 total[k] += row[k]
             sub["sessions"] += kid["sessions"]
@@ -5354,10 +5412,9 @@ def flash_usage_summary(since_days: float = 30, project: str = "") -> dict:
     total["tokens"] = sum(total[k] for k in USAGE_KEYS)
     over = claude_overhead_usd(since_days, project)
     table = price_table()
-    names = read_json(CONFIG).get("flash_compare") or list(FLASH_COMPARE_DEFAULT)
     compare = []
-    for name in names if isinstance(names, list) else []:
-        c = usage_cost(total, str(name), table)
+    for name in flash_compare_names():
+        c = usage_cost(total, name, table)
         if c is None:
             continue
         compare.append({"model": name, "equiv_usd": round(c, 2), "saved_gross": round(c - total["usd"], 2),

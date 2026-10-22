@@ -3,6 +3,7 @@
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
 ## 2026-10-22
+- **ตาราง "เพิ่งจบ" บอกราคาต่องาน**: ใต้ชื่อโมเดลมีบรรทัด "🪙 token · opencode $จ่ายจริง · ถ้าเป็น Claude ≈ รุ่น $…" (8 งานล่าสุดที่จบแล้ว · รวม subagent · จ่ายจริง = ที่ opencode คิด · Claude = ประมาณการ token เท่ากัน ตามรุ่นใน `flash_compare`) · `/api/state` แถวประวัติมีช่อง `flash` · แคชผลต่องานที่จบแล้ว
 - **เอกสารให้ตรงกับโค้ด**: README/ARCHITECTURE ครบ agent (`flash-tester` `flash-writer`) และคำสั่ง Claude Code (`/flash-investigate` `/flash-qa` `/flash-doc` `/flash-init`) · ค่าเริ่มต้น `variants.qa = high` · โฟลเดอร์ข้อมูล `inbox/` `usage/` `docbak/` · hook `inbox_notify` ที่ `install --hooks` ลงทะเบียน · `/api/claude_check` · การ์ด/ช่องสรุป token ของ Flash ใน `ui.html`
 - **ผู้ตรวจ/ผู้สืบ: คำสั่งอ่านอย่างเดียวที่ปลอดภัยใน allowlist**: `pwd` · `echo` · `cd` · `sed -n` · `git -C <path> status/log/show/diff/ls-files/blame/grep` ลดการโดนบล็อกซ้ำ (จาก log 1,902 คำสั่ง bash โดนบล็อก 74 ครั้ง) · ยังบล็อก `sed -i`/`--in-place` และ `git -C diff --output/--ext-diff` · ต้อง `flashq install` ใหม่
 - **หน้า office: ช่องสรุป "🪙 ประหยัดเทียบ Claude (ประมาณ)"**: ช่องที่ 5 ในแถวสรุปบนสุด แสดงยอดประหยัดของช่วงที่เลือกในการ์ดแดชบอร์ด (เทียบรุ่นแรกในตาราง = ค่าเริ่มต้น Sonnet ขอบล่าง) + token/ค่าจ่ายจริงของ Flash + ของวันนี้ · ใช้ข้อมูลชุดเดียวกับการ์ด (`/api/flash_usage`) ไม่เพิ่มการอ่าน log

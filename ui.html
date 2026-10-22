@@ -2003,11 +2003,18 @@ function queueHTML(m) {
       <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b><div class="row" style="margin-top:0.3rem">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="บังคับให้เริ่มทันทีในช่องพิเศษ (ตรวจไฟล์ซ้อนก่อน)">รันเลย</button>`}<button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></div></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
+/* บรรทัดราคาของงานที่จบ: ที่ opencode คิดจริง (Flash) เทียบกับถ้า Claude ทำ token เท่ากัน (ประมาณ · ต่อรุ่นใน flash_compare) */
+function recentCostHTML(f) {
+  if (!f) return "";
+  const cl = (f.compare || []).map((c) => `${esc(c.model.replace(/^claude-/, ""))} ${usd(c.usd)}`).join(" · ");
+  const tip = "จ่ายจริง = ที่ opencode คิดจาก log ของงานนี้ (รวม subagent" + (f.sub_tokens ? ` ${fmtTok(f.sub_tokens)} token` : "") + ") · Claude = ประมาณการสมมติใช้ token เท่ากัน ตามตารางราคาในตัว (จริง ๆ Claude มักใช้น้อยกว่า)";
+  return `<div class="muted" title="${esc(tip)}">🪙 ${fmtTok(f.tokens)} token · opencode <b>${usd(f.usd)}</b>${cl ? ` · ถ้าเป็น Claude ≈ ${cl}` : ""}</div>`;
+}
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}</div>` : ""}${recentCostHTML(j.flash)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
