@@ -1159,6 +1159,73 @@ class FlashqTest(unittest.TestCase):
         job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
         self.assertEqual((job["citations"]["ok"], len(job["citations"]["bad"])), (2, 3))
 
+    def test_check_citations_short_names_code_spans_and_clauses(self):
+        """ชื่อไฟล์ย่อ · ชื่อซ้ำ · host:port · backtick เหลื่อม · ช่วงบรรทัด · ... · คำปฏิเสธ · `:123` — ต้องไม่ฟ้องผิด แต่คัดผิดจริงยังต้องถูกชี้"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            files = {
+                "tool/rig_viewer.py": ["import os", "def rig_summary():", "    return dict(name=n)", "    raise ValueError('ข้อต่อซ้อนกัน: %s' % n)", "", "x = 1"],
+                "tool/rig_catalog.py": ["# ภาพย่อ", "def thumb_svg(s):", "    return 1", "def other():", "    return dict(islands_removed=3)", "", "", "", "", "end"],
+                "tool/web/index.html": ["<html>", "<script>", "const a = 1;", "</script>"],
+                "other/catalog.py": ["def thumb_svg(s): pass"],
+                "other/index.html": ["<html>"],
+                "lone/extra_helper.py": ["a = 1", "b = 2"],
+            }
+            for rel, ls in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text("\n".join(ls) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            # ชื่อย่อชี้ไฟล์เดียว → ผ่าน (viewer.py = rig_viewer.py) · ไม่ใช่ "ไม่พบไฟล์"
+            r = chk("`viewer.py:2` — `def rig_summary():` ตรง")
+            self.assertEqual((r["ok"], r["ok_code"], r["bad"]), (1, 1, []))
+            # ชื่อซ้ำ (catalog.py = other/catalog.py หรือ tool/rig_catalog.py) → เลือกอันที่อยู่โฟลเดอร์เดียวกับ citation ที่ระบุ path ครบ
+            r = chk("`tool/rig_viewer.py:1` ดู", "`catalog.py:2` — `def thumb_svg(s):` ตรง", "`index.html:3` — `const a = 1;` ตรง")
+            self.assertEqual((r["ok"], r["ok_code"], r["bad"]), (3, 2, []))
+            # ไม่มี anchor + ซ้ำ → กำกวม ไม่เดา · ชื่อที่ไม่มีเลย → ไม่พบไฟล์
+            r = chk("`index.html:1` ดู", "`ghost.py:1` ดู")
+            self.assertEqual(len(r["bad"]), 2)
+            self.assertIn("กำกวม", r["bad"][0])
+            self.assertIn("ไม่พบไฟล์", r["bad"][1])
+            # host:port ไม่ใช่ citation
+            self.assertEqual(chk("เปิด `127.0.0.1:8219/api/rigs` แล้วดู http://localhost:8219"), {"ok": 0, "ok_code": 0, "bad": []})
+            # citation ในโค้ดสแปน + ข้อความคัดสั้น (<4) ไม่ทำให้ backtick จับคู่เหลื่อม
+            r = chk("- `tool/rig_viewer.py:3` `n` ใช้ค่า `name=n` ตรง · `tool/rig_catalog.py:1` \"ตัวละคร `h_w`\" + `:261` `ไม่อยู่ในไฟล์เลย`")
+            self.assertEqual(r["bad"], [])
+            # ช่วงบรรทัด: โค้ดที่ปลายช่วงต้องนับ · ข้อความย่อด้วย ... · คำปฏิเสธ "ไม่มีคีย์ `x`" ไม่ถูกตรวจ
+            r = chk("`tool/rig_catalog.py:2-5` — ส่งกลับ `islands_removed` ตรง",
+                    "`tool/rig_viewer.py:2` — `def ... rig_summary():` ตรง",
+                    "`tool/rig_viewer.py:3` ไม่มีคีย์ `source` ในผลลัพธ์")
+            self.assertEqual((r["ok"], r["bad"]), (3, []))
+            # คัดไม่ตรงตัวแต่ถูกคำ (ValueError: ข้อความ) ผ่าน · ข้อความหลัง `:123` / · / → เป็นของประเด็นอื่น
+            r = chk("`tool/rig_viewer.py:4` — `ValueError: ข้อต่อซ้อนกัน` ตรง",
+                    "`tool/rig_viewer.py:1` ดู `:585` `ไม่มีในไฟล์เลย`",
+                    "`tool/rig_viewer.py:5` ดู · `ไม่มีในไฟล์เลย`",
+                    "`tool/rig_viewer.py:6` ดู → `ไม่มีในไฟล์เลย`")
+            self.assertEqual((r["ok"], r["bad"]), (4, []))
+            # ข้อความคัดที่ห่างจาก citation (>40 ตัวอักษร ในประโยคเดียวกัน): มีในไฟล์ = ผ่าน (ตรงแค่ไฟล์/บรรทัด) · ไม่มีในไฟล์เลย = ผิด
+            gap = "ซึ่งเป็นคำอธิบายยาว ๆ ที่คั่นอยู่ระหว่าง citation กับโค้ดที่คัดมาตรงนี้"
+            r = chk(f"`tool/rig_viewer.py:6` {gap} `def rig_summary():`", f"`tool/rig_viewer.py:5` {gap} `def ghost_func():`")
+            self.assertEqual((r["ok"], r["ok_code"]), (1, 0))
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ไม่มีในไฟล์นี้เลย", r["bad"][0])
+            # คัดผิดจริง/อยู่ไกลเกิน ±3 → ยังต้องถูกชี้ (ไม่หย่อนจนตรวจอะไรไม่ได้)
+            r = chk("`tool/rig_viewer.py:2` — `def rig_summary():` ตรง",
+                    "`tool/rig_catalog.py:9` — `def thumb_svg(s):` ไกลเกิน ±3",
+                    "`tool/rig_viewer.py:5` — `raise ValueError('ไม่มีจริง')` ผิด",
+                    "`tool/rig_catalog.py:99` — เกินไฟล์")
+            self.assertEqual(r["ok"], 1)
+            self.assertEqual(len(r["bad"]), 3)
+            self.assertIn("ไม่อยู่ในบรรทัดนี้", r["bad"][0])
+            self.assertIn("ไม่อยู่ในบรรทัดนี้", r["bad"][1])
+            self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][2])
+
     def test_readonly_job_warns_when_files_change_and_agent_timeout(self):
         """งาน readonly แล้วไฟล์ในโปรเจกต์เปลี่ยน → WARN · ไม่เปลี่ยน → เงียบ · ผู้สืบ/ผู้ตรวจ timeout ค่าเริ่มต้นสั้นกว่างานทำจริง"""
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.proj, check=True)
