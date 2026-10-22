@@ -617,7 +617,7 @@ const isVerify = (j) => kindOf(j) === "verify" || kindOf(j) === "investigate" ||
 const roleOf = (j) => (isSleuth(j) ? "sleuth" : isVerify(j) ? "check" : "");  // รูปลักษณ์ตัวละคร: ผู้ตรวจ = เสื้อกาวน์ขาว+เนคไท · ผู้สืบ = โค้ทเบจ+หมวกนักสืบ
 const roleTag = (j) => (isQa(j) ? "🧪 ทดสอบ " : isSleuth(j) ? "🕵️ สืบ " : "🔍 ตรวจ ");
 const what = (j) => isQa(j) ? `🧪 ทดสอบ ${j.tasks || "ทุกชุด"}` : j.message && !isSleuth(j) ? `ข้อความ: ${j.message}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 60) : (j.plan || "-") + " " + (j.tasks || "")}`;
-const QA_ICON = { PASS: "✅", FAIL: "❌", TIMEOUT: "⏱", ERROR: "⛔", NOEXPECT: "⚠️", FLAKY: "⚠️", SKIPPED: "⏭", CHANGED: "⚠️", PENDING: "⏳", RUNNING: "▶️" };
+const QA_ICON = { PASS: "✅", FAIL: "❌", TIMEOUT: "⏱", ERROR: "⛔", NOEXPECT: "⚠️", FLAKY: "⚠️", SKIPPED: "⏭", CHANGED: "⚠️", ENV: "🔌", PENDING: "⏳", RUNNING: "▶️" };
 // ผลรายชุดของนักทดสอบ (ข้อมูลจาก qa ในไฟล์งาน · ตัดสินจาก exit code จริง) — บรรทัดสั้นใต้ชื่องาน
 const qaLine = (j) => {
   const q = j.qa;

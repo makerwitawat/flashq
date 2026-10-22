@@ -2200,8 +2200,16 @@ def qa_spec(name: str, v, default_min: float) -> dict | str:
             re.compile(expect)
         except re.error as e:
             return f"ชุดทดสอบ '{name}': expect ไม่ใช่ regex ที่ถูกต้อง ({e})"
+    env_exit = v.get("env_exit")
+    if env_exit in (None, ""):
+        env_exit = []
+    elif isinstance(env_exit, int) and not isinstance(env_exit, bool):
+        env_exit = [env_exit]
+    if not (isinstance(env_exit, list) and len(env_exit) <= 8
+            and all(isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= 2147483647 for x in env_exit)):
+        return f"ชุดทดสอบ '{name}': env_exit ต้องเป็นเลข exit code (1 ขึ้นไป) ไม่เกิน 8 ตัว เช่น [3, 5]"
     return {"name": name, "cmd": cmd, "cwd": str(v.get("cwd") or "."), "timeout_min": timeout, "idle_min": idle,
-            "retry": int(retry), "expect": expect}
+            "retry": int(retry), "expect": expect, "env_exit": sorted(set(env_exit))}
 
 
 def qa_specs(cfg: dict, names: list[str], raw_cmds: list[str], root: Path) -> tuple[list[dict], list[str]]:
@@ -2245,26 +2253,48 @@ def qa_preset_names(project: str) -> list[str]:
     return [n for n in presets if QA_NAME_RE.match(str(n))] if isinstance(presets, dict) else []
 
 
+def qa_utf16(data: bytes, offset: int) -> str | None:
+    """ข้อความ UTF-16 (PowerShell 5.1 เขียนไฟล์ด้วย `>` เป็น UTF-16 LE) → ข้อความ · ไม่ใช่ UTF-16 = None
+    มี BOM = ชัวร์ · ไม่มี BOM (อ่านมาจากกลางไฟล์) = ศูนย์ไบต์ ≥ 5% และเกือบทั้งหมดอยู่ตำแหน่งคู่/คี่ตำแหน่งเดียวกัน
+    offset = ตำแหน่งไบต์แรกของ data ในไฟล์ (คี่ = ต้องข้ามไบต์แรกให้ตรงขอบตัวอักษร 2 ไบต์)"""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16", "replace")
+    n = len(data)
+    nul = data.count(b"\x00")
+    if n < 4 or nul * 20 < n:
+        return None
+    even, odd = data[0::2].count(b"\x00"), data[1::2].count(b"\x00")
+    if max(even, odd) * 10 < nul * 9:  # ปนกับข้อความธรรมดา = ไม่ใช่ UTF-16 ล้วน
+        return None
+    chunk = data[1:] if offset % 2 else data
+    if offset % 2:
+        even, odd = odd, even
+    return chunk.decode("utf-16-be" if even > odd else "utf-16-le", "replace")
+
+
 def qa_text(path: Path, cap: int = QA_READ_CAP) -> str:
-    """อ่านท้ายไฟล์ log เป็นข้อความ: utf-8 ก่อน ไม่ได้ = รหัสหน้าเครื่อง (Windows mbcs) · ตัดสี ANSI · บรรทัดที่ถูกเขียนทับด้วย \\r เหลือแค่ข้อความสุดท้าย"""
+    """อ่านท้ายไฟล์ log เป็นข้อความ: UTF-16 (PowerShell `>`) → utf-8 → รหัสหน้าเครื่อง (Windows mbcs) · ตัดสี ANSI · ศูนย์ไบต์ที่ปนมา · บรรทัดที่ถูกเขียนทับด้วย \\r เหลือแค่ข้อความสุดท้าย"""
     try:
         size = path.stat().st_size
+        offset = max(0, size - cap)
         with open(path, "rb") as f:
-            if size > cap:
-                f.seek(size - cap)
+            if offset:
+                f.seek(offset)
             data = f.read()
     except OSError:
         return ""
-    if size > cap:
-        data = data.lstrip(bytes(range(0x80, 0xC0)))  # ตัดไบต์ต่อท้ายตัวอักษรหลายไบต์ที่ถูกหั่นกลาง
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
+    text = qa_utf16(data, offset)
+    if text is None:
+        if offset:
+            data = data.lstrip(bytes(range(0x80, 0xC0)))  # ตัดไบต์ต่อท้ายตัวอักษรหลายไบต์ที่ถูกหั่นกลาง
         try:
-            text = data.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
-        except LookupError:
-            text = data.decode("utf-8", "replace")
-    text = ANSI_RE.sub("", text.replace("\r\n", "\n"))
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = data.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+            except LookupError:
+                text = data.decode("utf-8", "replace")
+    text = ANSI_RE.sub("", text.replace("﻿", "").replace("\x00", "").replace("\r\n", "\n"))
     return "\n".join(ln.split("\r")[-1] for ln in text.split("\n"))
 
 
@@ -2334,6 +2364,8 @@ def qa_verdict(spec: dict, r: dict, text: str) -> str:
     NOEXPECT = exit 0 แต่ไม่พบข้อความที่ต้องมี → มักรันเทสต์ไม่ได้สักข้อ (collected 0 / ไม่ได้ build) ห้ามนับผ่าน"""
     if r["status"] != "DONE":
         return {"TIMEOUT": "TIMEOUT", "HANG": "TIMEOUT", "BIGLOG": "FAIL", "ERROR": "ERROR"}.get(r["status"], "FAIL")
+    if r["rc"] in spec.get("env_exit", ()) and r["rc"] != 0:
+        return "ENV"  # exit code ที่ผู้ใช้ประกาศว่า "สภาพแวดล้อมไม่พร้อม" (เช่น server ไม่ขึ้น) · ยังนับว่าไม่ผ่าน แต่ไม่ใช่ข้อสรุปว่าโค้ดผิด
     if r["rc"] != 0:
         return "FAIL"
     if spec["expect"] and not re.search(spec["expect"], text, re.M):
@@ -2341,7 +2373,7 @@ def qa_verdict(spec: dict, r: dict, text: str) -> str:
     return "PASS"
 
 
-QA_ICON = {"PASS": "✅", "FAIL": "❌", "TIMEOUT": "⏱", "ERROR": "⛔", "NOEXPECT": "⚠️", "FLAKY": "⚠️", "SKIPPED": "⏭", "CHANGED": "⚠️"}
+QA_ICON = {"PASS": "✅", "FAIL": "❌", "TIMEOUT": "⏱", "ERROR": "⛔", "NOEXPECT": "⚠️", "FLAKY": "⚠️", "SKIPPED": "⏭", "CHANGED": "⚠️", "ENV": "🔌"}
 
 
 def qa_summary(q: dict) -> tuple[str, str]:
@@ -2364,7 +2396,8 @@ def qa_summary(q: dict) -> tuple[str, str]:
         why = {"FAIL": f"exit {s.get('rc')}", "TIMEOUT": s.get("why") or "เกินเวลา", "ERROR": s.get("why") or "เปิดคำสั่งไม่ได้",
                "NOEXPECT": f"exit 0 แต่ไม่พบข้อความที่ต้องมี /{s.get('expect', '')}/ → อาจไม่ได้รันเทสต์จริง นับว่าไม่ผ่าน",
                "FLAKY": "ล้มรอบแรกแต่ผ่านรอบหลัง = ผลไม่นิ่ง นับว่าไม่ผ่าน", "SKIPPED": "ข้าม (ชุดก่อนหน้าหยุดการทดสอบ)",
-               "CHANGED": "โค้ดเปลี่ยนระหว่างทดสอบ"}.get(s["verdict"], s["verdict"])
+               "CHANGED": "โค้ดเปลี่ยนระหว่างทดสอบ",
+               "ENV": f"exit {s.get('rc')} = สภาพแวดล้อมไม่พร้อม (ตามที่ env_exit ประกาศ) — ยังไม่ได้ทดสอบโค้ดจริง นับว่าไม่ผ่าน · เตรียมสภาพแวดล้อมแล้วรันใหม่"}.get(s["verdict"], s["verdict"])
         lines.append(f"{ic} {s['name']} — {why}" + (f" · {s['secs']:g} วิ" if s["verdict"] != "SKIPPED" else "") + (f" · log {s['log']}" if s.get("log") else ""))
         lines += [f"    {k}" for k in (s.get("key") or [])[-5:]]
     if q.get("analysis"):
@@ -2501,7 +2534,7 @@ def cmd_qa(a) -> int:
                     r["verdict"], r["key"] = qa_verdict(spec, r, text), qa_key_lines(text)
                     runs.append((r, log))
                     print(f"QA_END {spec['name']} → {r['verdict']} exit={r['rc']} {r['secs']:g}วิ" + (f" ({r['why']})" if r["why"] else ""), flush=True)
-                    if r["verdict"] in ("PASS", "TIMEOUT", "ERROR"):  # ผ่านแล้ว/เกินเวลา/เปิดไม่ได้ ไม่ลองซ้ำ (ซ้ำก็เสียเวลาเปล่า)
+                    if r["verdict"] in ("PASS", "TIMEOUT", "ERROR", "ENV"):  # ผ่านแล้ว/เกินเวลา/เปิดไม่ได้/สภาพแวดล้อมไม่พร้อม ไม่ลองซ้ำ (ซ้ำก็เสียเวลาเปล่า)
                         break
                 r, log = runs[-1]
                 verdict = r["verdict"]

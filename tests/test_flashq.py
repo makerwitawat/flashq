@@ -2911,6 +2911,61 @@ class QaTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("adhoc=FAIL", r.stdout)
 
+    def test_env_exit_is_env_verdict_not_pass_and_not_retried_or_analyzed(self):
+        """exit code ที่ประกาศว่า "สภาพแวดล้อมไม่พร้อม" = ENV (ไม่ผ่านเหมือนกัน แต่บอกชัดว่าไม่ใช่โค้ดผิด · ไม่ลองซ้ำ · ไม่ให้ Flash เดาสาเหตุ)"""
+        env3 = self.py("env3.py", "import sys\nprint('server not ready')\nsys.exit(3)\n")
+        env7 = self.py("env7.py", "import sys\nsys.exit(7)\n")
+        zero = self.py("zero.py", "print('9 passed')\n")
+        self.presets(srv={"cmd": env3, "env_exit": [3, 5], "retry": 2}, other={"cmd": env7, "env_exit": [3]},
+                     fine={"cmd": zero, "env_exit": 3, "expect": r"\d+ passed"})
+        r = self.run_q("qa", "--no-analyze")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("srv=ENV", r.stdout)
+        self.assertIn("other=FAIL", r.stdout)  # exit 7 ไม่อยู่ในรายการ env_exit = ล้มจริง
+        self.assertIn("สภาพแวดล้อมไม่พร้อม", r.stdout)
+        self.assertNotIn("fine=", r.stdout.split("----")[0])  # ชุดที่ผ่านไม่อยู่ในหัวข้อ "ไม่ผ่าน"
+        j = self.job_files()[0]
+        rows = {s["name"]: s for s in j["qa"]["specs"]}
+        self.assertEqual((rows["srv"]["verdict"], rows["srv"]["runs"]), ("ENV", 1))  # retry=2 แต่ไม่ลองซ้ำ
+        self.assertEqual(rows["fine"]["verdict"], "PASS")
+        self.assertFalse(self.args_out.exists())
+        # ค่าผิดรูป = ปฏิเสธก่อนสร้างงาน
+        for bad in ([0], ["x"], [True], [1] * 9, {"a": 1}):
+            self.presets(t={"cmd": "echo x", "env_exit": bad})
+            r = self.run_q("qa", "t", "--no-analyze")
+            self.assertEqual(r.returncode, 1, repr(bad) + r.stdout)
+            self.assertIn("env_exit", r.stdout)
+        # ENV ไม่เรียก analyst แม้ไม่ได้ปิดไว้
+        self.presets(srv={"cmd": env3, "env_exit": [3]})
+        before = len(self.job_files())
+        r = self.run_q("qa", "srv")
+        self.assertIn("srv=ENV", r.stdout)
+        self.assertEqual(len(self.job_files()), before + 1)
+        self.assertFalse(self.args_out.exists())
+
+    def test_log_in_utf16_still_matches_expect(self):
+        """PowerShell 5.1 เขียนไฟล์ด้วย `>` เป็น UTF-16 → expect ต้องยังหาเจอ (ไม่ใช่ NOEXPECT ผิด ๆ) · ข้อความไทยอ่านออก"""
+        w16 = self.py("w16.py", "import sys\nsys.stdout.buffer.write('ผ่านทั้งหมด 12 passed\\r\\n'.encode('utf-16'))\n")
+        self.presets(u16={"cmd": w16, "expect": r"12 passed"}, nothing={"cmd": w16, "expect": r"ไม่มีข้อความนี้"})
+        r = self.run_q("qa", "--no-analyze")
+        self.assertIn("✅ u16", r.stdout)
+        self.assertIn("nothing=NOEXPECT", r.stdout)  # ยังเป็น fail-closed เมื่อไม่พบจริง
+        mod = self.load_mod("flashq_qa_u16")
+        p = self.tmp / "t16.log"
+        for label, raw in [("LE+BOM", "ok ทดสอบ 5 passed\n".encode("utf-16")), ("LE ไม่มี BOM", "ok ทดสอบ 5 passed\n".encode("utf-16-le")),
+                           ("BE ไม่มี BOM", "ok ทดสอบ 5 passed\n".encode("utf-16-be")),
+                           ("ปน UTF-8 นำหน้า", "[build_lock] start\n".encode("utf-8") + "ok 5 passed\n".encode("utf-16-le"))]:
+            p.write_bytes(raw)
+            self.assertIn("5 passed", mod.qa_text(p), label)
+        p.write_bytes("เริ่ม\n5 passed\n".encode("utf-8"))  # UTF-8 ธรรมดาต้องไม่โดนแตะ
+        self.assertEqual(mod.qa_text(p), "เริ่ม\n5 passed\n")
+        # อ่านเฉพาะท้ายไฟล์ใหญ่ที่เริ่มกลางตัวอักษร 2 ไบต์ (offset คี่) ก็ยังอ่านออก
+        big = ("บรรทัด " + "x" * 50 + "\n").encode("utf-16-le") * 40 + "จบ 8 passed\n".encode("utf-16-le")
+        p.write_bytes(big)
+        self.assertIn("8 passed", mod.qa_text(p, cap=len(big) // 2 + 1))
+        self.assertIn("8 passed", mod.qa_text(p, cap=len(big) // 2))
+
     def test_retry_makes_flaky_not_pass_and_failfast_skips_rest(self):
         flaky = self.py("flaky.py", "import os, sys\nif os.path.exists('flaky.mark'):\n    print('1 passed')\n    sys.exit(0)\nopen('flaky.mark', 'w').close()\nprint('1 failed')\nsys.exit(1)\n")
         bad = self.py("bad.py", "import sys\nsys.exit(1)\n")
