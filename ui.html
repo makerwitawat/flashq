@@ -181,19 +181,19 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-tile .k { color: var(--muted); font-size: 0.85rem; }
 .of-tile .v { font-size: 1.35rem; font-weight: 700; line-height: 1.3; }
 .of-tile .s { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
-.of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow: hidden; }
-.of-scene svg { display: block; width: 100%; height: auto; max-height: 82vh; }
-@media (max-width: 720px) {  /* จอเล็ก: ฉากไม่ย่อจนตัวเล็กเกินอ่าน — กว้างขั้นต่ำแล้วเลื่อนซ้าย-ขวาได้ */
-  .of-scene { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* ฉากกว้างเท่ากรอบเสมอ: JS (fitScene) ตั้ง viewBox = กว้างกรอบ ÷ (rem/13) → ตัวหนังสือในภาพโตตามปุ่มซูมเท่าส่วนอื่นของหน้า ไม่หดตามกรอบ · จัดวางไม่ลงต่ำกว่า 840 หน่วยฉาก (ย่อได้แค่ตอนนั้น) · แคบกว่า 36rem = เลื่อนซ้าย-ขวา */
+.of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.of-scene svg { display: block; width: 100%; height: auto; }
+.of-stage { min-width: 36rem; }
+@media (max-width: 720px) {
   .of-scene::before { content: "↔ เลื่อนดูทั้งฉากได้"; display: block; position: sticky; left: 0; padding: 0.25rem 0.6rem; font-size: 0.72rem; color: var(--muted); }
-  .of-scene svg, .of-stage { width: 720px; max-width: none; max-height: none; }
 }
 .of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
 body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
 body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; }
 body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
-body[data-of="2"] .of-scene svg { max-height: calc(100vh - 14rem); }
+body[data-of="2"] .of-scene { max-height: calc(100vh - 14rem); overflow-y: auto; }  /* ฉากสูงกว่าจอ = เลื่อนในกรอบ (ไม่ย่อภาพ) */
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); align-items: start; }  /* การ์ดย่อไม่ถูกยืดสูงตามใบข้าง ๆ */
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }  /* คอลัมน์ไม่ขยายตามข้อความยาว (ไม่ล้นทับการ์ดข้าง ๆ) */
 .of-card.quiet { border-color: var(--quota); }
@@ -693,6 +693,7 @@ function applyZoom() {
   $("zoomReset").textContent = Math.round(zoom * 100) + "%";
   store.set("zoom", zoom);
   layout();
+  document.dispatchEvent(new Event("scenefit"));
 }
 function stepZoom(d) {
   if (d > 0) zoom = ZOOMS.find((z) => z > zoom + 1e-6) ?? ZOOMS[ZOOMS.length - 1];
@@ -703,7 +704,7 @@ function layout() {  /* จำนวนคอลัมน์คิดเป็�
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const w = window.innerWidth / rem;
   document.body.dataset.layout = w >= 112 ? "3" : w >= 62 ? "2" : "1";
-  document.body.dataset.of = w >= 80 ? "2" : "1";
+  document.body.dataset.of = w >= 100 ? "2" : "1";  // 2 คอลัมน์ต้องให้คอลัมน์ฉากกว้างพอ (≥ ~52rem) ไม่งั้นตัวหนังสือในฉากหด
 }
 $("zoomIn").onclick = () => stepZoom(1);
 $("zoomOut").onclick = () => stepZoom(-1);
@@ -1660,7 +1661,16 @@ function person({ seed, hue, pose, mood, x = 0, y = 0, s = 1, sign = false, chec
 }
 
 /* --- ฉาก --- */
-const DW = 190, DH = 188, SCENE_W = 1000, DESK_X0 = 235, DESK_Y0 = 72;
+const DW = 190, DH = 188, DESK_X0 = 235, DESK_Y0 = 72, SCENE_MIN = 840, SCENE_MAX = 1600, SCENE_REM = 13;  // ตัวอักษรเล็กในฉาก 11px ≈ 12px บนหน้าจริงที่ซูม 100%
+let SCENE_W = 1000;  // กว้างของฉาก (หน่วยฉาก = px ที่ตัวอักษรหลัก 16px) — fitScene ปรับตามกรอบจริง
+function fitScene() {  // viewBox กว้าง = กว้างกรอบ ÷ (rem/13) → 1 หน่วยฉากโตตามซูมเท่ากับตัวอักษรของหน้า · true = กว้างเปลี่ยน ต้องวาดฉากใหม่
+  const el = $("ofScene"), cw = el && el.clientWidth;
+  if (!cw) return false;  // แท็บซ่อนอยู่
+  const s = (parseFloat(getComputedStyle(document.documentElement).fontSize) || 14) / SCENE_REM;
+  const w = Math.max(SCENE_MIN, Math.min(SCENE_MAX, Math.round(cw / s / 8) * 8));
+  if (w === SCENE_W) return false;
+  SCENE_W = w; return true;
+}
 function assignDesks(runs, N) {
   const out = new Array(N).fill(null);
   for (const r of runs) { const s = (r.slot | 0) - 1; if (s >= 0 && s < N && !out[s]) out[s] = r; }
@@ -1742,19 +1752,20 @@ function deskSVG(i, cx, cy, r, c) {
 
 function decorSVG(H) {  // ของตกแต่งห้อง (นิ่ง ไม่เกี่ยวกับสถานะ) — ผนัง หน้าต่าง ชั้นหนังสือ ไวท์บอร์ด ภาพ ตู้น้ำ ต้นไม้ พื้นไม้
   let planks = "";
+  const dx = Math.round(Math.max(-80, (SCENE_W - 1000) / 2));  // ของบนผนังกลาง ๆ ขยับให้อยู่กลางผนังเมื่อฉากกว้างกว่า/แคบกว่า 1000
   for (let y = 98; y < H; y += 42) planks += `M0 ${y}H${SCENE_W}`;
   const win = (x) => `<rect class="of-sky" x="${x}" y="10" width="60" height="38" rx="3"/><circle cx="${x + 46}" cy="22" r="5" fill="#ffd966" opacity=".9"/><path d="M${x + 8} 36q4-6 10-2q4-5 10 0q5 0 6 5H${x + 6}z" fill="#fff" opacity=".85"/><path class="of-frame" style="stroke-width:2" d="M${x} 29H${x + 60}M${x + 30} 10V48"/><rect class="of-frame" x="${x}" y="10" width="60" height="38" rx="3"/><rect class="of-deskf" x="${x - 3}" y="48" width="66" height="4" rx="1.5"/>`;
   const BK = ["#e57373", "#64b5f6", "#81c784", "#ffd54f", "#ba68c8", "#4db6ac", "#ff8a65", "#90a4ae"];
   const books = (x, base, n) => Array.from({ length: n }, (_, i) => `<rect x="${x + i * 8}" y="${base - 14 - (i % 3) * 3}" width="7" height="${14 + (i % 3) * 3}" rx="1" fill="${BK[i % 8]}"/>`).join("");
   const art = (x, c) => `<rect class="of-wb" x="${x}" y="12" width="32" height="28" rx="2"/><path d="M${x + 3} 37l9-12l6 7l5-4l6 9z" fill="${c}" opacity=".8"/><circle cx="${x + 24}" cy="20" r="3" fill="#ffd966"/><rect class="of-frame" style="stroke-width:2" x="${x}" y="12" width="32" height="28" rx="2"/>`;
   return `<path class="of-plank" d="${planks}"/><rect class="of-base" y="52" width="${SCENE_W}" height="6"/>
-    ${win(300)}${win(380)}${win(460)}
-    <path class="of-curt" d="M292 8h16q-3 20 3 42h-19z"/><path class="of-curt" d="M528 8h-16q3 20-3 42h19z"/>
     <rect class="of-deskf" x="14" y="4" width="76" height="54" rx="3"/><rect class="of-wb" x="18" y="8" width="68" height="46" rx="2" style="opacity:.45"/>
     ${books(20, 28, 8)}${books(20, 52, 8)}<rect class="of-deskf" x="16" y="29" width="72" height="3"/><rect class="of-deskf" x="16" y="53" width="72" height="3"/>
+    <g transform="translate(${dx} 0)">${win(300)}${win(380)}${win(460)}
+    <path class="of-curt" d="M292 8h16q-3 20 3 42h-19z"/><path class="of-curt" d="M528 8h-16q3 20-3 42h19z"/>
     <rect class="of-wb" x="590" y="8" width="130" height="42" rx="3"/><rect class="of-frame" style="stroke-width:2" x="590" y="8" width="130" height="42" rx="3"/>
     <path d="M600 20h50M600 30h36M600 40h44" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" opacity=".7"/><rect x="660" y="22" width="8" height="8" fill="#fde68a"/><rect x="674" y="22" width="8" height="8" fill="#fca5a5"/><rect x="688" y="22" width="8" height="8" fill="#a7f3d0"/><text class="of-tm" x="708" y="44" text-anchor="end" style="font-size:9px">คิว→ทำ→ตรวจ</text>
-    ${art(745, "#6ab04c")}${art(790, "#4b7bec")}
+    ${art(745, "#6ab04c")}${art(790, "#4b7bec")}</g>
     <g><rect class="of-wb" x="30" y="122" width="30" height="46" rx="4"/><rect x="33" y="98" width="24" height="28" rx="9" fill="#9fd3ff" opacity=".75" stroke="#7fb8e0"/><circle cx="45" cy="146" r="2.6" fill="#1d4ed8"/><rect class="of-deskf" x="28" y="168" width="34" height="5" rx="2"/></g>
     <g><path d="M36 328h38l-5 26h-28z" fill="#a0653a"/><circle cx="55" cy="312" r="15" fill="#3f9a57"/><circle cx="42" cy="320" r="11" fill="#58b36e"/><circle cx="68" cy="320" r="11" fill="#4aa862"/></g>`;
 }
@@ -1799,7 +1810,7 @@ function guardSceneRows(m) {
 }
 function sceneSVG(m) {
   // จัดโต๊ะ: ≤5 ช่อง = แถวเดียว · มากกว่านั้นแบ่งแถวให้เท่ากัน (≤5 ต่อแถว) · กว้างเกินพื้นที่ = ย่อโต๊ะทั้งชุด (ไม่ล้นขอบ/ไม่เหลือแถวโหรงเหรง)
-  const areaW = SCENE_W - DESK_X0 - 10, rows = Math.max(1, Math.ceil(m.N / 5)), cols = Math.max(1, Math.ceil(m.N / rows));
+  const areaW = SCENE_W - DESK_X0 - 10, maxCols = Math.max(1, Math.floor(areaW / (DW * 0.75))), rows = Math.max(1, Math.ceil(m.N / maxCols)), cols = Math.max(1, Math.ceil(m.N / rows));  // แถวละไม่เกินที่ย่อโต๊ะได้ ≥75% (ฉาก 1000 = 5 โต๊ะ)
   const ds = Math.min(1, areaW / (cols * DW)), dw = DW * ds, dh = DH * ds;
   const ox = DESK_X0 + Math.max(0, (areaW - cols * dw) / 2);
   const deskX = (i) => ox + (i % cols) * dw, deskY = (i) => DESK_Y0 + Math.floor(i / cols) * dh, deskPX = (i) => deskX(i) + 72 * ds;
@@ -1850,7 +1861,7 @@ function sceneSVG(m) {
   g += workerStrip(stripY + 290, "ofQa", "🧪", "นักทดสอบ", "qa", 150, "นักทดสอบ (flashq รันชุดทดสอบเอง · อ่านอย่างเดียว)", qaRows(m));
   g += workerStrip(stripY + 384, "ofDoc", "📝", "ช่างเอกสาร", "doc", 35, "ช่างเอกสาร (Flash แก้ไฟล์เอกสาร · flashq ตรวจผล)", docRows(m));
   g += loungeSVG(m.lounge, stripY + 478);
-  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 572);
+  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 572, Math.max(1, Math.min(5, Math.floor((SCENE_W - 415) / 190))));  // กี่เสาที่พอดีก่อนถึงข้อความหัวแถบ (1000 = 3)
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || ""), kico = isDoc(j) ? "📝" : isQa(j) ? "🧪" : isSleuth(j) ? "🕵️" : isVerify(j) ? "🔍" : "";  // ไอคอนชนิดงานข้างเลขคิว (งานแก้ตามแผนไม่มี)
@@ -1870,7 +1881,7 @@ function sceneSVG(m) {
 
 /* ห้องพัก: โซฟา 1 ตัว 5 ที่นั่งให้คนประจำออฟฟิศ (ผู้ตรวจ · ผู้สืบ · ยาม · นักทดสอบ · ช่างเอกสาร) — ไม่มีงาน = นั่ง · ว่างนานเกิน LOUNGE_SLEEP_MS = หลับ · ไปทำงาน = เบาะว่าง */
 function loungeSVG(lounge, sy) {
-  const SW = 100, x0 = DESK_X0 + 24, W = 44 + lounge.length * SW, rest = lounge.filter((p) => !p.away);
+  const SW = Math.max(70, Math.min(100, Math.floor((SCENE_W - DESK_X0 - 24 - 44 - 200) / lounge.length))), x0 = DESK_X0 + 24, W = 44 + lounge.length * SW, rest = lounge.filter((p) => !p.away);
   let g = `<g><title>${esc("ห้องพัก: ใครไม่มีงานจะมานั่งที่โซฟา · ว่างเกิน 10 นาทีจะหลับ · ไปทำงานแล้วเบาะว่าง")}</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
     <rect class="of-sofa" x="${x0}" y="${sy + 10}" width="${W}" height="40" rx="12"/><rect class="of-sofab" x="${x0 + 6}" y="${sy + 62}" width="${W - 12}" height="7" rx="3"/>`;
   lounge.forEach((p, i) => {
@@ -1893,12 +1904,12 @@ function loungeSVG(lounge, sy) {
 }
 
 /* เสาธงของเป้าหมาย: ธงขึ้นตามสัดส่วนเกณฑ์ที่ผ่าน · ผ่านครบ = ยอดเสา โบก+ฉลอง · รอคุณตรวจ = เหลือง · หยุด = แดงครึ่งเสา */
-function goalPolesSVG(goals, sy) {
+function goalPolesSVG(goals, sy, show = 3) {
   let g = `<g><title>เสาธงเป้าหมาย (/flash-goal)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
     <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🚩 เป้าหมาย</text>
-    <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${goals.length > 3 ? `แสดง 3 จาก ${goals.length} เรื่อง` : "ธงสูงตามเกณฑ์ที่ผ่าน"}</text>`;
+    <text class="of-tm" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${goals.length > show ? `แสดง ${show} จาก ${goals.length} เรื่อง` : "ธงสูงตามเกณฑ์ที่ผ่าน"}</text>`;
   const top = sy + 10, bot = sy + 58;
-  goals.slice(0, 3).forEach((gl, k) => {
+  goals.slice(0, show).forEach((gl, k) => {
     const x = DESK_X0 + 30 + k * 190, v = gl.verdict, ratio = gl.machine ? gl.passed / gl.machine : 0;
     const fy = v === "DONE" || v === "DONE_NEEDS_USER" ? top : v === "STOP" ? (top + bot) / 2 : v === "CANCELLED" ? bot : bot - (bot - top) * ratio;
     const col = v === "DONE" ? "#16a34a" : v === "DONE_NEEDS_USER" ? "#eab308" : v === "STOP" ? "#dc2626" : v === "CANCELLED" ? "#9ca3af" : "#2563eb";
@@ -2081,6 +2092,7 @@ function setHTML(id, h) {
 }
 function officeUpdate() {
   if (view !== "office" || !state) return;
+  const fit = fitScene();  // กรอบ/ซูมเปลี่ยน = วาดเฉพาะฉากใหม่ตามความกว้างใหม่
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
     m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
@@ -2091,7 +2103,7 @@ function officeUpdate() {
     applyCompact();  // ป้ายปุ่มย่อ/ขยายบนการ์ดที่สร้างใหม่
     $("ofQueue").innerHTML = queueHTML(m);
     $("ofRecent").innerHTML = recentHTML();
-  }
+  } else if (fit) $("ofScene").innerHTML = sceneSVG(m);
   const now = Date.now();
   setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
   setStrip("ofInsp", stripHead("🔍", "ผู้ตรวจ", inspCount(m)), inspRows(m)); setStrip("ofGuard", guardHead(m), guardSceneRows(m));
@@ -2186,6 +2198,12 @@ function setView(v) {
   if (v === "office" && state) { ofSig = ""; officeUpdate(); officePoll(); }
 }
 document.querySelectorAll("#viewTabs button").forEach((b) => { b.onclick = () => setView(b.dataset.view); });
+{  // กรอบฉากเปลี่ยนขนาด (ย่อ/ขยายหน้าต่าง · สลับคอลัมน์ · ซูม) → ปรับความกว้างฉากตาม (รวมเป็นเฟรมละครั้ง)
+  let raf = 0;
+  const refit = () => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; officeUpdate(); }); };
+  document.addEventListener("scenefit", refit);
+  if (window.ResizeObserver) new ResizeObserver(refit).observe($("ofScene"));
+}
 function openLogFromOffice(id) { setView("dash"); openLog(id); }
 $("officeView").addEventListener("click", async (e) => {
   const w = e.target.closest("button[data-ofwhy]"); if (!w) return;
