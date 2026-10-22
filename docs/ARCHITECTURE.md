@@ -28,6 +28,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | รันงาน | `ensure_live_server` · `wait_session` · `server_activity` (tool/subagent จาก server) · `ShellWatch` (ตัวเฝ้า shell) · `run_once` · `cmd_run` |
 | นักทดสอบ | `qa_detect`/`qa_suggest_lines` (เดาชุดจากไฟล์ ไม่รัน) · `qa_spec`/`qa_specs` (ตรวจ+ปรับชุดจาก `.flash.json`/`--cmd`) · `qa_exec` (รันคำสั่งเอง + ฆ่าทั้งต้นเมื่อ timeout/cancel) · `qa_verdict` (fail-closed จาก exit code + `expect`) · `qa_summary` · `qa_analyze` (Flash `flash-tester` อ่าน log เฉพาะตอนล้ม — ไม่เปลี่ยนคำตัดสิน) · `cmd_qa` |
 | ช่างเอกสาร | `doc_spec` (ตรวจชุดจาก `.flash.json` · paths กว้างเกิน/ครอบไฟล์ต้องห้าม = ปฏิเสธ) · `doc_guard`/`doc_before`/`doc_changed` (snapshot ก่อน-หลัง · ตรวจการลบไฟล์เองเพราะ `snapshot_changes` ไม่เห็น) · `doc_verdict` (fail-closed: ผ่านได้ทางเดียว `DRAFT` · `doc_secrets`/`doc_badrefs`) · `doc_backup`/`doc_restore` (สำรองไฟล์ที่สกปรกก่อนรัน → `~/.flashq/docbak/<job>` · ย้อนเฉพาะไฟล์ที่แตะ) · `doc_finalize` (`OUTSIDE`/`SECRET` ย้อนทันที) · `doc_since` · `cmd_doc` · `doc_review`/`cmd_doc_review` (รับ/ทิ้ง) · `doc_diff` (diff ใน Python เห็นไฟล์ใหม่) · `doc_row` (ส่วนที่หน้าเว็บใช้ ไม่ส่ง backup) |
+| token/ค่าใช้จ่าย | ฝั่ง Claude: `scan_transcript` · `usage_summary` · `cmd_usage` (ผลเก็บ `~/.flashq/usage/<แผน>.json`) · ฝั่ง Flash: `scan_flash_log` (log ของงาน · แคชตาม mtime/size) · `oc_child_usage` (subagent ใน `opencode.db` อ่านอย่างเดียว) · `claude_overhead_usd` · `flash_usage_summary` · `cmd_usage_flash` |
 | ขนาดแผน | `PLAN_SOFT`/`PLAN_HARD` · `plan_lint` |
 | CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
@@ -50,7 +51,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ในโปรเจกต์: `.flash.json` · แผน `docs/plans/PLAN_*FLASH*.md` · เป้าหมาย `GOAL_*.md` · สถานะธง `.tmp/flashq-goal/` (base commit + ลายนิ้วมือเกณฑ์)
 
 ## API ของหน้าเว็บ (127.0.0.1 เท่านั้น)
-- GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans` (คืน `qa_presets`/`doc_presets` ด้วย) · `/api/doc_diff?id=` (diff ของร่างเอกสาร)
+- GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans` (คืน `qa_presets`/`doc_presets` ด้วย) · `/api/flash_usage?days=` (สรุป token/USD ของ Flash + ประมาณการประหยัด · `flash_usage_summary`) · `/api/doc_diff?id=` (diff ของร่างเอกสาร)
 - POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/goal` · `/api/switch` · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
 - คำสั่งที่หน้าเว็บสั่งรัน (`submit`/`retry`) สร้าง argv เป็น list (`build_run_argv`) แล้ว `spawn_run` แบบ detached ไม่ผ่าน shell
 

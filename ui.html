@@ -429,6 +429,12 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
       <div class="ph"><h2>สถิติ</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button><button class="ico" data-max title="ขยายเต็มจอ">⛶</button></div>
       <div class="pb" id="stats"></div>
     </section>
+    <section class="panel" data-panel="flashusage">
+      <div class="ph"><h2>🪙 token ของ Flash · ประหยัด</h2><span class="sp"></span>
+        <select id="fuDays" title="ช่วงเวลาที่สรุป"><option value="7">7 วัน</option><option value="30">30 วัน</option><option value="90">90 วัน</option></select>
+        <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+      <div class="pb" id="flashUsage"><div class="empty">กำลังโหลด…</div></div>
+    </section>
     <section class="panel" data-panel="tools">
       <div class="ph"><h2>ล้างประวัติ + log เก่า</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb">
@@ -1910,6 +1916,36 @@ function usageLineHTML(u) {
   const tip = `นับจาก transcript ของ Claude Code ที่อ้างถึงแผนนี้ (${u.sessions} session${u.plans > 1 ? ` · ${u.plans} แผน` : ""}) · ราคาโดยประมาณ · สัดส่วนคิดจาก ${u.pct_by === "usd" ? "USD" : "token"} · อัปเดตด้วย flashq usage <แผน>` + (u.at ? ` · ล่าสุด ${u.at}` : "");
   return `<div class="of-line muted of-full" title="${esc(tip)}">🪙 Claude ใช้ ~${tok} token (~$${Number(u.usd || 0).toFixed(2)})${pct ? " · " + esc(pct) : ""}</div>`;
 }
+/* สรุป token ของ Flash (log งานที่รันผ่าน flashq + subagent ใน opencode.db) + ประมาณการประหยัดเทียบ Claude — ดึงจาก /api/flash_usage ไม่ผูกกับรอบ refresh 3 วินาที */
+const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0);
+const usd = (n) => "$" + Number(n || 0).toFixed(2);
+function flashUsageHTML(s) {
+  const t = s.total || {};
+  if (!s.jobs) return `<div class="empty">ยังไม่มีงานที่มีข้อมูล token ใน ${s.since_days} วันล่าสุด</div>`;
+  const sub = s.subagent || {};
+  const subNote = sub.included ? `ในนั้นเป็น subagent ${fmtTok(sub.tokens)} (${sub.sessions} session)` : "ยังไม่รวม subagent (ไม่พบฐานข้อมูลของ opencode) ตัวเลขจึงต่ำกว่าจริง";
+  const cmp = (s.compare || []).map((c) => `<tr><td class="mono">${esc(c.model.replace(/^claude-/, ""))}</td><td>${usd(c.equiv_usd)}</td>
+    <td><b>${usd(c.saved_net)}</b></td><td>${c.pct_net}%</td></tr>`).join("");
+  const ov = s.claude_overhead || {};
+  const tbl = (title, rows) => rows && rows.length ? `<div class="table-wrap"><table class="stats"><tr><th>${title}</th><th>งาน</th><th>token</th><th>จ่ายจริง</th></tr>
+    ${rows.map((g) => `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.jobs}</td><td>${fmtTok(g.tokens)}</td><td>${usd(g.usd)}</td></tr>`).join("")}</table></div>` : "";
+  return `<div style="font-size:1.05em"><b>${fmtTok(t.tokens)}</b> token · จ่ายจริง <b>${usd(t.usd)}</b> <span class="muted">(${s.jobs} งาน ใน ${s.since_days} วัน)</span></div>
+    <div class="muted" style="font-size:0.85em">in ใหม่ ${fmtTok(t.in)} · cache เขียน ${fmtTok(t.cache_write)} · cache อ่าน ${fmtTok(t.cache_read)} · out ${fmtTok(t.out)} · ${subNote}${s.jobs_no_data ? ` · อีก ${s.jobs_no_data} งานไม่มีข้อมูล` : ""}</div>
+    ${cmp ? `<div class="table-wrap" style="margin-top:0.5rem"><table class="stats"><tr><th>ถ้า Claude ทำเอง</th><th>ประมาณ</th><th>ประหยัด</th><th></th></tr>${cmp}</table></div>
+    <div class="muted" style="font-size:0.8em" title="ค่า Claude ที่หักมาจากผล flashq usage <แผน> ที่เคยรันไว้เท่านั้น — session ของ Claude ที่ไม่เคยรันคำสั่งนี้ไม่ถูกนับ ตัวเลขประหยัดจึงเป็นค่าประมาณที่ค่อนข้างสูง">ประมาณการ: สมมติ Claude ใช้ token เท่ากัน (จริง ๆ มักใช้น้อยกว่า) · หักค่า Claude ที่ยังใช้วางแผน/ตรวจ ${usd(ov.usd)} (วัดได้ ${ov.sessions || 0} session) — รัน <span class="mono">flashq usage &lt;แผน&gt;</span> เพื่อให้นับครบ</div>` : ""}
+    <div style="height:0.5rem"></div>${tbl("วัน", s.by_day)}<div style="height:0.4rem"></div>${tbl("โปรเจกต์", s.by_project)}`;
+}
+async function loadFlashUsage() {
+  const days = $("fuDays").value || "30";
+  try {
+    const r = await fetch(`/api/flash_usage?days=${encodeURIComponent(days)}`, { cache: "no-store" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    setHTML("flashUsage", flashUsageHTML(d));
+  } catch (e) { setHTML("flashUsage", `<div class="empty">โหลดสรุป token ไม่ได้: ${esc(e.message || e)}</div>`); }
+}
+$("fuDays").value = store.get("fuDays", "30");
+$("fuDays").onchange = () => { store.set("fuDays", $("fuDays").value); loadFlashUsage(); };
 function planTrailHTML(r) {
   const t = r.trail;
   if (!t || !t.plan) return "";
@@ -2227,6 +2263,8 @@ setView(view);
 applyTheme(); notifyLabel(); soundLabel(); applyZoom();
 refresh();
 setInterval(refresh, 3000);
+loadFlashUsage();
+setInterval(() => { if (!document.hidden) loadFlashUsage(); }, 120000);
 </script>
 </body>
 </html>

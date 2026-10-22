@@ -760,6 +760,23 @@ class FlashqTest(unittest.TestCase):
             time.sleep(0.3)
         self.fail(f"งาน {jid} ไม่เป็น {want} ภายใน {sec} วิ")
 
+    def test_ui_flash_usage_endpoint(self):
+        """ui: /api/flash_usage สรุป token ของ Flash (อ่านอย่างเดียว) · days ผิด = 400 · หน้าเว็บมีการ์ดสรุป"""
+        self.env["FLASHQ_OPENCODE_DB"] = str(self.tmp / "no_such.db")  # กันไปอ่านฐานข้อมูล opencode จริงของผู้ใช้
+        (self.home / "jobs").mkdir(parents=True)
+        log = self.tmp / "a.jsonl"
+        log.write_text(json.dumps({"type": "step_finish", "sessionID": "S", "part": {"cost": 0.5, "tokens": {
+            "input": 10, "output": 2, "reasoning": 1, "cache": {"read": 100, "write": 0}}}}) + "\n", encoding="utf-8")
+        (self.home / "jobs" / "j1.json").write_text(json.dumps({"id": "j1", "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                                "project": str(self.proj), "logs": [str(log)], "kind": "work"}), encoding="utf-8")
+        base = self.start_ui()
+        code, body = self.http(base + "/api/flash_usage?days=7")
+        d = json.loads(body)
+        self.assertEqual(code, 200, body)
+        self.assertEqual((d["jobs"], d["total"]["tokens"], d["subagent"]["included"]), (1, 113, False))
+        self.assertEqual(self.http(base + "/api/flash_usage?days=abc")[0], 400)
+        self.assertIn('id="flashUsage"', self.http(base + "/")[1])
+
     def test_ui_submit_retry_plans(self):
         """ui: รายการแผน · ส่งงาน (ตรวจค่า · token ผิด = 403) · สั่งซ้ำ — งานวิ่งผ่านคิวจริงด้วย opencode ปลอม"""
         with socket.socket() as s:  # server opencode ที่ไม่มีใคร listen — กันไปแตะ 4096 ของจริง
@@ -2569,6 +2586,86 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("usage", "docs/plans/PLAN_X.md", env={"FLASHQ_CLAUDE_HOME": str(self.tmp / "empty")})
         self.assertEqual(r.returncode, 1)
         self.assertIn("sessions=0", r.stdout)
+
+    def test_usage_flash_sums_logs_and_subagents(self):
+        """`flashq usage --flash`: รวม step_finish ใน log ของงานที่รันผ่าน flashq (out = output+reasoning) + subagent (session ลูกทุกชั้นใน opencode.db ·
+        session หลักไม่นับซ้ำ) · --since ตัดตามวันที่สั่งงาน · กรองโปรเจกต์ได้ · ไม่มี DB = สรุปจาก log อย่างเดียว + บอกว่าต่ำกว่าจริง
+        · ประมาณการ Claude ทำเอง = token เท่ากันคูณราคาในตาราง หักค่า Claude ที่เคยวัดด้วย flashq usage <แผน> (session ซ้ำนับครั้งเดียว)"""
+        import sqlite3
+        mod = self.load_mod("flashq_usage_flash")
+        (self.home / "jobs").mkdir(parents=True, exist_ok=True)
+        (self.home / "usage").mkdir(parents=True, exist_ok=True)
+        logs = self.tmp / "oclogs"
+        logs.mkdir()
+
+        def fin(sid, i, o, rs, cr, cw, cost):
+            return json.dumps({"type": "step_finish", "sessionID": sid, "part": {"type": "step-finish", "cost": cost,
+                               "tokens": {"total": i + o + rs + cr + cw, "input": i, "output": o, "reasoning": rs, "cache": {"read": cr, "write": cw}}}})
+
+        (logs / "a.jsonl").write_text("\n".join([json.dumps({"type": "step_start"}), fin("S1", 100, 10, 5, 1000, 20, 0.01),
+                                                 json.dumps({"type": "tool_use", "part": {"note": "step_finish อยู่ในข้อความ"}}),
+                                                 fin("S1", 50, 5, 0, 500, 0, 0.005)]) + "\n", encoding="utf-8")
+        (logs / "old.jsonl").write_text(fin("S9", 1000, 0, 0, 0, 0, 1.0) + "\n", encoding="utf-8")
+        mk = lambda jid, created, project, lg, **kw: (self.home / "jobs" / f"{jid}.json").write_text(  # noqa: E731
+            json.dumps({"id": jid, "created": created, "project": str(project), "logs": [str(logs / lg)] if lg else [], "kind": "work",
+                        "model": "p/m", **kw}), encoding="utf-8")
+        recent = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))
+        mk("j1", recent, self.proj, "a.jsonl", session="S1")
+        mk("j2", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 40 * 86400)), self.proj, "old.jsonl")
+        mk("j3", recent, self.tmp / "other", "")  # ไม่มี log = นับเป็น "ไม่มีข้อมูล"
+        db = self.tmp / "oc.db"
+        con = sqlite3.connect(db)
+        con.executescript("create table session (id text primary key, parent_id text); create table message (id text, session_id text, data text);")
+        con.executemany("insert into session values (?,?)", [("S1", None), ("C1", "S1"), ("C2", "C1"), ("X", None)])
+        am = lambda i, o, rs, cr, cw, cost, role="assistant": json.dumps({"role": role, "cost": cost, "tokens": {  # noqa: E731
+            "input": i, "output": o, "reasoning": rs, "cache": {"read": cr, "write": cw}}})
+        con.executemany("insert into message values (?,?,?)", [
+            ("m1", "S1", am(99999, 99999, 0, 0, 0, 99.0)),  # session หลัก: มาจาก log แล้ว → ห้ามนับซ้ำ
+            ("m2", "C1", am(10, 2, 1, 100, 0, 0.002)), ("m3", "C1", am(777, 7, 0, 0, 0, 7.0, role="user")),
+            ("m4", "C2", am(20, 4, 0, 200, 0, 0.003)), ("m5", "X", am(5555, 0, 0, 0, 0, 5.0))])  # X = ไม่ใช่ลูกของงานใด
+        con.commit()
+        con.close()
+        (self.home / "config.json").write_text(json.dumps({"flash_compare": ["claude-sonnet-5-5", "claude-nope"],
+                                                           "prices": {"claude-sonnet-5-5": {"in": 1e6, "out": 1e6, "cache_read": 1e5, "cache_write": 2e6}}}), encoding="utf-8")
+        (self.home / "usage" / "PLAN_X.json").write_text(json.dumps({"project": str(self.proj), "session_list": [
+            {"id": "s-a", "first": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), "usd": 5.0},
+            {"id": "s-old", "first": "2020-01-01T00:00:00", "usd": 50.0}]}), encoding="utf-8")
+        (self.home / "usage" / "PLAN_Y.json").write_text(json.dumps({"project": str(self.proj), "session_list": [
+            {"id": "s-a", "first": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), "usd": 5.0}]}), encoding="utf-8")  # session ซ้ำข้ามแผน
+        mod.JOBS, mod.USAGE_DIR, mod.CONFIG, mod.OC_DB = self.home / "jobs", self.home / "usage", self.home / "config.json", db
+        s = mod.flash_usage_summary(30)
+        # in = 100+50 + 10+20 · out = (10+5)+5 + (2+1)+4 · cache อ่าน = 1500 + 300 · cache เขียน = 20
+        t = s["total"]
+        self.assertEqual((s["jobs"], s["jobs_no_data"]), (1, 1))
+        self.assertEqual((t["in"], t["out"], t["cache_read"], t["cache_write"], t["tokens"]), (180, 27, 1800, 20, 2027))
+        self.assertAlmostEqual(t["usd"], 0.02, places=6)
+        self.assertEqual(s["subagent"], {"sessions": 2, "usd": 0.005, "tokens": 337, "included": True})
+        self.assertEqual([c["model"] for c in s["compare"]], ["claude-sonnet-5-5"])  # ไม่รู้ราคา = ข้าม
+        c = s["compare"][0]  # 180×1 + 27×1 + 1800×0.1 + 20×2 = 427 (ราคาต่อ token ตามที่ตั้ง)
+        self.assertEqual((c["equiv_usd"], c["saved_gross"], c["saved_net"]), (427.0, 426.98, 421.98))
+        self.assertEqual(s["claude_overhead"], {"usd": 5.0, "sessions": 1})
+        self.assertEqual([g["name"] for g in s["by_project"]], [self.proj.name])
+        self.assertEqual(s["by_kind"][0]["name"], "work")
+        s60 = mod.flash_usage_summary(60)
+        self.assertEqual((s60["jobs"], s60["total"]["in"]), (2, 180 + 1000))
+        self.assertEqual(mod.flash_usage_summary(30, str(self.tmp / "other"))["jobs"], 0)
+        # ไม่มี DB → log หลักอย่างเดียว
+        mod.OC_DB = self.tmp / "nope.db"
+        s = mod.flash_usage_summary(30)
+        self.assertEqual((s["total"]["tokens"], s["subagent"]["included"]), (150 + 20 + 1500 + 20, False))
+        # CLI
+        env = {"FLASHQ_OPENCODE_DB": str(db)}
+        r = self.run_q("usage", "--flash", "--since", "30", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("1 งาน (อีก 1 งานไม่มีข้อมูล token)", r.stdout)
+        self.assertIn("USAGE_FLASH jobs=1 tokens=2027 usd=0.02 claude_equiv=427.00 saved_net=421.98", r.stdout)
+        r = self.run_q("usage", "--flash", env={"FLASHQ_OPENCODE_DB": str(self.tmp / "nope.db")})
+        self.assertIn("ยังไม่รวม token ของ subagent", r.stdout)
+        r = self.run_q("usage", "--flash", str(self.tmp / "no_such_dir"), env=env)
+        self.assertEqual(r.returncode, 1)
+        r = self.run_q("usage", env=env)  # ไม่ใส่อะไรเลย = บอกวิธีใช้ ไม่พัง
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--flash", r.stdout)
 
 
 class NewProjectTest(unittest.TestCase):

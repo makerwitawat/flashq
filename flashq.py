@@ -44,6 +44,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -4436,6 +4437,15 @@ def make_ui_server(port: int = 4097):
                 if not j:
                     return self._send(404, {"error": "ไม่พบงานช่างเอกสาร"})
                 return self._send(200, doc_diff(j))
+            if u.path == "/api/flash_usage":  # สรุป token/USD ของ Flash + ประมาณการประหยัดเทียบ Claude (อ่านอย่างเดียว · แคช 30 วินาที)
+                try:
+                    days = min(max(float(q.get("days", ["30"])[0]), 1), 3650)
+                except ValueError:
+                    return self._send(400, {"error": "days ต้องเป็นตัวเลข"})
+                hit = _FLASH_SUM_CACHE.get(days)
+                if not hit or time.time() - hit[0] > 30:
+                    hit = _FLASH_SUM_CACHE[days] = (time.time(), flash_usage_summary(days))
+                return self._send(200, hit[1])
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
@@ -5105,6 +5115,11 @@ def usage_brief_topic(topic: str) -> dict:
 def cmd_usage(a) -> int:
     """`flashq usage <แผน|โปรเจกต์> [--since วัน]`: สแกน transcript ของ Claude Code ที่ cwd ตรงกับโปรเจกต์ (รวม worktree)
     → session ที่อ้างชื่อแผน รวม token แยกขั้น/โมเดล + USD โดยประมาณ · บันทึก ~/.flashq/usage/<stem>.json ให้ UI"""
+    if a.flash:
+        return cmd_usage_flash(a)
+    if not a.target:
+        print("ต้องระบุไฟล์แผน PLAN_*.md หรือโฟลเดอร์โปรเจกต์ (หรือใช้ --flash เพื่อดู token ฝั่ง Flash)")
+        return 1
     target = Path(a.target)
     is_plan = target.suffix.lower() == ".md" or target.name.upper().startswith("PLAN_")
     if is_plan:
@@ -5177,6 +5192,214 @@ def cmd_usage(a) -> int:
         print(f"\nรวมทั้งโปรเจกต์ (session ไม่ซ้ำ {len(seen_sessions)}): in ใหม่ {fmt_tok(grand['in'] + grand['cache_write'])} · cache อ่าน {fmt_tok(grand['cache_read'])} · out {fmt_tok(grand['out'])} · ~${grand['usd']:.2f}")
     print(f"(ราคาโดยประมาณจากตารางในตัว · ทับได้ที่ {CONFIG} ช่อง prices · บันทึกผลไว้ที่ {USAGE_DIR})")
     return rc
+
+
+# ---------- usage ฝั่ง Flash: token/USD ที่ opencode รายงานของงานที่รันผ่าน flashq + ประมาณการเทียบ Claude ----------
+OC_DB = Path(os.environ.get("FLASHQ_OPENCODE_DB") or (Path.home() / ".local" / "share" / "opencode" / "opencode.db"))  # session ลูก (subagent) ไม่อยู่ใน log หลัก → อ่านจากฐานข้อมูลของ opencode (อ่านอย่างเดียว)
+FLASH_COMPARE_DEFAULT = ("claude-sonnet-5-5", "claude-opus-5-5")  # เทียบกับรุ่นเหล่านี้ (ขอบล่าง/ขอบบน) · ทับได้ใน config.json {"flash_compare": ["claude-...", ...]}
+_FLASH_SUM_CACHE: dict = {}  # days → (เวลา, ผลสรุป) ของ /api/flash_usage
+_FLASH_LOG_CACHE: dict = {}  # path → ((mtime_ns, size), ผลสแกน) — log ของรอบที่จบแล้วไม่เปลี่ยน จึงไม่ต้องอ่านซ้ำทุกครั้งที่หน้าเว็บขอ
+
+
+def scan_flash_log(f: Path) -> dict:
+    """log jsonl ของ opencode 1 รอบ → รวม step_finish: in(input) · out(output+reasoning) · cache_read · cache_write · usd(ตามที่ opencode คิดจากราคาจริง) · steps · sessions"""
+    zero = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0, "sessions": []}
+    try:
+        st = f.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+        hit = _FLASH_LOG_CACHE.get(str(f))
+        if hit and hit[0] == sig:
+            return hit[1]
+        fh = f.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return zero
+    res, sess = dict(zero), set()
+    with fh:
+        for line in fh:
+            if '"step_finish"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            p = e.get("part") or {}
+            t = p.get("tokens")
+            if e.get("type") != "step_finish" or not isinstance(t, dict):
+                continue
+            c = t.get("cache") or {}
+            res["in"] += int(t.get("input") or 0)
+            res["out"] += int(t.get("output") or 0) + int(t.get("reasoning") or 0)  # Claude นับ reasoning รวมใน output
+            res["cache_read"] += int(c.get("read") or 0)
+            res["cache_write"] += int(c.get("write") or 0)
+            res["usd"] += float(p.get("cost") or 0)
+            res["steps"] += 1
+            if e.get("sessionID"):
+                sess.add(e["sessionID"])
+    res["sessions"] = sorted(sess)
+    _FLASH_LOG_CACHE[str(f)] = (sig, res)
+    return res
+
+
+def oc_open_db():
+    """เปิด opencode.db แบบอ่านอย่างเดียว · ไม่มี/เปิดไม่ได้ = None (สรุปจาก log หลักอย่างเดียว)"""
+    try:
+        if OC_DB.is_file():
+            return sqlite3.connect(f"file:{OC_DB.as_posix()}?mode=ro", uri=True, timeout=2)
+    except sqlite3.Error:
+        pass
+    return None
+
+
+def oc_child_usage(con, session_ids: list) -> dict:
+    """token/USD ของ subagent = session ลูกทุกชั้นของ session_ids (assistant message ใน opencode.db) · อ่านไม่ได้ = ศูนย์"""
+    res = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0, "sessions": 0}
+    if con is None or not session_ids:
+        return res
+    try:
+        seen, frontier = set(session_ids), list(session_ids)
+        kids: list = []
+        while frontier:
+            nxt = []
+            for i in range(0, len(frontier), 400):
+                part = frontier[i:i + 400]
+                for (sid,) in con.execute(f"select id from session where parent_id in ({','.join('?' * len(part))})", part):
+                    if sid not in seen:
+                        seen.add(sid)
+                        nxt.append(sid)
+            kids += nxt
+            frontier = nxt
+        res["sessions"] = len(kids)
+        for i in range(0, len(kids), 400):
+            part = kids[i:i + 400]
+            for (d,) in con.execute(f"select data from message where session_id in ({','.join('?' * len(part))})", part):
+                try:
+                    m = json.loads(d)
+                except ValueError:
+                    continue
+                t = m.get("tokens")
+                if m.get("role") != "assistant" or not isinstance(t, dict):
+                    continue
+                c = t.get("cache") or {}
+                res["in"] += int(t.get("input") or 0)
+                res["out"] += int(t.get("output") or 0) + int(t.get("reasoning") or 0)
+                res["cache_read"] += int(c.get("read") or 0)
+                res["cache_write"] += int(c.get("write") or 0)
+                res["usd"] += float(m.get("cost") or 0)
+                res["steps"] += 1
+    except sqlite3.Error:
+        return dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0, "sessions": 0}
+    return res
+
+
+def claude_overhead_usd(since_days: float, project: str) -> dict:
+    """USD ของ Claude ที่ยังใช้วางแผน/ตรวจ (จากผล `flashq usage <แผน>` ที่เคยรันไว้ · session ซ้ำข้ามแผนนับครั้งเดียว) — ไม่เคยรัน = 0"""
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - since_days * 86400))
+    seen, usd = set(), 0.0
+    for f in USAGE_DIR.glob("*.json") if USAGE_DIR.is_dir() else []:
+        u = read_json(f)
+        if project and os.path.normcase(str(u.get("project", ""))) != os.path.normcase(project):
+            continue
+        for r in u.get("session_list") or []:
+            if r.get("id") in seen or (r.get("first") or "") < cutoff:
+                continue
+            seen.add(r.get("id"))
+            usd += float(r.get("usd") or 0)
+    return {"usd": round(usd, 4), "sessions": len(seen)}
+
+
+def flash_usage_summary(since_days: float = 30, project: str = "") -> dict:
+    """token + USD ของ Flash (งานที่รันผ่าน flashq) ใน since_days วันล่าสุด แยกวัน/โปรเจกต์/ชนิดงาน/โมเดล
+    + ประมาณการว่าถ้า Claude ทำ token เท่ากันจะเสียเท่าไร (compare) และประหยัดไปเท่าไร (หักค่า Claude ที่ยังใช้วางแผน/ตรวจ)"""
+    cutoff = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - since_days * 86400))
+    want = os.path.normcase(project) if project else ""
+    con = oc_open_db()
+    total = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0}
+    sub = {"sessions": 0, "usd": 0.0, "tokens": 0}
+    groups = {"by_day": {}, "by_project": {}, "by_kind": {}, "by_model": {}}
+    n_jobs = n_nodata = 0
+    try:
+        for j in jobs():
+            if (j.get("created") or "") < cutoff or (want and os.path.normcase(j.get("project", "")) != want):
+                continue
+            main = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0}
+            sids: set = set()
+            for lp in j.get("logs") or []:
+                r = scan_flash_log(Path(lp))
+                for k in USAGE_KEYS + ("usd", "steps"):
+                    main[k] += r[k]
+                sids.update(r["sessions"])
+            if j.get("session"):
+                sids.add(j["session"])
+            kid = oc_child_usage(con, sorted(sids))
+            if not main["steps"] and not kid["steps"]:
+                n_nodata += 1
+                continue
+            n_jobs += 1
+            row = {k: main[k] + kid[k] for k in USAGE_KEYS + ("usd", "steps")}
+            row["tokens"] = sum(row[k] for k in USAGE_KEYS)
+            for k in USAGE_KEYS + ("usd",):
+                total[k] += row[k]
+            sub["sessions"] += kid["sessions"]
+            sub["usd"] += kid["usd"]
+            sub["tokens"] += sum(kid[k] for k in USAGE_KEYS)
+            for gk, name in (("by_day", (j.get("created") or "")[:10]), ("by_project", Path(j.get("project", "")).name or "-"),
+                             ("by_kind", j.get("kind") or "work"), ("by_model", j.get("model") or "?")):
+                g = groups[gk].setdefault(name, {"name": name, "jobs": 0, "tokens": 0, "usd": 0.0})
+                g["jobs"] += 1
+                g["tokens"] += row["tokens"]
+                g["usd"] += row["usd"]
+    finally:
+        if con is not None:
+            con.close()
+    total["tokens"] = sum(total[k] for k in USAGE_KEYS)
+    over = claude_overhead_usd(since_days, project)
+    table = price_table()
+    names = read_json(CONFIG).get("flash_compare") or list(FLASH_COMPARE_DEFAULT)
+    compare = []
+    for name in names if isinstance(names, list) else []:
+        c = usage_cost(total, str(name), table)
+        if c is None:
+            continue
+        compare.append({"model": name, "equiv_usd": round(c, 2), "saved_gross": round(c - total["usd"], 2),
+                        "saved_net": round(c - total["usd"] - over["usd"], 2),
+                        "pct_net": round(100 * (c - total["usd"] - over["usd"]) / c) if c > 0 else 0})
+    def rows(gk: str, key=lambda g: -g["usd"]) -> list:
+        return [dict(g, usd=round(g["usd"], 4)) for g in sorted(groups[gk].values(), key=key)]
+    return {"at": now(), "since_days": since_days, "project": project, "jobs": n_jobs, "jobs_no_data": n_nodata,
+            "total": dict(total, usd=round(total["usd"], 4)), "subagent": dict(sub, usd=round(sub["usd"], 4), included=con is not None),
+            "claude_overhead": over, "compare": compare,
+            "by_day": rows("by_day", key=lambda g: g["name"])[-14:], "by_project": rows("by_project"),
+            "by_kind": rows("by_kind"), "by_model": rows("by_model")}
+
+
+def cmd_usage_flash(a) -> int:
+    """`flashq usage --flash [โปรเจกต์] [--since วัน]`: token/USD ของ Flash จาก log ของงานที่รันผ่าน flashq + ประมาณการประหยัดเทียบ Claude"""
+    proj = ""
+    if a.target or a.project:
+        p = Path(a.project or a.target)
+        if not p.is_dir():
+            print(f"ไม่พบโฟลเดอร์โปรเจกต์ '{p}'")
+            return 1
+        proj = str(p.resolve())
+    s = flash_usage_summary(a.since, proj)
+    t, sb = s["total"], s["subagent"]
+    print(f"Flash ใน {a.since:g} วันล่าสุด{(' · โปรเจกต์ ' + proj) if proj else ''}: {s['jobs']} งาน"
+          + (f" (อีก {s['jobs_no_data']} งานไม่มีข้อมูล token)" if s["jobs_no_data"] else ""))
+    print(f"token ~{fmt_tok(t['tokens'])}: in ใหม่ {fmt_tok(t['in'])} · cache เขียน {fmt_tok(t['cache_write'])} · cache อ่าน {fmt_tok(t['cache_read'])} · out {fmt_tok(t['out'])}"
+          f" · ค่าใช้จ่ายจริงของ Flash ${t['usd']:.2f}")
+    print(f"  ในนั้นเป็น subagent {sb['sessions']} session ~{fmt_tok(sb['tokens'])} token ${sb['usd']:.2f}" if sb["included"]
+          else f"  (ไม่พบ {OC_DB} → ยังไม่รวม token ของ subagent ตัวเลขจึงต่ำกว่าจริง)")
+    for title, key in (("วัน", "by_day"), ("โปรเจกต์", "by_project"), ("ชนิดงาน", "by_kind"), ("โมเดล", "by_model")):
+        if s[key]:
+            print(f"{title}: " + " · ".join(f"{g['name']} {g['jobs']} งาน {fmt_tok(g['tokens'])} ${g['usd']:.2f}" for g in s[key]))
+    ov = s["claude_overhead"]
+    print(f"Claude ที่ยังใช้วางแผน/ตรวจ (จากผล flashq usage ที่เคยรัน {ov['sessions']} session): ~${ov['usd']:.2f}")
+    for c in s["compare"]:
+        print(f"  ถ้า {c['model']} ทำเอง ~${c['equiv_usd']:.2f} → ประหยัด ~${c['saved_net']:.2f} ({c['pct_net']}%) [ก่อนหักค่า Claude ที่ยังใช้ ~${c['saved_gross']:.2f}]")
+    print("(ประมาณการ: สมมติ Claude ใช้ token เท่ากัน ซึ่งปกติ Claude ใช้น้อยกว่า · ราคาจากตารางในตัว ทับได้ที่ config.json ช่อง prices / flash_compare)")
+    best = s["compare"][0] if s["compare"] else {}
+    print(f"USAGE_FLASH jobs={s['jobs']} tokens={t['tokens']} usd={t['usd']:.2f} claude_equiv={best.get('equiv_usd', 0):.2f} saved_net={best.get('saved_net', 0):.2f}")
+    return 0 if s["jobs"] else 1
 
 
 def goal_next_plan(gl: dict, n: int) -> dict:
@@ -6122,7 +6345,8 @@ def main() -> int:
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
     go.set_defaults(fn=cmd_goal)
     us = sp.add_parser("usage", help="โทเคน Claude ต่อแผน: สแกน transcript ของ Claude Code (วางแผน · ตรวจ · รอบแก้) + USD โดยประมาณ")
-    us.add_argument("target", help="ไฟล์แผน PLAN_*.md หรือโฟลเดอร์โปรเจกต์ (= ทุกแผนที่ถูกพูดถึง)")
+    us.add_argument("target", nargs="?", default="", help="ไฟล์แผน PLAN_*.md หรือโฟลเดอร์โปรเจกต์ (= ทุกแผนที่ถูกพูดถึง) · ใช้กับ --flash = กรองเฉพาะโปรเจกต์นี้")
+    us.add_argument("--flash", action="store_true", help="ดู token/USD ฝั่ง Flash (log ของงานที่รันผ่าน flashq + subagent ใน opencode.db) + ประมาณการประหยัดเทียบ Claude")
     us.add_argument("--since", type=float, default=30, help="ย้อนดู transcript กี่วัน (ค่าเริ่มต้น 30)")
     us.add_argument("--project", default="", help="รากโปรเจกต์ (ค่าเริ่มต้น = หาจาก git ของโฟลเดอร์แผน · worktree → checkout หลัก)")
     us.set_defaults(fn=cmd_usage)
