@@ -3169,5 +3169,459 @@ class QaTest(unittest.TestCase):
             mod._fmt_event(line)  # ต้องไม่พัง
 
 
+class DocTest(unittest.TestCase):
+    """ช่างเอกสาร ขั้น 1: ตัวตัดสินด้วยกลไก (doc_spec / doc_verdict) · fail-closed · ไม่เรียกโมเดล"""
+    tearDown, load_mod = FlashqTest.tearDown, FlashqTest.load_mod
+    SPEC = {"name": "docs", "paths": ["docs/**", "README.md"], "brief": "", "timeout_min": 5}
+
+    def setUp(self):
+        FlashqTest.setUp(self)
+        self.mod = self.load_mod("flashq_doc")
+        p = self.proj
+        (p / "docs").mkdir()
+        (p / "src").mkdir()
+        (p / "docs" / "A.md").write_text("# A\nเดิม\n", encoding="utf-8")
+        (p / "docs" / "B.md").write_text("# B\n", encoding="utf-8")
+        (p / "README.md").write_text("# r\nดู `docs/A.md`\n", encoding="utf-8")
+        (p / "src" / "a.py").write_text("x = 1\nprint(x)\n", encoding="utf-8")
+        (p / ".gitignore").write_text(".env\n.tmp/\n", encoding="utf-8")
+        (p / ".env").write_text("K=1\n", encoding="utf-8")
+        self.git("init", "-q", "-b", "main")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "i")
+
+    def git(self, *args):
+        r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=self.proj, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def verdict(self, mutate, spec=None, status="DONE", dirty_before=None):
+        """snapshot ก่อน → (dirty_before ทำให้สกปรกก่อน) → mutate แก้ไฟล์ → snapshot หลัง → doc_verdict"""
+        m, root = self.mod, self.proj
+        if dirty_before:
+            dirty_before()
+        snap0, g0, head0 = m.dirty_snapshot(root), m.doc_guard(root), self.git("rev-parse", "HEAD")
+        texts = m.doc_before(root, snap0)
+        mutate()
+        head1 = self.git("rev-parse", "HEAD")
+        return m.doc_verdict(spec or self.SPEC, {"status": status, "head0": head0, "head1": head1}, root, snap0, m.dirty_snapshot(root), texts, g0, m.doc_guard(root))
+
+    def w(self, rel, text, mode="a"):
+        with open(self.proj / rel, mode, encoding="utf-8", newline="") as f:
+            f.write(text)
+
+    def test_spec_rejects_broad_escaping_or_forbidden_paths(self):
+        m = self.mod
+        ok = m.doc_spec("d", {"paths": ["docs/**", ".\\README.md"], "brief": " สรุป ", "timeout_min": "2"}, 30)
+        self.assertEqual(ok, {"name": "d", "paths": ["docs/**", "README.md"], "brief": "สรุป", "timeout_min": 2.0})
+        self.assertEqual(m.doc_spec("d", ["docs/**"], 30)["paths"], ["docs/**"])  # ย่อ: รายการอย่างเดียว
+        for bad in (["**"], ["*"], ["**/*"], ["../x.md"], ["docs/../../x"], ["/etc/x"], ["C:\\x\\a.md"], ["~/a.md"], [".env*"], [".git/**"], [".flash.json"],
+                    ["**/*.pem"], [""], [], "docs/**", ["docs/**"] * 33, [5]):
+            self.assertIsInstance(m.doc_spec("d", {"paths": bad}, 30), str, bad)
+        self.assertIsInstance(m.doc_spec("d", {"paths": ["a.md"], "brief": "x" * 4001}, 30), str)
+        self.assertIsInstance(m.doc_spec("d", {"paths": ["a.md"], "timeout_min": "ช้า"}, 30), str)
+        self.assertIsInstance(m.doc_spec("d", {"paths": ["a.md"], "timeout_min": 0}, 30), str)
+        self.assertIsInstance(m.doc_spec("d", 5, 30), str)
+
+    def test_glob_and_protected(self):
+        m, s = self.mod, self.SPEC
+        self.assertTrue(all(m.doc_allowed(p, s) for p in ("docs/a.md", "docs/x/y.md", "README.md")))
+        self.assertFalse(any(m.doc_allowed(p, s) for p in ("docsx/a.md", "src/a.py", "docs", "x/README.md", "readme.md.bak")))
+        star = {"paths": ["**/*.md", "*.txt"]}
+        self.assertTrue(all(m.doc_allowed(p, star) for p in ("README.md", "docs/a.md", "a/b/c.md", "n.txt")))
+        self.assertFalse(m.doc_allowed("docs/n.txt", star))
+        self.assertFalse(any(m.doc_allowed(p, {"paths": ["**/*"]}) for p in (".flash.json", ".env", "a/.env.local", ".git/config", "k/id_rsa", "c.pem")))
+
+    def test_pass_only_when_every_gate_passes(self):
+        v, why, ch = self.verdict(lambda: self.w("docs/A.md", "เพิ่ม: ดู `docs/B.md` และ `127.0.0.1:4097` · `.tmp/run.log` · `<id>/x.json`\n"))
+        self.assertEqual((v, ch), ("DRAFT", ["docs/A.md"]), why)
+        v, why, ch = self.verdict(lambda: None)
+        self.assertEqual(v, "NOCHANGE")
+        v, why, ch = self.verdict(lambda: self.w("docs/new.md", "ไฟล์ใหม่\n", "w"))  # ไฟล์ใหม่ที่ยังไม่ติดตาม ก็ต้องเห็น
+        self.assertEqual((v, ch), ("DRAFT", ["docs/new.md"]), why)
+
+    def test_outside_scope_and_guarded_files(self):
+        v, why, ch = self.verdict(lambda: (self.w("docs/A.md", "ok\n"), self.w("src/a.py", "y = 2\n")))
+        self.assertEqual(v, "OUTSIDE")
+        self.assertIn("src/a.py", why[0])
+        v, why, _ = self.verdict(lambda: self.w(".env", "K=2\n"))  # .env ถูก .gitignore → git status ไม่เห็น แต่ต้องจับได้
+        self.assertEqual(v, "OUTSIDE", why)
+        self.assertIn(".env", why[0])
+        v, why, _ = self.verdict(lambda: self.w(".flash.json", "{}\n", "w"))
+        self.assertEqual(v, "OUTSIDE", why)
+        wide = {"name": "w", "paths": ["**/*"], "brief": "", "timeout_min": 5}  # แม้ paths กว้างผิดพลาด ไฟล์ต้องห้ามก็ผ่านไม่ได้
+        v, _, _ = self.verdict(lambda: self.w(".env", "K=3\n"), spec=wide)
+        self.assertEqual(v, "OUTSIDE")
+
+    def test_head_change_and_incomplete_runs(self):
+        v, why, _ = self.verdict(lambda: (self.w("docs/A.md", "x\n"), self.git("commit", "-q", "-am", "agent commit")))
+        self.assertEqual(v, "CHANGED", why)
+        self.assertEqual(self.verdict(lambda: self.w("docs/A.md", "x\n"), status="TIMEOUT")[0], "TIMEOUT")
+        self.assertEqual(self.verdict(lambda: self.w("docs/A.md", "x\n"), status="HANG")[0], "TIMEOUT")
+        self.assertEqual(self.verdict(lambda: self.w("docs/A.md", "x\n"), status="ERROR")[0], "ERROR")
+        m = self.mod
+        self.assertEqual(m.doc_verdict(self.SPEC, {"status": "DONE", "head0": "a", "head1": "a"}, self.proj, None, {}, {}, {}, {})[0], "ERROR")
+
+    def test_secrets_blocked_but_placeholders_allowed(self):
+        for line in ("key = AKIAABCDEFGHIJKLMNOP", "-----BEGIN RSA PRIVATE KEY-----", "ghp_" + "a1B2" * 9,
+                     "password: hunter2hunter2", 'api_key = "Zq81xJ3mPw0aKd7R"', "sk-" + "a" * 30):
+            v, why, _ = self.verdict(lambda: self.w("docs/A.md", line + "\n"))
+            self.assertEqual(v, "SECRET", line)
+            self.assertNotIn("hunter2", " ".join(why))  # ไม่พิมพ์ค่าลับซ้ำในรายงาน
+            self.git("checkout", "-q", "--", ".")
+        for line in ("token: <your-token>", "password = $PASSWORD", "api_key: xxxxxxxxxx", "ตั้งค่า token ผ่านตัวแปร"):
+            v, why, _ = self.verdict(lambda: self.w("docs/A.md", line + "\n"))
+            self.assertEqual(v, "DRAFT", (line, why))
+            self.git("checkout", "-q", "--", ".")
+
+    def test_only_added_lines_are_scanned_against_pre_run_baseline(self):
+        """ผู้ใช้แก้ค้างไว้เองก่อนรัน (มีข้อความคล้ายความลับ) ไม่ใช่ความผิดของช่างเอกสาร"""
+        dirty = lambda: self.w("docs/A.md", "password: hunter2hunter2\nดู `docs/gone.md`\n")
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "บรรทัดใหม่ปกติ\n"), dirty_before=dirty)
+        self.assertEqual(v, "DRAFT", why)
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "api_key = Zq81xJ3mPw0aKd7R\n"))
+        self.assertEqual(v, "SECRET", why)
+
+    def test_bad_refs_missing_files_and_citations(self):
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "ดู `docs/nope.md` และ `src/a.py`\n"))
+        self.assertEqual(v, "BADREF")
+        self.assertIn("docs/nope.md", why[0])
+        self.git("checkout", "-q", "--", ".")
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "ดู src/a.py:99 `x = 1`\n"))  # เลขบรรทัดเกินไฟล์
+        self.assertEqual(v, "BADREF", why)
+        self.git("checkout", "-q", "--", ".")
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "ดู src/a.py:1 `x = 1` และ B.md ข้างกัน `B.md` เป็นแค่ชื่อ\n"))
+        self.assertEqual(v, "DRAFT", why)
+        self.git("checkout", "-q", "--", ".")
+        v, why, _ = self.verdict(lambda: (self.w("docs/new.md", "ดู `docs/A.md` และ `docs/new.md`\n", "w")))  # อ้างไฟล์ที่เพิ่งสร้างได้
+        self.assertEqual(v, "DRAFT", why)
+
+    def test_delete_and_unchecked_files_fail_closed(self):
+        v, why, _ = self.verdict(lambda: (self.proj / "docs" / "B.md").unlink())
+        self.assertEqual(v, "DELETED", why)
+        self.git("checkout", "-q", "--", ".")
+        v, why, _ = self.verdict(lambda: (self.proj / "docs" / "img.bin").write_bytes(b"\x00\x01\x02"))
+        self.assertEqual(v, "UNCHECKED", why)
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "ก" * (1024 * 1024 + 10)))
+        self.assertEqual(v, "UNCHECKED", why)
+
+    def test_many_issues_are_capped(self):
+        v, why, _ = self.verdict(lambda: self.w("docs/A.md", "".join(f"ดู `docs/n{i}.md`\n" for i in range(20))))
+        self.assertEqual(v, "BADREF")
+        self.assertLessEqual(len(why), 9)
+        self.assertIn("อีก", why[-1])
+
+
+class DocRunTest(unittest.TestCase):
+    """ช่างเอกสาร ขั้น 2: `flashq doc` / `doc-review` ทั้งทาง (opencode ปลอมเขียนไฟล์แทน agent) · ตัดสินด้วยกลไก · ไม่ commit ให้"""
+    tearDown, run_q, load_mod = FlashqTest.tearDown, FlashqTest.run_q, FlashqTest.load_mod
+    git, w = DocTest.git, DocTest.w
+
+    def setUp(self):
+        DocTest.setUp(self)
+        self.presets()
+
+    def presets(self, **named):
+        named = named or {"docs": {"paths": ["docs/**", "README.md"], "brief": "ภาษาไทย"}}
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "doc": {"presets": named}}), encoding="utf-8")
+        self.git("add", ".flash.json")
+        self.git("commit", "-q", "-m", "cfg")
+
+    def doc(self, write, text="# A\nใหม่\n", *extra, env=None):
+        return self.run_q("doc", "docs", *extra, env={"FAKE_WRITE": write, "FAKE_WRITE_TEXT": text, **(env or {})})
+
+    def job(self, which=-1):
+        return [json.loads(f.read_text(encoding="utf-8")) for f in sorted((self.home / "jobs").glob("*.json"))][which]
+
+    def read(self, rel):
+        return (self.proj / rel).read_text(encoding="utf-8")
+
+    def test_draft_waits_for_user_and_is_never_committed(self):
+        head = self.git("rev-parse", "HEAD")
+        r = self.doc("docs/A.md")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertIn("DOC=DRAFT", r.stdout)
+        j = self.job()
+        self.assertEqual((j["kind"], j["readonly"], j["status"], j["agent"]), ("doc", False, "ok", "flash-writer"))
+        self.assertEqual((j["doc"]["verdict"], j["doc"]["state"], j["doc"]["changed"]), ("DRAFT", "pending", ["docs/A.md"]))
+        self.assertEqual(self.read("docs/A.md"), "# A\nใหม่\n")
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)  # ไม่ commit ให้
+        self.assertEqual(self.git("status", "--porcelain"), "M docs/A.md")
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "flash-writer")
+        prompt = argv[-1]
+        self.assertIn("docs/**", prompt)
+        self.assertIn("ภาษาไทย", prompt)
+        self.assertIn("ห้าม commit", prompt)
+        row = json.loads(sorted((self.home / "inbox").glob("*.json"))[-1].read_text(encoding="utf-8"))
+        self.assertEqual((row["kind"], row["status"]), ("doc", "OK"))
+        self.assertTrue(row["last"].startswith("📝"))
+        r = self.run_q("doc-review", j["id"], "accept")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.job()["doc"]["state"], "accepted")
+        self.assertEqual(self.read("docs/A.md"), "# A\nใหม่\n")  # รับ = เก็บไฟล์ไว้
+        r = self.run_q("doc-review", j["id"], "discard")
+        self.assertEqual(r.returncode, 1)  # ตัดสินไปแล้ว ตัดสินซ้ำไม่ได้
+
+    def test_discard_reverts_only_files_the_writer_touched(self):
+        self.w("src/a.py", "y = 2\n")  # งานค้างของผู้ใช้เอง ต้องไม่ถูกแตะ
+        self.w("docs/B.md", "ผู้ใช้เพิ่ม\n")  # ไฟล์เอกสารที่ผู้ใช้แก้ค้างไว้ก่อน (ช่างเอกสารไม่ได้แตะ)
+        r = self.doc("docs/A.md|docs/new/C.md")
+        self.assertIn("DOC=DRAFT", r.stdout, r.stdout)
+        j = self.job()
+        self.assertEqual(j["doc"]["changed"], ["docs/A.md", "docs/new/C.md"])
+        r = self.run_q("doc-review", j["id"], "discard")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+        self.assertFalse((self.proj / "docs" / "new").exists())  # ไฟล์ใหม่ถูกลบ + โฟลเดอร์ว่างที่สร้างค้าง
+        self.assertEqual(self.read("src/a.py"), "x = 1\nprint(x)\ny = 2\n")
+        self.assertEqual(self.read("docs/B.md"), "# B\nผู้ใช้เพิ่ม\n")
+        self.assertEqual(self.job()["doc"]["state"], "discarded")
+
+    def test_writer_editing_an_already_dirty_file_is_restored_from_backup(self):
+        """ไฟล์ที่ผู้ใช้แก้ค้างอยู่แล้ว ช่างเอกสารเขียนทับ → discard คืนเวอร์ชันของผู้ใช้ (ไม่ใช่ HEAD)"""
+        self.w("docs/A.md", "ของผู้ใช้\n")
+        r = self.doc("docs/A.md")
+        self.assertIn("DOC=DRAFT", r.stdout, r.stdout)
+        r = self.run_q("doc-review", self.job()["id"], "discard")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\nของผู้ใช้\n")
+
+    def test_outside_scope_is_reverted_immediately(self):
+        r = self.doc("docs/A.md|src/a.py", "boom\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("DOC=OUTSIDE", r.stdout)
+        j = self.job()
+        self.assertEqual((j["doc"]["verdict"], j["doc"]["state"]), ("OUTSIDE", "reverted"))
+        self.assertEqual(self.git("status", "--porcelain"), "")  # ย้อนทั้งชุดแล้ว รวมไฟล์ในขอบเขต
+        self.assertEqual(self.read("src/a.py"), "x = 1\nprint(x)\n")
+        r = self.run_q("doc-review", j["id"], "accept")
+        self.assertEqual(r.returncode, 1)
+
+    def test_secret_in_added_text_is_reverted_and_failing_draft_cannot_be_accepted(self):
+        r = self.doc("docs/A.md", "token ghp_" + "a1B2c3D4" * 5 + "\n")
+        self.assertIn("DOC=SECRET", r.stdout, r.stdout)
+        self.assertNotIn("ghp_a1B2", r.stdout)  # ไม่พิมพ์ความลับซ้ำ
+        self.assertEqual(self.job()["doc"]["state"], "reverted")
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+        r = self.doc("docs/A.md", "# A\nดู `docs/missing.md`\n")  # BADREF: เก็บไฟล์ไว้ให้ดู แต่รับไม่ได้
+        self.assertIn("DOC=BADREF", r.stdout, r.stdout)
+        j = self.job()
+        self.assertEqual(j["doc"]["state"], "pending")
+        r = self.run_q("doc-review", j["id"], "accept")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("รับไม่ได้", r.stdout)
+        r = self.run_q("doc-review", j["id"], "discard")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+
+    def test_nochange_and_agent_failure(self):
+        r = self.run_q("doc", "docs", env={"FAKE_TEXT": "ไม่มีอะไรต้องแก้"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DOC=NOCHANGE", r.stdout)
+        r = self.run_q("doc", "docs", env={"FAKE_MODE": "fail", "FAKE_WRITE": "docs/A.md", "FAKE_WRITE_TEXT": "ครึ่งทาง\n"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("DOC=ERROR", r.stdout)
+        j = self.job()
+        self.assertEqual((j["doc"]["state"], j["doc"]["changed"]), ("pending", ["docs/A.md"]))  # แก้ค้างไว้ → ต้องรายงานและทิ้งได้
+        self.assertEqual(self.run_q("doc-review", j["id"], "discard").returncode, 0)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+
+    def test_discard_refuses_when_head_moved_or_file_edited_after(self):
+        self.doc("docs/A.md")
+        jid = self.job()["id"]
+        self.w("docs/A.md", "ผู้ใช้แก้ต่อ\n")
+        r = self.run_q("doc-review", jid, "discard")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--force", r.stdout)
+        self.assertIn("ผู้ใช้แก้ต่อ", self.read("docs/A.md"))  # ไม่แตะอะไร
+        self.git("commit", "-q", "-am", "ผู้ใช้ commit เอง")
+        r = self.run_q("doc-review", jid, "discard", "--force")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("HEAD เปลี่ยน", r.stdout)
+        self.assertIn("ผู้ใช้แก้ต่อ", self.read("docs/A.md"))
+
+    def test_start_errors_never_create_a_job(self):
+        def jobs():
+            return list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else []
+        self.presets(a={"paths": ["docs/**"]}, b={"paths": ["README.md"]})
+        r = self.run_q("doc")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ต้องระบุชื่อชุด", r.stdout)
+        r = self.run_q("doc", "ไม่มี")
+        self.assertIn("ไม่มีชุดเอกสารชื่อ", r.stdout)
+        self.presets(a={"paths": ["**"]})
+        r = self.run_q("doc", "a")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("กว้างเกินไป", r.stdout)
+        self.presets(a={"paths": ["docs/**"]})
+        r = self.run_q("doc", "a", "--since", "ไม่ใช่commit")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--since", r.stdout)
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False}), encoding="utf-8")
+        r = self.run_q("doc")
+        self.assertIn("ยังไม่ได้ตั้งชุดเอกสาร", r.stdout)
+        self.assertEqual(jobs(), [])
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        r = self.run_q("doc", "--project", str(plain))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("โปรเจกต์ git", r.stdout)
+
+    def test_since_defaults_to_last_accepted_head_and_is_in_prompt(self):
+        first = self.git("rev-parse", "HEAD")
+        self.doc("docs/A.md")
+        self.run_q("doc-review", self.job()["id"], "accept")
+        self.git("commit", "-q", "-am", "ผู้ใช้ commit ร่างที่รับ")
+        self.args_out.unlink()
+        self.doc("docs/A.md", "# A\nรอบสอง\n")
+        prompt = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])[-1]
+        self.assertIn(f"{first}..HEAD", prompt)  # เทียบตั้งแต่ HEAD ตอนรับร่างครั้งก่อน
+        self.args_out.unlink()
+        self.run_q("doc", "docs", "--since", "HEAD~1")
+        prev = self.git("rev-parse", "HEAD~1")
+        self.assertIn(f"{prev}..HEAD", json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])[-1])
+
+    def test_queue_never_runs_doc_alongside_other_writers(self):
+        m = self.load_mod("flashq_doc_q")
+        proj = str(self.proj)
+        doc = {"project": proj, "kind": "doc", "readonly": False}
+        work = {"project": proj, "kind": "work", "readonly": False}
+        ro = {"project": proj, "kind": "verify", "readonly": True}
+        qa = {"project": proj, "kind": "qa", "readonly": True}
+        info = lambda j: {"parallel": True, "files": []}
+        self.assertTrue(m.conflict_reason(doc, work, info))
+        self.assertTrue(m.conflict_reason(work, doc, info))
+        self.assertTrue(m.conflict_reason(doc, doc, info))
+        self.assertTrue(m.conflict_reason(doc, qa, info))
+        self.assertTrue(m.conflict_reason(qa, doc, info))
+        self.assertEqual(m.conflict_reason(doc, ro, info), "")  # ผู้ตรวจอ่านอย่างเดียว รันคู่ได้
+        self.assertEqual(m.conflict_reason(doc, {**work, "project": proj + "x"}, info), "")  # คนละโปรเจกต์
+
+    def test_cancel_records_half_written_files_so_they_can_be_discarded(self):
+        p = self.run_q("doc", "docs", env={"FAKE_WRITE": "docs/A.md", "FAKE_WRITE_TEXT": "ครึ่งทาง\n", "FAKE_SLEEP": "60"}, wait=False)
+        try:
+            for _ in range(100):
+                time.sleep(0.2)
+                fs = list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else []
+                if fs and (json.loads(fs[0].read_text(encoding="utf-8")).get("doc") or {}).get("phase") == "write" and self.read("docs/A.md") == "ครึ่งทาง\n":
+                    break
+            else:
+                self.fail("ช่างเอกสารไม่เริ่มเขียน")
+            jid = self.job()["id"]
+            r = self.run_q("cancel", jid)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("แก้ค้างไว้ 1 ไฟล์", r.stdout)
+        finally:
+            p.kill()
+            p.wait(timeout=30)
+        j = self.job()
+        self.assertEqual((j["status"], j["doc"]["verdict"], j["doc"]["state"], j["doc"]["changed"]), ("cancelled", "CANCELLED", "pending", ["docs/A.md"]))
+        row = json.loads(sorted((self.home / "inbox").glob("*.json"))[-1].read_text(encoding="utf-8"))
+        self.assertEqual(row["status"], "CANCELLED")
+        r = self.run_q("doc-review", jid, "discard")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+
+
+class DocUiTest(unittest.TestCase):
+    """ช่างเอกสาร ขั้น 3: หน้าเว็บ — เลือกได้แค่ชื่อชุด · ดู diff · รับ/ทิ้ง (token + ยืนยัน + force) · ส่งงานผ่านคิวจริงด้วย opencode ปลอม"""
+    tearDown, run_q, load_mod = FlashqTest.tearDown, FlashqTest.run_q, FlashqTest.load_mod
+    start_ui, http, ui_token, wait_job = FlashqTest.start_ui, FlashqTest.http, FlashqTest.ui_token, FlashqTest.wait_job
+    git, w, presets, job, read = DocTest.git, DocTest.w, DocRunTest.presets, DocRunTest.job, DocRunTest.read
+
+    def setUp(self):
+        DocTest.setUp(self)
+        self.presets()
+        with socket.socket() as s:  # server opencode ที่ไม่มีใคร listen — กันไปแตะ 4096 ของจริง
+            s.bind(("127.0.0.1", 0))
+            self.env["FLASHQ_LIVE_URL"] = f"http://127.0.0.1:{s.getsockname()[1]}"
+        self.env.update(FAKE_WRITE="docs/A.md", FAKE_WRITE_TEXT="# A\nใหม่\n")
+
+    def post(self, base, path, body, token=None):
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+        code, text = self.http(base + path, json.dumps(body).encode(), hdr)
+        return code, json.loads(text)
+
+    def test_argv_takes_only_a_preset_name(self):
+        mod = self.load_mod("flashq_doc_argv")
+        marker = self.proj / "pwned.txt"
+        base = {"project": str(self.proj), "kind": "doc"}
+        argv, err = mod.build_run_argv({**base, "names": ["docs"], "cmd": f"echo x > {marker}", "paths": ["**"]})
+        self.assertEqual(err, "")
+        self.assertEqual(argv[2:], ["doc", "docs", "--project", str(self.proj)])
+        for names in (["docs; calc"], ["../x"], ["nope"], "docs", [1], [], ["docs", "docs"]):
+            self.assertNotEqual(mod.build_run_argv({**base, "names": names})[1], "", names)
+        self.assertEqual(mod.doc_preset_names(str(self.proj)), ["docs"])
+        self.assertEqual(mod.doc_preset_names(str(self.tmp / "ไม่มี")), [])
+
+    def test_ui_submit_diff_discard_force_and_accept(self):
+        base = self.start_ui()
+        token = self.ui_token(base)
+        plans = json.loads(self.http(base + "/api/plans?project=" + urllib.parse.quote(str(self.proj)))[1])
+        self.assertEqual(plans["doc_presets"], ["docs"])
+        self.assertEqual(json.loads(self.http(base + "/api/plans?project=relative")[1])["doc_presets"], [])
+        body = {"project": str(self.proj), "kind": "doc", "names": ["docs"]}
+        self.assertEqual(self.post(base, "/api/submit", body, token="x")[0], 403)
+        self.assertEqual(self.post(base, "/api/submit", {**body, "names": ["docs && calc"]}, token)[0], 400)
+        code, d = self.post(base, "/api/submit", body, token)
+        self.assertEqual(code, 200, d)
+        jid = d["job"]
+        self.wait_job(jid, "ok")
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertIn(["docs"], st["doc_presets"].values())
+        row = next(x for x in st["history"] if x["id"] == jid)
+        self.assertEqual((row["kind"], row["doc"]["verdict"], row["doc"]["state"], row["doc"]["changed"]), ("doc", "DRAFT", "pending", ["docs/A.md"]))
+        self.assertNotIn("backup", row["doc"])
+        self.assertTrue(any(x["name"] == "doc" for x in st["stats"]["by_kind"]))
+        # ดู diff
+        self.assertEqual(self.http(base + "/api/doc_diff?id=nope")[0], 404)
+        dd = json.loads(self.http(base + "/api/doc_diff?id=" + jid)[1])
+        self.assertEqual(dd["files"], ["docs/A.md"])
+        self.assertIn("+ใหม่", dd["diff"])
+        # ทิ้ง: ต้องมี token · ต้องยืนยัน id · ไฟล์ที่ถูกแก้ต่อต้อง force
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": jid, "action": "discard", "confirm": jid}, token="x")[0], 403)
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": jid, "action": "discard"}, token)[0], 400)
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": jid, "action": "bogus"}, token)[0], 400)
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": "ไม่มี", "action": "accept"}, token)[0], 404)
+        self.assertEqual(self.read("docs/A.md"), "# A\nใหม่\n")
+        self.w("docs/A.md", "ผู้ใช้แก้ต่อ\n")
+        code, d = self.post(base, "/api/doc_review", {"id": jid, "action": "discard", "confirm": jid}, token)
+        self.assertEqual(code, 409)
+        self.assertIn("--force", d["message"])
+        self.assertIn("ผู้ใช้แก้ต่อ", self.read("docs/A.md"))  # ถูกปฏิเสธ = ไฟล์ยังอยู่
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": jid, "action": "discard", "confirm": jid, "force": "true"}, token)[0], 409)  # force ต้องเป็น true จริง
+        code, d = self.post(base, "/api/doc_review", {"id": jid, "action": "discard", "confirm": jid, "force": True}, token)
+        self.assertEqual(code, 200, d)
+        self.assertEqual(self.read("docs/A.md"), "# A\nเดิม\n")
+        self.assertEqual(self.job()["doc"]["state"], "discarded")
+        # สั่งซ้ำ = ชุดเดิม · รับร่าง
+        code, d = self.post(base, "/api/retry", {"id": jid}, token)
+        self.assertEqual(code, 200, d)
+        jid2 = d["job"]
+        self.wait_job(jid2, "ok")
+        self.assertEqual(self.job()["doc"]["name"], "docs")
+        code, d = self.post(base, "/api/doc_review", {"id": jid2, "action": "accept"}, token)
+        self.assertEqual(code, 200, d)
+        self.assertEqual(self.job()["doc"]["state"], "accepted")
+        self.assertEqual(self.read("docs/A.md"), "# A\nใหม่\n")
+        self.assertEqual(self.post(base, "/api/doc_review", {"id": jid2, "action": "discard", "confirm": jid2}, token)[0], 409)  # ตัดสินแล้ว ซ้ำไม่ได้
+
+    def test_accept_refused_unless_draft(self):
+        self.env.update(FAKE_WRITE="src/a.py", FAKE_WRITE_TEXT="y = 1\n")  # แตะนอกขอบเขต → OUTSIDE (ย้อนให้ทันที)
+        base = self.start_ui()
+        token = self.ui_token(base)
+        code, d = self.post(base, "/api/submit", {"project": str(self.proj), "kind": "doc", "names": ["docs"]}, token)
+        self.assertEqual(code, 200, d)
+        self.wait_job(d["job"], "fail")
+        j = self.job()
+        self.assertEqual((j["doc"]["verdict"], j["doc"]["state"]), ("OUTSIDE", "reverted"))
+        self.assertEqual(self.read("src/a.py"), "x = 1\nprint(x)\n")
+        code, d2 = self.post(base, "/api/doc_review", {"id": j["id"], "action": "accept"}, token)
+        self.assertEqual(code, 409, d2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

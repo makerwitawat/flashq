@@ -19,9 +19,12 @@ if os.environ.get("FAKE_ENV_OUT"):
     with open(os.environ["FAKE_ENV_OUT"], "w", encoding="utf-8") as f:
         f.write(os.environ.get("OPENCODE_CONFIG_CONTENT", ""))
 mode = os.environ.get("FAKE_MODE", "ok")
-if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agent ที่แอบแก้ไฟล์ในโปรเจกต์
-    with open(os.path.join(sys.argv[sys.argv.index("--dir") + 1], os.environ["FAKE_WRITE"]), "w", encoding="utf-8") as _f:
-        _f.write("x")
+if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agent ที่แก้ไฟล์ในโปรเจกต์ (หลายไฟล์คั่นด้วย | · เนื้อหา = FAKE_WRITE_TEXT)
+    for _name in os.environ["FAKE_WRITE"].split("|"):
+        _path = os.path.join(sys.argv[sys.argv.index("--dir") + 1], _name)
+        os.makedirs(os.path.dirname(_path), exist_ok=True)
+        with open(_path, "w", encoding="utf-8") as _f:
+            _f.write(os.environ.get("FAKE_WRITE_TEXT", "x"))
 if mode == "nostart":
     time.sleep(600)
     sys.exit(0)

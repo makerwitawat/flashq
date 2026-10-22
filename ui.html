@@ -159,6 +159,10 @@ dialog.ask[open] { animation: ask-in .16s ease-out; }
 .rn-cmp { border: 1px solid var(--line); border-radius: 0.4rem; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
 .rn-cmp.bad { border-color: var(--fail); background: color-mix(in srgb, var(--fail) 10%, var(--panel)); }
 .rn-list { margin: 0.2rem 0 0 1.2rem; padding: 0; }
+#docPresets input, #qaPresets input { width: auto; }
+#docDiffDlg { width: min(60rem, calc(100vw - 2rem)); }
+#docDiffBody { max-height: 60vh; overflow: auto; margin: 0.4rem 0; padding: 0.5rem; background: var(--bg, #0001); border-radius: 6px; font-size: 0.85em; white-space: pre; }
+#docDiffBody .add { color: var(--ok, #2a7); } #docDiffBody .del { color: var(--fail, #c33); } #docDiffBody .hunk { color: var(--muted); }
 .rn-warn { margin: 0.3rem 0 0 1.2rem; padding: 0; color: var(--muted); }
 .wait-why { font-family: inherit; font-size: 0.85em; color: var(--muted); white-space: normal; }
 .wait-why.clash { color: var(--quota); }
@@ -508,7 +512,13 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
       <label><input type="radio" name="mode" value="verify"> ตรวจ (ผู้ตรวจ · อ่านอย่างเดียว)</label>
       <label><input type="radio" name="mode" value="investigate"> สืบ (ผู้สืบ · อ่านอย่างเดียว)</label>
       <label><input type="radio" name="mode" value="qa"> ทดสอบ (นักทดสอบ · รันชุดทดสอบของโปรเจกต์)</label>
+      <label><input type="radio" name="mode" value="doc"> เอกสาร (ช่างเอกสาร · แก้ไฟล์เอกสารจริง รอคุณรับ/ทิ้ง)</label>
       <label><input type="radio" name="mode" value="message"> ข้อความทดสอบ</label>
+    </div>
+    <div id="docFields" hidden>
+      <div class="field"><span>ชุดเอกสาร (จาก <code>.flash.json</code> → <code>doc.presets</code> · เลือกได้ชุดเดียว)</span>
+        <div id="docPresets" class="row"></div></div>
+      <div class="muted" style="font-size:0.85em">Flash แก้ไฟล์เฉพาะที่ชุดอนุญาต · flashq ตรวจเอง · ไม่ commit ให้ — แก้เสร็จกด ดู diff / รับ / ทิ้ง ที่การ์ดงาน</div>
     </div>
     <div id="qaFields" hidden>
       <div class="field"><span>ชุดทดสอบ (จาก <code>.flash.json</code> → <code>qa.presets</code> · ไม่ติ๊กเลย = ทุกชุด)</span>
@@ -565,6 +575,14 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <div class="row ask-btns"><button value="cancel" id="askNo" formnovalidate>ยกเลิก</button><button value="ok" id="askOk" class="primary">ตกลง</button></div>
   </form>
 </dialog>
+<dialog id="docDiffDlg">
+  <form method="dialog">
+    <h2>ดู diff ของช่างเอกสาร</h2>
+    <div id="docDiffHead" class="muted"></div>
+    <div id="docDiffBody" class="mono"></div>
+    <div class="row" style="justify-content:flex-end"><button type="button" data-dlgclose>ปิด</button></div>
+  </form>
+</dialog>
 <div id="toast"></div>
 
 <script>
@@ -613,10 +631,11 @@ const roundTag = (j) => (j.goal ? `<span class="rtag goal" title="รอบห�
 const kindOf = (j) => j.kind || (j.message ? "test" : "work");
 const isSleuth = (j) => /investigator/i.test(j.agent || "");  // ผู้สืบ (flash-investigator · อ่านอย่างเดียว) — แสดงเป็นตัวละครแว่นเหมือนผู้ตรวจ
 const isQa = (j) => kindOf(j) === "qa";  // นักทดสอบ (flashq รันคำสั่งทดสอบเอง · ไม่มีแผน ชื่อชุดอยู่ใน tasks) — แสดงเหมือนผู้ตรวจ (อ่านอย่างเดียว ไม่ชนงานอื่นที่ไม่แก้ไฟล์)
+const isDoc = (j) => kindOf(j) === "doc";  // ช่างเอกสาร (Flash แก้ไฟล์เอกสารจริง · ชื่อชุดอยู่ใน tasks · ผลอยู่ใน j.doc) — ไม่ใช่ผู้ตรวจ (ไม่ได้อ่านอย่างเดียว)
 const isVerify = (j) => kindOf(j) === "verify" || kindOf(j) === "investigate" || isSleuth(j) || isQa(j);
 const roleOf = (j) => (isSleuth(j) ? "sleuth" : isVerify(j) ? "check" : "");  // รูปลักษณ์ตัวละคร: ผู้ตรวจ = เสื้อกาวน์ขาว+เนคไท · ผู้สืบ = โค้ทเบจ+หมวกนักสืบ
 const roleTag = (j) => (isQa(j) ? "🧪 ทดสอบ " : isSleuth(j) ? "🕵️ สืบ " : "🔍 ตรวจ ");
-const what = (j) => isQa(j) ? `🧪 ทดสอบ ${j.tasks || "ทุกชุด"}` : j.message && !isSleuth(j) ? `ข้อความ: ${j.message}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 60) : (j.plan || "-") + " " + (j.tasks || "")}`;
+const what = (j) => isDoc(j) ? `📝 เอกสาร ${j.tasks || ""}` : isQa(j) ? `🧪 ทดสอบ ${j.tasks || "ทุกชุด"}` : j.message && !isSleuth(j) ? `ข้อความ: ${j.message}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 60) : (j.plan || "-") + " " + (j.tasks || "")}`;
 const QA_ICON = { PASS: "✅", FAIL: "❌", TIMEOUT: "⏱", ERROR: "⛔", NOEXPECT: "⚠️", FLAKY: "⚠️", SKIPPED: "⏭", CHANGED: "⚠️", ENV: "🔌", PENDING: "⏳", RUNNING: "▶️" };
 // ผลรายชุดของนักทดสอบ (ข้อมูลจาก qa ในไฟล์งาน · ตัดสินจาก exit code จริง) — บรรทัดสั้นใต้ชื่องาน
 const qaLine = (j) => {
@@ -625,6 +644,21 @@ const qaLine = (j) => {
   const parts = q.specs.map((s) => `${QA_ICON[s.verdict] || "•"} ${esc(s.name)}${s.verdict === "PASS" || s.verdict === "PENDING" ? "" : " " + esc(s.verdict)}${s.secs ? ` (${dur(Math.round(s.secs))})` : ""}`);
   const note = q.changed ? `<div class="wait-why clash">⚠ ${esc(q.changed)}</div>` : "";
   return `<div class="muted" style="font-size:0.85em">${parts.join(" · ")}${q.head ? ` · <span class="mono">${esc(String(q.head).slice(0, 8))}</span>` : ""}</div>${note}`;
+};
+const DOC_ICON = { DRAFT: "📝", TIMEOUT: "⏱", ERROR: "⛔", CHANGED: "⚠️", OUTSIDE: "🚫", NOCHANGE: "➖", UNCHECKED: "⚠️", DELETED: "🗑", SECRET: "🔑", BADREF: "🔗", CANCELLED: "✋" };
+const DOC_STATE_TH = { pending: "รอคุณตัดสิน", accepted: "รับแล้ว (ยังไม่ commit)", discarded: "ทิ้งแล้ว", reverted: "flashq ย้อนไฟล์ให้แล้ว" };
+// ผลของช่างเอกสาร (ข้อมูลจาก doc ในไฟล์งาน · flashq ตัดสินเอง ผ่านได้ทางเดียวคือ DRAFT) — บรรทัดใต้ชื่องาน + ปุ่ม ดู diff/รับ/ทิ้ง
+const docLine = (j) => {
+  const d = j.doc;
+  if (!d) return "";
+  if (!d.verdict) return d.phase && d.phase !== "done" ? `<div class="muted" style="font-size:0.85em">📝 ${esc(d.phase === "check" ? "flashq กำลังตรวจผล" : d.phase === "write" ? "ช่างเอกสารกำลังแก้ไฟล์" : "รอคิว")}</div>` : "";
+  const files = d.n_changed ? ` · แก้ ${d.n_changed} ไฟล์` : "";
+  const st = DOC_STATE_TH[d.state] ? ` · ${DOC_STATE_TH[d.state]}` : "";
+  const why = (d.why || []).slice(0, 4).map((w) => `<div class="wait-why${d.verdict === "DRAFT" ? "" : " clash"}">↳ ${esc(w)}</div>`).join("");
+  const probs = (d.revert_problems || []).map((w) => `<div class="wait-why clash">✗ ${esc(w)}</div>`).join("");
+  const fl = (d.changed || []).length ? `<div class="muted mono" style="font-size:0.85em">${d.changed.slice(0, 6).map(esc).join(" · ")}${d.n_changed > 6 ? ` · …อีก ${d.n_changed - 6}` : ""}</div>` : "";
+  const btn = d.state === "pending" ? `<div class="row" style="margin-top:0.25rem">${(d.changed || []).length ? `<button data-docdiff="${esc(j.id)}">ดู diff</button>` : ""}${d.verdict === "DRAFT" ? `<button class="primary" data-docacc="${esc(j.id)}" title="เก็บไฟล์ไว้ใน checkout (ไม่ commit ให้)">รับร่าง</button>` : ""}<button class="danger" data-docdis="${esc(j.id)}" title="ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะ">ทิ้งร่าง</button></div>` : "";
+  return `<div class="muted" style="font-size:0.85em">${DOC_ICON[d.verdict] || "•"} ${esc(d.verdict)}${files}${st}</div>${why}${fl}${probs}${btn}`;
 };
 let state = null, prevStates = null;
 let logJob = null, logOffset = 0, logAttempt = 0, logTimer = null, logLines = [], logDone = false, logSession = "";
@@ -731,8 +765,8 @@ function render() {
       <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b id="rnT${i}"></b>
         ${r.slot ? `<span class="muted">· ช่อง ${r.slot}${r.extra ? " (พิเศษ)" : ""}</span>` : ""}</div>
       <div>โปรเจกต์</div><div>${esc(r.project_name)} <span class="muted mono">${esc(r.project)}</span></div>
-      <div>แผน</div><div class="mono">${esc(isQa(r) ? "(ชุดทดสอบของโปรเจกต์)" : r.message ? "(ทดสอบ --message)" : r.plan)}${isVerify(r) ? ` <span class="badge s-other">${isQa(r) ? "🧪 นักทดสอบ" : isSleuth(r) ? "🕵️ ผู้สืบ" : "🔍 ผู้ตรวจ"}${r.agent ? " · " + esc(r.agent) : ""}</span>` : ""}</div>
-      <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}${qaLine(r)}</div>
+      <div>แผน</div><div class="mono">${esc(isDoc(r) ? "(ชุดเอกสารของโปรเจกต์)" : isQa(r) ? "(ชุดทดสอบของโปรเจกต์)" : r.message ? "(ทดสอบ --message)" : r.plan)}${isVerify(r) ? ` <span class="badge s-other">${isQa(r) ? "🧪 นักทดสอบ" : isSleuth(r) ? "🕵️ ผู้สืบ" : "🔍 ผู้ตรวจ"}${r.agent ? " · " + esc(r.agent) : ""}</span>` : ""}</div>
+      <div>งาน</div><div class="mono">${esc(r.message || r.tasks)}${qaLine(r)}${docLine(r)}</div>
       <div>บัญชี/โมเดล</div><div class="mono">${esc(r.model || "(ค่าเริ่มต้น config)")}</div>
       <div>job</div><div class="mono">${esc(r.id)} · รอบ ${r.attempts || 1}${r.session ? " · " + esc(r.session) : ""}</div>
       <div id="rnL${i}" style="display:contents"></div>
@@ -765,7 +799,7 @@ function render() {
   setHTML("history", hist.length ? `<table>
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}${qaLine(j)}</td>
+      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
@@ -779,7 +813,7 @@ function render() {
     ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
       <td>${pct}%</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
   const st = s.stats || { by_project: [], by_model: [], by_kind: [] };
-  const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", investigate: "🕵️ สืบ", qa: "🧪 ทดสอบ (นักทดสอบ)", test: "ข้อความทดสอบ" };
+  const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", investigate: "🕵️ สืบ", qa: "🧪 ทดสอบ (นักทดสอบ)", doc: "📝 เอกสาร (ช่างเอกสาร)", test: "ข้อความทดสอบ" };
   const kindRows = (st.by_kind || []).map((g) => ({ ...g, name: KIND_TH[g.name] || g.name }));
   setHTML("stats", st.by_project.length || kindRows.length ? statTable("โปรเจกต์", st.by_project) + `<div style="height:0.6rem"></div>` + statTable("บัญชี", st.by_model)
       + (kindRows.length > 1 ? `<div style="height:0.6rem"></div>` + statTable("ชนิดงาน", kindRows) : "")
@@ -1092,6 +1126,13 @@ const prefs = Object.assign({ project: "", switch_on_quota: 0, timeout_min: 0, a
 function mode() { return document.querySelector('input[name="mode"]:checked').value; }
 const planMode = () => mode() === "plan" || mode() === "verify";
 const msgMode = () => mode() === "message" || mode() === "investigate";
+const docName = () => document.querySelector("#docPresets input:checked")?.value || "";
+let docHave = [];  // ชุดเอกสารที่ตั้งไว้ของโปรเจกต์ในช่องโปรเจกต์ตอนนี้ (ถามจาก /api/plans)
+function renderDocPresets() {
+  const keep = docName() || docHave[0] || "";
+  $("docPresets").innerHTML = docHave.length ? docHave.map((n) => `<label><input type="radio" name="docPreset" value="${esc(n)}"${n === keep ? " checked" : ""}> ${esc(n)}</label>`).join("")
+    : `<span class="muted">โปรเจกต์นี้ยังไม่ได้ตั้ง <code>doc.presets</code> ใน .flash.json (ให้ Claude รัน <code>/flash-doc</code> เพื่อดูวิธีตั้ง) — หน้าเว็บเลือกได้แค่ชื่อชุดที่ตั้งไว้</span>`;
+}
 const qaNames = () => [...document.querySelectorAll("#qaPresets input:checked")].map((x) => x.value);
 let qaHave = [];  // ชุดทดสอบที่ตั้งไว้ของโปรเจกต์ในช่องโปรเจกต์ตอนนี้ (ถามจาก /api/plans)
 function renderQaPresets() {
@@ -1100,17 +1141,22 @@ function renderQaPresets() {
     : `<span class="muted">โปรเจกต์นี้ยังไม่ได้ตั้ง <code>qa.presets</code> ใน .flash.json (ให้ Claude รัน <code>/flash-qa</code> เพื่อตั้ง) — หน้าเว็บรันคำสั่งที่ไม่ได้ตั้งไว้ไม่ได้</span>`;
 }
 function formBody() {
-  const qa = mode() === "qa";
+  const qa = mode() === "qa", doc = mode() === "doc";
   return { project: $("fProject").value.trim(), plan: planMode() ? $("fPlan").value.trim() : "", tasks: planMode() ? $("fTasks").value.trim() : "",
-    names: qa ? qaNames() : undefined, no_analyze: qa && $("fNoAnalyze").checked,
-    kind: mode() === "verify" || mode() === "investigate" || qa ? mode() : "", agent: mode() === "verify" || mode() === "investigate" ? $("fAgent").value.trim() : "",
+    names: qa ? qaNames() : doc ? [docName()].filter(Boolean) : undefined, no_analyze: qa && $("fNoAnalyze").checked,
+    kind: mode() === "verify" || mode() === "investigate" || qa || doc ? mode() : "", agent: mode() === "verify" || mode() === "investigate" ? $("fAgent").value.trim() : "",
     message: msgMode() ? $("fMessage").value.trim() : "", switch_on_quota: +$("fSwitch").value || 0, timeout_min: +$("fTimeout").value || 0,
     attach: $("fAttach").value, no_open: $("fNoOpen").checked, auto: $("fAuto").checked, skip_precheck: mode() === "plan" && $("fSkipPre").checked };
 }
 function runOpts(b) { return { switch_on_quota: b.switch_on_quota, timeout_min: b.timeout_min, attach: b.attach, no_open: b.no_open, auto: b.auto }; }
 function preview() {
   const b = formBody(), quote = (x) => /\s/.test(x) ? `"${x}"` : x;
-  $("qaFields").hidden = mode() !== "qa";
+  $("qaFields").hidden = mode() !== "qa"; $("docFields").hidden = mode() !== "doc";
+  if (mode() === "doc") {
+    $("cmdPreview").textContent = ["flashq.py doc", ...b.names, "--project", quote(b.project || "<โปรเจกต์>"), ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : [])].join(" ");
+    $("fSkipRow").hidden = true; $("planFields").hidden = true; $("msgField").hidden = true; $("agentField").hidden = true;
+    return;
+  }
   if (mode() === "qa") {
     $("cmdPreview").textContent = ["flashq.py qa", ...b.names, "--project", quote(b.project || "<โปรเจกต์>"), ...(b.timeout_min ? ["--timeout-min", b.timeout_min] : []), ...(b.no_analyze ? ["--no-analyze"] : [])].join(" ");
     $("fSkipRow").hidden = true; $("planFields").hidden = true; $("msgField").hidden = true; $("agentField").hidden = true;
@@ -1130,11 +1176,12 @@ let planTimer = null, planFor = null;
 async function loadPlans() {
   const p = $("fProject").value.trim();
   if (!p || p === planFor) return;
-  planFor = p; $("planHint").textContent = "(กำลังค้น…)"; qaHave = []; renderQaPresets();
+  planFor = p; $("planHint").textContent = "(กำลังค้น…)"; qaHave = []; renderQaPresets(); docHave = []; renderDocPresets();
   try {
     const d = await (await fetch(`/api/plans?project=${encodeURIComponent(p)}`)).json();
     if (planFor !== p) return;
-    qaHave = Array.isArray(d.qa_presets) ? d.qa_presets : []; renderQaPresets(); preview();
+    qaHave = Array.isArray(d.qa_presets) ? d.qa_presets : []; renderQaPresets();
+    docHave = Array.isArray(d.doc_presets) ? d.doc_presets : []; renderDocPresets(); preview();
     $("planList").innerHTML = d.plans.map((x) => `<option value="${esc(x)}">`).join("");
     $("planHint").textContent = d.plans.length ? `(พบ ${d.plans.length} ไฟล์ PLAN_*FLASH*.md — พิมพ์เพื่อเลือก)` : "(ไม่พบ PLAN_*FLASH*.md — พิมพ์ path เองได้)";
   } catch (e) { $("planHint").textContent = ""; }
@@ -1146,7 +1193,7 @@ function openSubmit(fill) {
   $("fSwitch").value = prefs.switch_on_quota; $("fTimeout").value = prefs.timeout_min; $("fAttach").value = prefs.attach;
   $("fNoOpen").checked = !!prefs.no_open; $("fAuto").checked = !!prefs.auto; $("fSkipPre").checked = false;
   $("submitMsg").textContent = ""; $("submitMsg").className = "";
-  qaHave = []; renderQaPresets();
+  qaHave = []; renderQaPresets(); docHave = []; renderDocPresets();
   preview(); planFor = null; loadPlans();
   dlg.showModal();
   ($("fProject").value ? $("fPlan") : $("fProject")).focus();
@@ -1164,7 +1211,8 @@ $("submitGo").onclick = async (e) => {
   const b = formBody();
   const need = (el, what) => { el.focus(); $("submitMsg").className = "err"; $("submitMsg").textContent = `กรอก${what}ก่อน`; };
   if (!b.project) return need($("fProject"), "โปรเจกต์");
-  if (b.kind !== "qa" && !b.message && (!b.plan || !b.tasks)) return b.plan ? need($("fTasks"), "งาน (T-xx)") : need($("fPlan"), "แผน (หรือข้อความ)");
+  if (b.kind === "doc" && !b.names.length) { $("submitMsg").className = "err"; $("submitMsg").textContent = "เลือกชุดเอกสารก่อน (โปรเจกต์ต้องตั้ง doc.presets ใน .flash.json)"; return; }
+  if (b.kind !== "qa" && b.kind !== "doc" && !b.message && (!b.plan || !b.tasks)) return b.plan ? need($("fTasks"), "งาน (T-xx)") : need($("fPlan"), "แผน (หรือข้อความ)");
   $("submitGo").disabled = true; $("submitMsg").className = ""; $("submitMsg").textContent = "กำลังส่ง…";
   const d = await post("/api/submit", b);
   $("submitGo").disabled = false;
@@ -1179,7 +1227,7 @@ $("submitGo").onclick = async (e) => {
 
 /* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cc],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
+  const t = ev.target.closest("[data-copy],[data-cc],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-docdiff],[data-docacc],[data-docdis],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
   const panel = t.closest(".panel");
   if (t.hasAttribute("data-collapse")) {
@@ -1227,6 +1275,22 @@ document.addEventListener("click", async (ev) => {
     const d = await post("/api/retry", { id: t.dataset.retry, ...runOpts(prefs) }); toast(d.message || d.error || "ผิดพลาด");
     refresh(); if (d.ok && d.job && view === "dash") setTimeout(() => openLog(d.job), 600); return;
   }
+  if (t.dataset.docdiff) { ev.stopPropagation(); return openDocDiff(t.dataset.docdiff); }
+  if (t.dataset.docacc || t.dataset.docdis) {
+    ev.stopPropagation();
+    const id = t.dataset.docacc || t.dataset.docdis, accept = !!t.dataset.docacc;
+    const j = [...(state?.history || []), ...(state?.running_list || [])].find((x) => x.id === id);
+    const n = j?.doc?.n_changed || 0;
+    if (!await ask(accept
+      ? { title: "รับร่างเอกสารนี้?", detail: j ? `${j.project_name} · ${what(j)} · ${n} ไฟล์` : id, body: "ไฟล์เอกสารจะอยู่ใน checkout ตามที่ช่างเอกสารแก้ (ยังไม่ commit — คุณดู diff แล้ว commit เอง)", ok: "รับร่าง", icon: "✓" }
+      : { title: "ทิ้งร่างเอกสารนี้?", detail: j ? `${j.project_name} · ${what(j)} · ${n} ไฟล์` : id, body: "ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะกลับสถานะก่อนรัน (งานค้างอื่นของคุณไม่ถูกแตะ)", ok: "ทิ้งร่าง", cancel: "เก็บไว้", tone: "danger" })) return;
+    let d = await post("/api/doc_review", { id, action: accept ? "accept" : "discard", ...(accept ? {} : { confirm: id }) });
+    if (!d.ok && !accept && /--force/.test(d.message || "")) {  // ไฟล์ถูกแก้ต่อหลังช่างเอกสารจบ → ทิ้งต้องยืนยันซ้ำ (งานที่คุณแก้ต่อจะหาย)
+      if (!await ask({ title: "ไฟล์ถูกแก้ต่อแล้ว — ทิ้งทับเลย?", detail: d.message, body: "ถ้าทิ้ง ส่วนที่คุณแก้ต่อหลังช่างเอกสารจบจะหายไปด้วย", ok: "ทิ้งทับ", cancel: "ไม่ทิ้ง", tone: "danger" })) return;
+      d = await post("/api/doc_review", { id, action: "discard", confirm: id, force: true });
+    }
+    toast(d.message || d.error || "ผิดพลาด"); return refresh();
+  }
   if (t.dataset.open) { const d = await post("/api/open", { id: t.dataset.open }); toast(d.message || "ผิดพลาด"); return; }
   if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.log) openLog(t.dataset.log);
@@ -1259,6 +1323,20 @@ function ask({ title, body = "", detail = "", ok = "ตกลง", cancel = "ย
     dlg.showModal();
     (input ? inp : tone === "danger" ? $("askNo") : $("askOk")).focus();
   });
+}
+/* ---------- ดู diff ของช่างเอกสาร ---------- */
+async function openDocDiff(id) {
+  const dlg = $("docDiffDlg");
+  $("docDiffHead").textContent = "กำลังโหลด…"; $("docDiffBody").textContent = "";
+  dlg.showModal();
+  let d;
+  try { const r = await fetch(`/api/doc_diff?id=${encodeURIComponent(id)}`, { cache: "no-store" }); d = await r.json(); if (!r.ok) throw new Error(d.error || d.message || r.status); }
+  catch (e) { $("docDiffHead").textContent = "โหลด diff ไม่ได้: " + (e.message || "เชื่อมต่อ server ไม่ได้"); return; }
+  $("docDiffHead").textContent = `${(d.files || []).length} ไฟล์: ${(d.files || []).join(" · ")}`;
+  $("docDiffBody").innerHTML = String(d.diff || "(ไม่มี diff)").split(/\r?\n/).map((l) => {
+    const c = /^(\+\+\+|---|@@)/.test(l) ? "hunk" : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "";
+    return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+  }).join("\n");
 }
 /* ---------- รันเลย (คู่ขนาน) + จำนวนช่อง ---------- */
 const rnDlg = $("runNowDlg");
@@ -1397,7 +1475,7 @@ document.addEventListener("DOMContentLoaded", applyCompact);
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
 const pad2 = (n) => String(n).padStart(2, "0");
 const hueOf = (str) => { let h = 7; for (const c of String(str || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
-const shortWhat = (j) => isQa(j) ? `🧪 ทดสอบ ${j.tasks || "ทุกชุด"}` : j.message && !isSleuth(j) ? `ข้อความ: ${trunc(j.message, 40)}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 40) : String(j.plan || "-").split(/[\\/]/).pop() + " " + (j.tasks || "")}`;
+const shortWhat = (j) => isDoc(j) ? `📝 เอกสาร ${j.tasks || ""}` : isQa(j) ? `🧪 ทดสอบ ${j.tasks || "ทุกชุด"}` : j.message && !isSleuth(j) ? `ข้อความ: ${trunc(j.message, 40)}` : `${isVerify(j) ? roleTag(j) : ""}${isSleuth(j) && j.message ? trunc(j.message, 40) : String(j.plan || "-").split(/[\\/]/).pop() + " " + (j.tasks || "")}`;
 const trunc = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 function approx(s) {
   if (s == null || !isFinite(s)) return "-";
@@ -1905,7 +1983,7 @@ function officeUpdate() {
     const bar = $("ofCB" + k);
     if (bar) { bar.className = "of-bar" + (cls ? " " + cls : ""); bar.firstElementChild.style.width = ri.pct == null ? "" : ri.pct.toFixed(1) + "%"; ri.pct == null ? bar.removeAttribute("aria-valuenow") : bar.setAttribute("aria-valuenow", Math.round(ri.pct)); }
     setText("ofCP" + k, ri.pct == null ? "ประมาณไม่ได้" : Math.round(ri.pct) + "%" + (ri.pct >= 95 ? "+" : ""));
-    const stepTxt = isQa(r) ? (r.qa?.phase === "analyze" ? "Flash กำลังอ่าน log อธิบายสาเหตุ" : "นักทดสอบกำลังรัน " + (r.qa?.current || r.tasks || "")) : isSleuth(r) ? "ผู้สืบกำลังสืบต้นตอ" : r.message ? "ข้อความทดสอบ" : isVerify(r) ? "ผู้ตรวจกำลังตรวจ " + (r.tasks || "") : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
+    const stepTxt = isDoc(r) ? (r.doc?.phase === "check" ? "flashq กำลังตรวจผลเอกสาร" : "ช่างเอกสารกำลังแก้ " + (r.tasks || "")) : isQa(r) ? (r.qa?.phase === "analyze" ? "Flash กำลังอ่าน log อธิบายสาเหตุ" : "นักทดสอบกำลังรัน " + (r.qa?.current || r.tasks || "")) : isSleuth(r) ? "ผู้สืบกำลังสืบต้นตอ" : r.message ? "ข้อความทดสอบ" : isVerify(r) ? "ผู้ตรวจกำลังตรวจ " + (r.tasks || "") : ri.n > 1 ? `เสร็จแล้ว ${ri.doneN}/${ri.n} งาน${ri.cur ? " · ตอนนี้: " + ri.cur : ""}` : (ri.list[0] ? "งาน " + ri.list[0] : "");
     setText("ofCS" + k, stepTxt + (L && L.mention && !ri.doneN && ri.n > 1 ? ` (log พูดถึง ${L.mention} ล่าสุด)` : ""));
     let t;
     if (ri.el == null) t = "ยังไม่ทราบเวลาเริ่ม";
