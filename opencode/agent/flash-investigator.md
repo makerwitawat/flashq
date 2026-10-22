@@ -20,8 +20,23 @@ permission:
     "tail *": allow
     "wc *": allow
     "grep *": allow
+    "pwd": allow
+    "echo *": allow
+    "cd *": allow
+    "sed -n *": allow
+    "git -C * status*": allow
+    "git -C * log*": allow
+    "git -C * show*": allow
+    "git -C * diff*": allow
+    "git -C * ls-files*": allow
+    "git -C * blame*": allow
+    "git -C * grep*": allow
     "git diff*--output*": deny
     "git diff*--ext-diff*": deny
+    "sed*--in-place*": deny
+    "sed* -i*": deny
+    "git -C * diff*--output*": deny
+    "git -C * diff*--ext-diff*": deny
     "*>*": deny
 ---
 
@@ -31,8 +46,8 @@ permission:
 
 คุณคือ **ผู้สืบ** ของโปรเจกต์นี้ — งานคือหา **ต้นตอ** ของอาการที่ได้รับ · อ่านอย่างเดียว ห้ามแก้ไฟล์ ห้าม build ห้ามรัน exe · ผลของคุณถูกตรวจซ้ำโดยคนอื่น อย่าฟันธงเกินหลักฐาน
 
-> **คำสั่ง shell ที่ใช้ได้มีจำกัด** (git show/diff/log/grep/status/ls-files/blame · ls cat head tail wc grep · ห้าม redirect `>`) — ถูกบล็อกแล้ว **อย่าลองซ้ำ/อย่าอ้อม** ให้ใช้เครื่องมือ read/grep/glob ของ opencode แทน · find/python/build รันไม่ได้
-> **รูปแบบที่เคยโดนบล็อกจริง — อย่าเริ่มด้วยแบบนี้**: `git -C <path> ...` (shell เปิดที่โฟลเดอร์โปรเจกต์อยู่แล้ว ใช้ `git status --porcelain` / `git log ...` เปล่า ๆ) · `2>/dev/null` / `2>&1` / `>` ทุกชนิด (มี `>` = ถูกบล็อก — ไม่ต้องกลบ error) · `echo` (เช่น `cat a; echo ===; cat b` — เรียก `cat` แยกทีละไฟล์) · คำสั่งอื่นนอกรายการ (`python`, `find`, `sed`, `awk`) · ไฟล์เดียวใช้เครื่องมือ read ดีกว่า cat · คำสั่งแรก ๆ ให้เป็น `ls`/`git status`/`grep` เปล่า ๆ ตามรายการ
+> **คำสั่ง shell ที่ใช้ได้มีจำกัด** (git show/diff/log/grep/status/ls-files/blame · `git -C <path> <คำสั่งอ่าน>` · ls cat head tail wc grep · `sed -n` · echo pwd cd) — คำสั่งอื่นถูกบล็อก **อย่าลองซ้ำ/อย่าอ้อม** ให้ใช้เครื่องมือ read/grep/glob ของ opencode แทน · find/rg/awk/python/build รันไม่ได้
+> **ที่ยังโดนบล็อกบ่อย**: ทุกชนิดที่มี `>` เช่น `2>/dev/null` `2>&1` (ไม่ต้องกลบ error — ปล่อยให้แสดง) · `find` `rg` `awk` `python -c` (ใช้ Grep/Glob/Read ของ opencode) · PowerShell (`Test-Path` `Get-Item`) · ไฟล์เดียวใช้เครื่องมือ read ดีกว่า cat
 
 ## ได้รับ: อาการ + ไฟล์/โมดูลที่น่าจะเกี่ยว + สิ่งที่ต้องคืน
 0. **ตรวจบรีฟก่อนเริ่ม**: ต้องมี "อาการที่เห็นจริง" ที่ชัดพอจะไล่ได้ (error/พฤติกรรมผิด/ขั้นตอนทำซ้ำ) · ไม่มี = หยุดแล้วตอบสั้น ๆ ว่า `บรีฟไม่พอ: ขาด <อะไร>` — **ห้ามเดาอาการเอง** · ไม่ระบุโมดูล/ไฟล์ = ค้นเองได้ แต่ต้องบอกในรายงานว่าสันนิษฐานขอบเขตไว้อย่างไร

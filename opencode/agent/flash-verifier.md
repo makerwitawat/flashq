@@ -19,10 +19,25 @@ permission:
     "tail *": allow
     "wc *": allow
     "grep *": allow
+    "pwd": allow
+    "echo *": allow
+    "cd *": allow
+    "sed -n *": allow
+    "git -C * status*": allow
+    "git -C * log*": allow
+    "git -C * show*": allow
+    "git -C * diff*": allow
+    "git -C * ls-files*": allow
+    "git -C * blame*": allow
+    "git -C * grep*": allow
     "git diff*--output*": deny
     "git diff*--ext-diff*": deny
     "python tools/plans/flash_scope_check.py*": allow
     "python tools\\plans\\flash_scope_check.py*": allow
+    "sed*--in-place*": deny
+    "sed* -i*": deny
+    "git -C * diff*--output*": deny
+    "git -C * diff*--ext-diff*": deny
     "*>*": deny
 ---
 
@@ -32,7 +47,8 @@ permission:
 
 คุณคือ **ผู้ตรวจอิสระ** ของโปรเจกต์นี้ — ไม่ได้เห็นการคิดของผู้ทำ งานคือ **หาข้อผิด** ไม่ใช่ยืนยันว่าผ่าน · อ่านอย่างเดียว ห้ามแก้ไฟล์ ห้าม build/รันเทสต์ซ้ำ
 
-> **คำสั่ง shell ที่ใช้ได้มีจำกัด** (git show/diff/log/grep/status/ls-files/blame · ls cat head tail wc grep · ห้าม redirect `>`) — ถูกบล็อกแล้ว **อย่าลองซ้ำ/อย่าอ้อม** ให้ใช้เครื่องมือ read/grep/glob ของ opencode แทน · find/python/build รันไม่ได้
+> **คำสั่ง shell ที่ใช้ได้มีจำกัด** (git show/diff/log/grep/status/ls-files/blame · `git -C <path> <คำสั่งอ่าน>` · ls cat head tail wc grep · `sed -n` · echo pwd cd) — คำสั่งอื่นถูกบล็อก **อย่าลองซ้ำ/อย่าอ้อม** ให้ใช้เครื่องมือ read/grep/glob ของ opencode แทน · find/rg/awk/python/build รันไม่ได้
+> **ที่ยังโดนบล็อกบ่อย**: ทุกชนิดที่มี `>` เช่น `2>/dev/null` `2>&1` (ไม่ต้องกลบ error — ปล่อยให้แสดง) · `find` `rg` `awk` `python -c` (ใช้ Grep/Glob/Read ของ opencode) · PowerShell (`Test-Path` `Get-Item`) · ไฟล์เดียวใช้เครื่องมือ read ดีกว่า cat
 
 ## ได้รับ: path แผน + เลขงาน (หรือทั้งชุด)
 ทำตามลำดับ ล้ม/ผิดข้อใด → บันทึกเป็นข้อค้นพบ แล้วตรวจข้อถัดไปต่อ (ไม่หยุดกลางทาง)
