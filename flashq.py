@@ -16,6 +16,7 @@
   python flashq.py run docs\\PLAN_X.md T-01..T-03 [--project <dir>]   ส่งงาน (รอคิวเอง)
   python flashq.py run --message "ตอบแค่คำว่า PONG"                   ทดสอบการเชื่อมต่อ
   python flashq.py verify docs\\PLAN_X.md T-01 [--agent flash-verifier] [--model M]   ส่งผู้ตรวจ (อ่านอย่างเดียว · ไม่ชนงานอื่น)
+  python flashq.py qa [ชุด...] [--cmd "คำสั่ง"] [--commit SHA] [--retry N] [--no-analyze]   นักทดสอบ: flashq รันชุดทดสอบจาก .flash.json (qa.presets) เอง ตัดสินจาก exit code จริง · ล้ม → Flash อธิบายสาเหตุ (ความเห็น ไม่ใช่คำตัดสิน)
   python flashq.py run ... --agent <ชื่อ> --title <ชื่อ> --readonly   เลือก agent/ชื่อ session/งานอ่านอย่างเดียวเอง
   python flashq.py [status] | list [--all] | log <id> | cancel <id>
   python flashq.py wait <job|แผน> [--timeout-min 480]                  รอจนงานจบแล้วพิมพ์ FLASH_RUN=... (รันใน background ของ Claude · ไม่ต้อง sleep/poll)
@@ -83,7 +84,8 @@ DEFAULTS = {
     "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
     "agent_stall_floor_min": 4,
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
-    "variants": {"investigate": "high", "verify": "low"},  # ระดับความคิด (opencode --variant) ตามชนิดงาน · ไม่มีชนิดนั้น/ค่าว่าง = ไม่ส่ง (ใช้ค่าเริ่มต้นของ provider) · ทับได้ใน .flash.json / config.json · --variant ใน CLI ชนะทุกอย่าง
+    "qa_timeout_min": 30,  # นักทดสอบ (flashq qa): เวลาสูงสุดต่อ 1 ชุดทดสอบ · ทับรายชุดได้ด้วย timeout_min ใน qa.presets.<ชื่อ> · เกิน = ฆ่าทั้งต้นแล้วรายงาน TIMEOUT
+    "variants": {"investigate": "high", "verify": "low", "qa": "high"},  # ระดับความคิด (opencode --variant) ตามชนิดงาน · ไม่มีชนิดนั้น/ค่าว่าง = ไม่ส่ง (ใช้ค่าเริ่มต้นของ provider) · ทับได้ใน .flash.json / config.json · --variant ใน CLI ชนะทุกอย่าง
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
 }
 # แยก process ออกจาก console ของผู้เรียก แต่ "ต้องมี console ซ่อนของตัวเอง" (CREATE_NO_WINDOW) · ห้ามใส่ DETACHED_PROCESS: ไม่มี console เลย →
@@ -1001,6 +1003,15 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     """เหตุที่งาน a รันพร้อม b ไม่ได้ ("" = ไม่ชน) · อนุรักษ์: ไม่แน่ใจ = ชน"""
     if _pnorm(a.get("project", "")) != _pnorm(b.get("project", "")):
         return ""
+    qa_a, qa_b = a.get("kind") == "qa", b.get("kind") == "qa"
+    if qa_a or qa_b:  # นักทดสอบต้องเห็นโค้ดนิ่ง: ไม่รันคู่กับงานที่แก้ไฟล์ และไม่รันคู่กับนักทดสอบอีกตัว (พอร์ต/ไฟล์ชั่วคราวชนกัน) · ผู้ตรวจ/ผู้สืบอ่านอย่างเดียว รันคู่ได้
+        if qa_a and qa_b:
+            return "นักทดสอบอีกงานกำลังทดสอบโปรเจกต์นี้อยู่"
+        other = b if qa_a else a
+        if other.get("readonly"):
+            return ""
+        return ("มีงานที่แก้ไฟล์กำลังรันในโปรเจกต์เดียวกัน — ต้องรอให้จบก่อนถึงจะทดสอบได้ (ไม่งั้นทดสอบโค้ดที่ยังเปลี่ยนอยู่)" if qa_a
+                else "นักทดสอบกำลังทดสอบโปรเจกต์นี้อยู่ — รอให้จบก่อนถึงจะแก้ไฟล์ได้")
     if a.get("readonly") or b.get("readonly"):  # งานอ่านอย่างเดียว (เช่น ผู้ตรวจ) ไม่แก้ไฟล์ → ไม่ชนใคร
         return ""
     ia, ib = info(a), info(b)
@@ -2102,8 +2113,456 @@ def cmd_run(a) -> int:
     return 0 if res["status"] == "OK" else 1
 
 
+# ---------- นักทดสอบ (flashq qa) ----------
+# หลักการ: flashq รันคำสั่งทดสอบเอง (ไม่ผ่านโมเดล) แล้วตัดสินจาก exit code จริง + ข้อความที่ต้องพบ (expect) — โมเดลบอกว่า "ผ่าน" ไม่นับ
+# ล้ม → (เลือกได้) ให้ Flash อ่าน log แล้วอธิบายสาเหตุ · คำอธิบายนั้นไม่เปลี่ยนคำตัดสิน
+# คำสั่งมาจาก .flash.json (qa.presets) หรือ --cmd ใน CLI เท่านั้น — หน้าเว็บ/โมเดลสั่งคำสั่งเองไม่ได้
+QA_NAME_RE = re.compile(r"^[A-Za-z0-9][\w.-]{0,39}$")
+QA_MAX_CMD = 2000
+QA_LOG_CAP = 100 * 1024 * 1024   # log ของ 1 ชุดเกินนี้ = คำสั่งพ่นข้อความไม่หยุด → ฆ่า (กันดิสก์เต็ม)
+QA_READ_CAP = 600 * 1024         # อ่านท้าย log แค่นี้ตอนตรวจ expect/ดึงบรรทัดสำคัญ
+QA_ANALYZE_MIN = 10
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+QA_KEY_RE = re.compile(r"^(?:FAILED|ERROR|FAIL)\b|AssertionError|^E {2,}|^Traceback|\b\d+ (?:passed|failed|errors?|skipped)\b|^Ran \d+ tests?|"
+                       r"^(?:OK|FAILED) ?(?:\(|$)|\bnot ok\b|error\[E\d+\]|panicked at|^--- FAIL|BUILD FAILED|✖|✕|\bTests?:\s|\d+ failing|\berror:", re.I)
+
+
+def qa_detect(root: Path) -> list[dict]:
+    """เดาว่าโปรเจกต์นี้ทดสอบด้วยอะไร — ใช้แค่แนะนำให้ผู้ใช้ใส่ใน .flash.json (ไม่รันเอง · คำสั่งที่เดาไม่เคยถูกรันโดยไม่มีคนยืนยัน)"""
+    out: list[dict] = []
+
+    def text(name: str) -> str:
+        try:
+            return (root / name).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return ""
+    if (root / "pytest.ini").is_file() or (root / "conftest.py").is_file() or (root / "tests").is_dir() or "pytest" in text("pyproject.toml") or "[tool:pytest]" in text("setup.cfg"):
+        out.append({"name": "unit", "cmd": "python -m pytest -q", "expect": r"\d+ passed", "why": "พบ pytest / โฟลเดอร์ tests"})
+    scripts = read_json(root / "package.json").get("scripts")
+    if isinstance(scripts, dict) and scripts.get("test") and "no test specified" not in str(scripts["test"]):
+        out.append({"name": "unit", "cmd": "npm test", "why": "package.json มี scripts.test"})
+    if (root / "Cargo.toml").is_file():
+        out.append({"name": "unit", "cmd": "cargo test", "why": "พบ Cargo.toml"})
+    if (root / "go.mod").is_file():
+        out.append({"name": "unit", "cmd": "go test ./...", "why": "พบ go.mod"})
+    if any(root.glob("*.sln")) or any(root.glob("*.csproj")):
+        out.append({"name": "unit", "cmd": "dotnet test", "why": "พบ .sln/.csproj"})
+    if re.search(r"^test\s*:", text("Makefile"), re.M):
+        out.append({"name": "unit", "cmd": "make test", "why": "Makefile มีเป้าหมาย test"})
+    seen, uniq = set(), []
+    for x in out:  # ชื่อซ้ำ (เจอหลายระบบ) → ต่อท้ายเลขให้ใช้งานได้ทันที
+        n, i = x["name"], 1
+        while n in seen:
+            i += 1
+            n = f"{x['name']}{i}"
+        seen.add(n)
+        uniq.append(dict(x, name=n))
+    return uniq
+
+
+def qa_suggest_lines(root: Path) -> list[str]:
+    found = qa_detect(root)
+    if not found:
+        return ["ยังเดาไม่ได้ว่าโปรเจกต์นี้ทดสอบด้วยอะไร → ใส่ qa.presets ใน .flash.json เอง หรือสั่งครั้งเดียวด้วย --cmd \"<คำสั่ง>\""]
+    presets = {x["name"]: {k: v for k, v in x.items() if k in ("cmd", "expect")} for x in found}
+    return ["ที่เดาได้จากไฟล์ในโปรเจกต์ (ตรวจแล้วค่อยวางใน .flash.json — flashq ไม่รันคำสั่งที่เดาเอง):",
+            "  " + json.dumps({"qa": {"presets": presets}}, ensure_ascii=False)] + [f"  - {x['name']}: {x['why']}" for x in found]
+
+
+def qa_spec(name: str, v, default_min: float) -> dict | str:
+    """ตรวจ 1 ชุดทดสอบ → dict ที่ใช้รันได้ หรือข้อความผิดพลาด (ห้ามปล่อยค่าเพี้ยนไปถึงตอนรัน)"""
+    if isinstance(v, str):
+        v = {"cmd": v}
+    if not isinstance(v, dict):
+        return f"ชุดทดสอบ '{name}' ต้องเป็นข้อความคำสั่ง หรือ {{\"cmd\": \"...\"}}"
+    cmd = str(v.get("cmd") or "").strip()
+    if not cmd:
+        return f"ชุดทดสอบ '{name}' ไม่มี cmd"
+    if len(cmd) > QA_MAX_CMD or "\x00" in cmd or "\n" in cmd:
+        return f"ชุดทดสอบ '{name}': cmd ต้องบรรทัดเดียว ยาวไม่เกิน {QA_MAX_CMD} ตัวอักษร"
+
+    def num(key: str, dflt: float, lo: float, hi: float):
+        raw = v.get(key)
+        if raw in (None, ""):
+            return dflt
+        try:
+            x = float(raw)
+        except (TypeError, ValueError):
+            return f"ชุดทดสอบ '{name}': {key} ต้องเป็นตัวเลข"
+        return x if lo <= x <= hi else f"ชุดทดสอบ '{name}': {key} ต้องอยู่ระหว่าง {lo:g}-{hi:g}"
+    timeout, idle, retry = num("timeout_min", default_min, 0.1, 1440), num("idle_min", 0, 0, 1440), num("retry", 0, 0, 3)
+    for x in (timeout, idle, retry):
+        if isinstance(x, str):
+            return x
+    expect = str(v.get("expect") or "")
+    if expect:
+        try:
+            re.compile(expect)
+        except re.error as e:
+            return f"ชุดทดสอบ '{name}': expect ไม่ใช่ regex ที่ถูกต้อง ({e})"
+    return {"name": name, "cmd": cmd, "cwd": str(v.get("cwd") or "."), "timeout_min": timeout, "idle_min": idle,
+            "retry": int(retry), "expect": expect}
+
+
+def qa_specs(cfg: dict, names: list[str], raw_cmds: list[str], root: Path) -> tuple[list[dict], list[str]]:
+    """เลือกชุดทดสอบ: ชื่อจาก qa.presets (ไม่ระบุชื่อและไม่มี --cmd = ทุกชุด) + --cmd เฉพาะกิจ · คืน (ชุด, ข้อผิดพลาด)"""
+    qa = cfg.get("qa") if isinstance(cfg.get("qa"), dict) else {}
+    presets = qa.get("presets") if isinstance(qa.get("presets"), dict) else {}
+    dmin = float(cfg.get("qa_timeout_min") or DEFAULTS["qa_timeout_min"])
+    errs, specs = [], []
+    want = list(dict.fromkeys(names))
+    if not want and not raw_cmds:
+        want = list(presets)
+    todo = []
+    for n in want:
+        if n not in presets:
+            errs.append(f"ไม่มีชุดทดสอบชื่อ '{n}' ใน .flash.json (qa.presets มี: {', '.join(presets) or 'ไม่มีเลย'})")
+        elif not QA_NAME_RE.match(str(n)):
+            errs.append(f"ชื่อชุดทดสอบ '{n}' ใช้ได้แค่ตัวอักษร/ตัวเลข _ . - (ยาวไม่เกิน 40)")
+        else:
+            todo.append((n, presets[n]))
+    todo += [("adhoc" if i == 1 else f"adhoc{i}", {"cmd": c}) for i, c in enumerate(raw_cmds, 1)]
+    for n, v in todo:
+        s = qa_spec(n, v, dmin)
+        if isinstance(s, str):
+            errs.append(s)
+        else:
+            specs.append(s)
+    rroot = root.resolve()
+    for s in specs:  # cwd ต้องอยู่ในโปรเจกต์และมีจริง — ไม่ให้ชุดทดสอบเดินออกไปรันนอกโปรเจกต์
+        d = (rroot / s["cwd"]).resolve()
+        if not d.is_relative_to(rroot):
+            errs.append(f"ชุดทดสอบ '{s['name']}': cwd '{s['cwd']}' อยู่นอกโปรเจกต์")
+        elif not d.is_dir():
+            errs.append(f"ชุดทดสอบ '{s['name']}': ไม่พบโฟลเดอร์ cwd '{s['cwd']}'")
+    return specs, errs
+
+
+def qa_preset_names(project: str) -> list[str]:
+    """ชื่อชุดทดสอบที่ตั้งไว้ในโปรเจกต์ (อ่าน .flash.json ตรง ๆ ไม่เรียก git — หน้าเว็บเรียกถี่)"""
+    qa = read_json(Path(project) / ".flash.json").get("qa") if project else None
+    presets = qa.get("presets") if isinstance(qa, dict) else None
+    return [n for n in presets if QA_NAME_RE.match(str(n))] if isinstance(presets, dict) else []
+
+
+def qa_text(path: Path, cap: int = QA_READ_CAP) -> str:
+    """อ่านท้ายไฟล์ log เป็นข้อความ: utf-8 ก่อน ไม่ได้ = รหัสหน้าเครื่อง (Windows mbcs) · ตัดสี ANSI · บรรทัดที่ถูกเขียนทับด้วย \\r เหลือแค่ข้อความสุดท้าย"""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > cap:
+                f.seek(size - cap)
+            data = f.read()
+    except OSError:
+        return ""
+    if size > cap:
+        data = data.lstrip(bytes(range(0x80, 0xC0)))  # ตัดไบต์ต่อท้ายตัวอักษรหลายไบต์ที่ถูกหั่นกลาง
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = data.decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+        except LookupError:
+            text = data.decode("utf-8", "replace")
+    text = ANSI_RE.sub("", text.replace("\r\n", "\n"))
+    return "\n".join(ln.split("\r")[-1] for ln in text.split("\n"))
+
+
+def qa_key_lines(text: str, limit: int = 8) -> list[str]:
+    """บรรทัดที่บอกผล (สรุปจำนวนผ่าน/ล้ม · ชื่อเทสต์ที่ล้ม · assertion · traceback) ตัดท้าย limit บรรทัด · ไม่ตีความ แค่คัดมา"""
+    hits = [ln.strip()[:200] for ln in text.splitlines() if ln.strip() and QA_KEY_RE.search(ln.strip())]
+    return list(dict.fromkeys(hits))[-limit:]
+
+
+def qa_kill(p: subprocess.Popen) -> None:
+    if os.name == "nt":
+        kill_tree(p.pid)
+        return
+    try:
+        os.killpg(os.getpgid(p.pid), 9)
+    except OSError:
+        pass
+
+
+def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
+    """รันคำสั่ง 1 ชุดจนจบ/เกินเวลา/ค้าง/log ใหญ่เกิน · คืน {status: DONE|TIMEOUT|HANG|BIGLOG|ERROR, rc, secs, why}
+    ยังไม่ตัดสินผ่าน/ไม่ผ่าน (qa_verdict ทำ) · ฆ่าทั้งต้นเสมอ (ไม่ทิ้งลูกค้างพอร์ต) · flashq ถูกขัดจังหวะ = ฆ่าคำสั่งก่อนออก"""
+    t0 = time.time()
+    cwd = (root / spec["cwd"]).resolve()
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "CI": "1", "NO_COLOR": "1"}
+    kw = {"creationflags": HIDDEN_DETACH_FLAGS} if os.name == "nt" else {"start_new_session": True}
+    with open(log, "wb") as fo:
+        try:
+            p = subprocess.Popen(spec["cmd"], shell=True, cwd=str(cwd), stdout=fo, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, **kw)
+        except OSError as e:
+            return {"status": "ERROR", "rc": -1, "secs": 0.0, "why": f"เปิดคำสั่งไม่ได้: {e}"}
+        job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
+        save_job(job)
+        status, why, rc = "DONE", "", None
+        try:
+            while True:
+                try:
+                    rc = p.wait(timeout=1)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                if time.time() - t0 > spec["timeout_min"] * 60:
+                    status, why = "TIMEOUT", f"เกินเวลา {spec['timeout_min']:g} นาที (ฆ่าทั้งต้นแล้ว)"
+                else:
+                    try:
+                        if os.path.getsize(log) > QA_LOG_CAP:
+                            status, why = "BIGLOG", f"log เกิน {QA_LOG_CAP // 1048576} MB (คำสั่งพ่นข้อความไม่หยุด · ฆ่าแล้ว)"
+                        elif spec["idle_min"] and time.time() - os.path.getmtime(log) > spec["idle_min"] * 60:
+                            status, why = "HANG", f"log เงียบเกิน {spec['idle_min']:g} นาที (ตั้ง idle_min ไว้ · ฆ่าแล้ว)"
+                    except OSError:
+                        pass
+                if why:
+                    qa_kill(p)
+                    try:
+                        rc = p.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        rc = -1
+                    break
+        except BaseException:
+            qa_kill(p)
+            raise
+    return {"status": status, "rc": rc if rc is not None else -1, "secs": round(time.time() - t0, 1), "why": why}
+
+
+def qa_verdict(spec: dict, r: dict, text: str) -> str:
+    """PASS = exit 0 และ (ไม่ได้ตั้ง expect หรือพบข้อความ expect ใน log) · อย่างอื่นไม่ผ่านหมด (fail-closed)
+    NOEXPECT = exit 0 แต่ไม่พบข้อความที่ต้องมี → มักรันเทสต์ไม่ได้สักข้อ (collected 0 / ไม่ได้ build) ห้ามนับผ่าน"""
+    if r["status"] != "DONE":
+        return {"TIMEOUT": "TIMEOUT", "HANG": "TIMEOUT", "BIGLOG": "FAIL", "ERROR": "ERROR"}.get(r["status"], "FAIL")
+    if r["rc"] != 0:
+        return "FAIL"
+    if spec["expect"] and not re.search(spec["expect"], text, re.M):
+        return "NOEXPECT"
+    return "PASS"
+
+
+QA_ICON = {"PASS": "✅", "FAIL": "❌", "TIMEOUT": "⏱", "ERROR": "⛔", "NOEXPECT": "⚠️", "FLAKY": "⚠️", "SKIPPED": "⏭", "CHANGED": "⚠️"}
+
+
+def qa_summary(q: dict) -> tuple[str, str]:
+    """(หัวข้อ 1 บรรทัด, รายละเอียด) ภาษาคน — ผู้ใช้/Claude อ่านบรรทัดแรกก็รู้ผลทันที"""
+    specs = q["specs"]
+    bad = [s for s in specs if s["verdict"] != "PASS"]
+    tested = f"ทดสอบ {q.get('head') or 'โฟลเดอร์ที่ไม่ใช่ git'}" + (f" (+ไฟล์ที่ยังไม่ commit {q['dirty']} ไฟล์)" if q.get("dirty") else "")
+    if not bad:
+        head = f"✅ ผ่านทั้ง {len(specs)} ชุด ({', '.join(s['name'] for s in specs)}) · {tested}"
+    else:
+        head = f"❌ ไม่ผ่าน {len(bad)}/{len(specs)} ชุด: " + ", ".join(f"{s['name']}={s['verdict']}" for s in bad) + f" · {tested}"
+    if q.get("changed"):
+        head = f"⚠️ ผลใช้ไม่ได้ — {q['changed']} · " + head
+    lines = []
+    for s in specs:
+        ic = QA_ICON.get(s["verdict"], "?")
+        if s["verdict"] == "PASS":
+            lines.append(f"{ic} {s['name']} — ผ่าน {s['secs']:g} วิ" + (f" · {s['key'][-1]}" if s.get("key") else ""))
+            continue
+        why = {"FAIL": f"exit {s.get('rc')}", "TIMEOUT": s.get("why") or "เกินเวลา", "ERROR": s.get("why") or "เปิดคำสั่งไม่ได้",
+               "NOEXPECT": f"exit 0 แต่ไม่พบข้อความที่ต้องมี /{s.get('expect', '')}/ → อาจไม่ได้รันเทสต์จริง นับว่าไม่ผ่าน",
+               "FLAKY": "ล้มรอบแรกแต่ผ่านรอบหลัง = ผลไม่นิ่ง นับว่าไม่ผ่าน", "SKIPPED": "ข้าม (ชุดก่อนหน้าหยุดการทดสอบ)",
+               "CHANGED": "โค้ดเปลี่ยนระหว่างทดสอบ"}.get(s["verdict"], s["verdict"])
+        lines.append(f"{ic} {s['name']} — {why}" + (f" · {s['secs']:g} วิ" if s["verdict"] != "SKIPPED" else "") + (f" · log {s['log']}" if s.get("log") else ""))
+        lines += [f"    {k}" for k in (s.get("key") or [])[-5:]]
+    if q.get("analysis"):
+        lines.append("คำอธิบายจากนักทดสอบ (Flash · ความเห็น ไม่ใช่คำตัดสิน — ตรวจกับ log ก่อนเชื่อ): " + one_line(q["analysis"], 700))
+    elif q.get("analysis_note"):
+        lines.append(f"(ไม่มีคำอธิบายจาก Flash: {q['analysis_note']})")
+    return head, "\n".join(lines)
+
+
+def qa_analyze(job: dict, root: Path, cfg: dict, failing: list[dict], variant: str) -> str:
+    """ให้ Flash (flash-tester อ่านอย่างเดียว) อ่าน log ของชุดที่ล้มแล้วอธิบายสาเหตุ · คืนข้อความ · ล้มเหลว = โยน RuntimeError(เหตุผล) ให้ผู้เรียกบันทึก ไม่กระทบคำตัดสิน"""
+    exe = opencode_cmd()
+    if not exe:
+        raise RuntimeError("ไม่พบคำสั่ง opencode")
+    parts = "; ".join(f"ชุด {s['name']} (exit {s.get('rc')}) log: {s['log']}" for s in failing[:4])
+    prompt = ("ชุดทดสอบต่อไปนี้ไม่ผ่าน อ่านเฉพาะไฟล์ log ที่ระบุ (และโค้ดในโปรเจกต์ที่ log ชี้ถึง) แล้วรายงานตามหน้าที่ของคุณ — "
+              "สาเหตุที่น่าจะเป็น พร้อมบรรทัดหลักฐานจาก log ตรงตัว · ห้ามแก้ไฟล์ · ห้ามรันคำสั่งทดสอบซ้ำ. " + parts)
+    title = one_line(f"flash-qa-analyze {job['title']}", 200)
+    bad = cmd_shim_unsafe(exe, title, prompt)
+    if bad:
+        raise RuntimeError(f"ข้อความถึงโมเดลมีอักขระ {bad} ที่ cmd.exe ตีความเอง (path ของ log) — ข้ามคำอธิบาย")
+    model = agent_model("flash-tester")
+    job["model"] = model
+    ext = external_dirs(cfg) + [_slash(str(LOGS)).rstrip("/") + "/*"]
+    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext)}
+    cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
+    if model:
+        cmd += ["--model", model]
+    if variant:
+        cmd += ["--variant", variant]
+    cmd += ["--agent", "flash-tester", "--", prompt]
+    job["attach"], job["variant"] = "", variant
+    save_job(job)
+    res = run_once(job, cmd, root, "", QA_ANALYZE_MIN, True, len(job.get("logs") or []) + 1, 4, 2, 0, env)
+    if res.get("status") != "OK" or not (res.get("last") or "").strip():
+        raise RuntimeError(f"Flash ตอบสถานะ {res.get('status')}" + (f" — {res['errors'][-1][:120]}" if res.get("errors") else ""))
+    return res["last"].strip()
+
+
+def cmd_qa(a) -> int:
+    start = Path(a.project or os.getcwd())
+    root, is_git = project_root(start)
+    cfg = project_cfg(root)
+    specs, errs = qa_specs(cfg, a.qa_names, a.qa_cmd, root)
+    if not specs and not errs:
+        errs = ["โปรเจกต์นี้ยังไม่ได้ตั้งชุดทดสอบ (.flash.json → qa.presets) และไม่ได้ระบุ --cmd"]
+    if errs and (root / ".flash.json").is_file() and not read_json(root / ".flash.json"):
+        errs.insert(0, f"อ่าน {root / '.flash.json'} ไม่ได้ (JSON เสีย/ว่าง) จึงไม่เห็นชุดทดสอบเลย — แก้ไฟล์ก่อน")
+    if errs:
+        print("FLASH_RUN=FAIL นักทดสอบเริ่มไม่ได้:")
+        for e in errs:
+            print(f"  - {e}")
+        if not specs:
+            for ln in qa_suggest_lines(root):
+                print(ln)
+        return 1
+    if a.timeout_min:
+        for s in specs:
+            s["timeout_min"] = float(a.timeout_min)
+    if a.retry is not None:
+        for s in specs:
+            s["retry"] = max(0, min(3, a.retry))
+
+    def head_now() -> str:
+        return _git(root, "rev-parse", "HEAD") if is_git else ""
+
+    def commit_problem() -> str:
+        if not a.qa_commit:
+            return ""
+        if not is_git:
+            return "ระบุ --commit แต่โปรเจกต์นี้ไม่ใช่ git"
+        want = _git(root, "rev-parse", "--verify", "-q", f"{a.qa_commit}^{{commit}}")
+        if not want:
+            return f"ไม่พบ commit '{a.qa_commit}' ในโปรเจกต์"
+        if want != head_now():
+            return (f"ต้องการทดสอบ commit {want[:10]} แต่ checkout ตอนนี้อยู่ที่ {head_now()[:10]} — นักทดสอบทดสอบโค้ดที่อยู่ใน checkout จริง "
+                    f"ไม่สลับ commit เอง · สลับให้ตรง (หรือ merge) แล้วสั่งใหม่")
+        return ""
+    prob = commit_problem()
+    if prob:
+        print(f"FLASH_RUN=FAIL {prob}")
+        return 1
+    for d in (JOBS, LOGS):
+        d.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    jid = f"{ts}_{os.getpid()}"
+    names = [s["name"] for s in specs]
+    title = one_line(a.title or f"flash-qa {' '.join(names)}", 200)
+    q = {"specs": [{"name": s["name"], "cmd": s["cmd"], "verdict": "PENDING", "secs": 0, "expect": s["expect"]} for s in specs],
+         "phase": "queued", "head": "", "dirty": 0}
+    job = {"id": jid, "project": str(root), "plan": "", "tasks": " ".join(names), "message": "", "kind": "qa", "agent": "flash-tester",
+           "prompt": "", "readonly": True, "title": title, "model": "", "status": "queued", "pid": os.getpid(),
+           "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION,
+           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "qa": q}
+    save_job(job)
+    got = acquire(job, a.wait_min, a.no_wait)
+    if got != "ok":
+        job.update(status="busy" if got == "busy" else "queue_timeout", finished=now())
+        save_job(job)
+        notify_job(job, job["status"].upper())
+        return 2 if got == "busy" else 3
+
+    status, rc_out, t_start = "FAIL", 1, time.time()
+    try:
+        job.update(status="running", started=now())
+        save_job(job)
+        print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
+        prob = commit_problem()  # รอคิวมานาน HEAD อาจเปลี่ยนไปแล้ว
+        head0 = head_now()
+        q.update(head=head0[:10], phase="test")
+        snap = dirty_snapshot(root) if is_git else None
+        q["dirty"] = len([p for p in (snap or {}) if not p.startswith((".tmp/", ".tmp\\"))])
+        save_job(job)
+        if prob:
+            q["changed"] = prob
+            for s in q["specs"]:
+                s["verdict"] = "SKIPPED"
+        else:
+            stop = False
+            for spec, row in zip(specs, q["specs"]):
+                if stop:
+                    row["verdict"] = "SKIPPED"
+                    continue
+                q["current"] = spec["name"]
+                runs = []
+                for k in range(spec["retry"] + 1):
+                    log = LOGS / f"{jid}_{len(job.get('logs') or []) + 1}.log"
+                    job.setdefault("logs", []).append(str(log))
+                    row.update(log=str(log), verdict="RUNNING")
+                    save_job(job)
+                    print(f"QA_START {spec['name']} รอบ {k + 1}/{spec['retry'] + 1} cwd={spec['cwd']} timeout={spec['timeout_min']:g}นาที log={log}", flush=True)
+                    r = qa_exec(job, root, spec, log)
+                    text = qa_text(log)
+                    r["verdict"], r["key"] = qa_verdict(spec, r, text), qa_key_lines(text)
+                    runs.append((r, log))
+                    print(f"QA_END {spec['name']} → {r['verdict']} exit={r['rc']} {r['secs']:g}วิ" + (f" ({r['why']})" if r["why"] else ""), flush=True)
+                    if r["verdict"] in ("PASS", "TIMEOUT", "ERROR"):  # ผ่านแล้ว/เกินเวลา/เปิดไม่ได้ ไม่ลองซ้ำ (ซ้ำก็เสียเวลาเปล่า)
+                        break
+                r, log = runs[-1]
+                verdict = r["verdict"]
+                if verdict == "PASS" and len(runs) > 1:
+                    verdict = "FLAKY"  # ผ่านเฉพาะรอบหลัง = ผลไม่นิ่ง · เก็บ log ของรอบที่ล้มด้วย
+                    log = runs[0][1]
+                    r = dict(r, key=runs[0][0]["key"])
+                row.update(verdict=verdict, rc=r["rc"], secs=round(sum(x[0]["secs"] for x in runs), 1), why=r["why"], key=r["key"][-8:],
+                           log=str(log), runs=len(runs))
+                head1 = head_now()
+                if head1 != head0:  # โค้ดเปลี่ยนระหว่างทดสอบ (มีใครแตะ checkout) → ผลไม่ใช่ของ commit เดียว ห้ามนับว่าผ่าน
+                    row["verdict"] = "CHANGED" if verdict == "PASS" else row["verdict"]
+                    q["changed"] = f"HEAD เปลี่ยนจาก {head0[:10]} เป็น {head1[:10]} ระหว่างทดสอบ"
+                    stop = True
+                elif row["verdict"] != "PASS" and a.fail_fast:
+                    stop = True
+            q.pop("current", None)
+        bad = [r for r in q["specs"] if r["verdict"] != "PASS"]
+        verdicts = {r["verdict"] for r in q["specs"]}
+        if verdicts == {"PASS"} and not q.get("changed"):
+            status = "OK"
+        elif "TIMEOUT" in verdicts and verdicts <= {"PASS", "TIMEOUT"} and not q.get("changed"):
+            status = "TIMEOUT"
+        else:
+            status = "FAIL"  # fail-closed: อะไรที่ไม่ใช่ PASS ล้วน (รวมข้าม/ไม่นิ่ง/โค้ดเปลี่ยน) = ไม่ผ่าน
+        failing = [r for r in bad if r.get("log") and r["verdict"] in ("FAIL", "TIMEOUT", "NOEXPECT", "FLAKY")]
+        if failing and not a.no_analyze and not q.get("changed"):
+            q["phase"] = "analyze"
+            save_job(job)
+            try:
+                q["analysis"] = qa_analyze(job, root, cfg, failing, variant_for("qa", a.variant, root))
+            except Exception as e:  # คำอธิบายเป็นของแถม — พังแค่บันทึกเหตุ ไม่เปลี่ยนคำตัดสิน
+                q["analysis_note"] = str(e)[:300]
+        q["phase"] = "done"
+        rc_out = 0 if status == "OK" else 1
+    finally:
+        mins = (time.time() - t_start) / 60
+        for row in q["specs"]:  # ถูกขัดจังหวะ/พังกลางทาง: ชุดที่ยังไม่ได้ผลต้องไม่ค้างเป็น PENDING/RUNNING (อ่านแล้วเหมือนยังทำอยู่)
+            if row["verdict"] in ("PENDING", "RUNNING"):
+                row.update(verdict="ERROR", why="ทดสอบไม่จบ (flashq ถูกขัดจังหวะหรือผิดพลาดกลางทาง)")
+        q["verdict"] = "PASS" if status == "OK" else status
+        head_line, body = qa_summary(q)
+        job.update(status=status.lower(), result=status, rc=rc_out, finished=now(), last=(head_line + "\n" + body)[:1500])
+        q["phase"] = "done"
+        save_job(job)
+        release(job)
+        notify_job(job, status, mins)
+    print(f"FLASH_RUN={status} exit={rc_out} เวลา={mins:.1f} นาที tool=0 session={job.get('session', '')} job={jid}")
+    print(f"QA={q['verdict']} {head_line}")
+    print("---- สรุปผลทดสอบ ----")
+    print(body)
+    return rc_out
+
+
 def kind_tag(j: dict) -> str:
-    return {"verify": "[ตรวจ] ", "investigate": "[สืบ] "}.get(j.get("kind"), "")
+    return {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] "}.get(j.get("kind"), "")
+
+
+def plan_label(j: dict) -> str:
+    """ชื่องานที่แสดงคู่ kind_tag: แผน · ไม่มีแผน = --message · นักทดสอบไม่มีทั้งคู่ (ชื่อชุดอยู่ใน tasks)"""
+    return j.get("plan") or ("" if j.get("kind") == "qa" else "--message")
 
 
 def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
@@ -2114,10 +2573,11 @@ def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
         if cfg.get("notify") is False:
             return
         INBOX.mkdir(parents=True, exist_ok=True)
-        label = f"{kind_tag(job)}{job.get('plan') or '--message'} {job.get('tasks', '')}".strip()
+        label = f"{kind_tag(job)}{plan_label(job)} {job.get('tasks', '')}".strip()
+        last = job.get("last") or ""
         row = {"job": job["id"], "project": job.get("project", ""), "session": job.get("claude_session", ""),
                "kind": job.get("kind", ""), "plan": job.get("plan", ""), "tasks": job.get("tasks", ""), "status": status,
-               "mins": round(mins, 1), "last": (job.get("last") or "")[-600:], "at": time.time()}
+               "mins": round(mins, 1), "last": last[:600] if job.get("kind") == "qa" else last[-600:], "at": time.time()}  # นักทดสอบ: หัวข้อผลอยู่บรรทัดแรก
         write_json(INBOX / f"{time.strftime('%Y%m%d-%H%M%S')}-{job['id']}.json", row)
         if os.name == "nt" and cfg.get("notify_toast", True) is not False and not os.environ.get("FLASHQ_NO_TOAST"):
             ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
@@ -2198,7 +2658,7 @@ def cmd_wait(a) -> int:
             mins = f" เวลา={(_ts(j['finished']) - _ts(j['started'])) / 60:.1f} นาที" if j.get("finished") and j.get("started") else ""
         except Exception:
             pass
-        print(f"FLASH_RUN={res} job={j['id']} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}{mins}"
+        print(f"FLASH_RUN={res} job={j['id']} {kind_tag(j)}{plan_label(j)} {j.get('tasks', '')}{mins}"
               + (f" session={j['session']}" if j.get("session") else ""))
         if res == "DEAD":
             print("  (process ของงานหายไปก่อนจบ — เครื่อง/terminal ปิด? ดู flashq log แล้วสั่งใหม่)")
@@ -2265,7 +2725,7 @@ def cmd_list(a) -> int:
         print("(ยังไม่มีงาน)")
         return 0
     for j in rows:
-        what = j.get("message") and "--message" or f"{j.get('plan')} {j.get('tasks')}"
+        what = j.get("message") and "--message" or f"{j.get('plan') or ''} {j.get('tasks') or ''}".strip()
         print(f"{j['id']:24} {live_state(j):13} {Path(j.get('project', '')).name:18} {kind_tag(j)}{what}"
               f"  [{j.get('created', '')}{' → ' + j['finished'] if j.get('finished') else ''}]")
     return 0
@@ -2279,11 +2739,11 @@ def cmd_status(a) -> int:
     for h in held:
         j = next((x for x in jobs() if x["id"] == h.get("id")), {})
         print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
-              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}" if j else ""))
+              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{plan_label(j)} {j.get('tasks', '')}" if j else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
         why = sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else "")
-        print(f"  {i}. {j['id']} {Path(j['project']).name} {kind_tag(j)}{j.get('plan') or '--message'} {j.get('tasks', '')}"
+        print(f"  {i}. {j['id']} {Path(j['project']).name} {kind_tag(j)}{plan_label(j)} {j.get('tasks', '')}"
               + (f"\n       ↳ {why}" if why else ""))
     print(f"บัญชี flash-worker: {configured_model() or '(ยังไม่ตั้ง)'}")
     return 0
@@ -2309,6 +2769,15 @@ def diagnose_job(j: dict) -> dict:
     d = {"id": j.get("id"), "state": st, "log_idle_sec": log_idle_sec(j), "server_idle_sec": None, "running": [], "verdict": "", "text": ""}
     if st != "running":
         d.update(verdict="not_running", text=f"งานไม่ได้รันอยู่ (สถานะ {st})")
+        return d
+    qa = j.get("qa") if j.get("kind") == "qa" else None
+    if qa and qa.get("phase") == "test":  # นักทดสอบรันคำสั่งเอง ไม่มีโมเดล/server ให้ถาม → ดูแค่ log ของคำสั่ง
+        cur = next((s for s in qa.get("specs") or [] if s.get("verdict") == "RUNNING"), {})
+        quiet = d["log_idle_sec"]
+        quiet_txt = f"log เงียบ {quiet / 60:.0f} นาที" if quiet is not None else "ยังไม่มี log"
+        d.update(quiet_sec=quiet, verdict="ok" if quiet is None or quiet < 600 else "tool_long",
+                 text=f"นักทดสอบกำลังรันชุด '{cur.get('name', '?')}' (คำสั่งจริง ไม่ผ่านโมเดล) · {quiet_txt}"
+                      + ("" if quiet is None or quiet < 600 else " · เงียบนาน อาจเป็นเทสต์ยาวจริงหรือค้าง — เกินเวลาของชุดจะถูกฆ่าและรายงาน TIMEOUT เอง"))
         return d
     attach, sid = j.get("attach") or "", j.get("session") or ""
     act = server_activity(attach, sid, j.get("project", "")) if attach.startswith("http") and sid else None
@@ -2370,7 +2839,11 @@ def cmd_log(a) -> int:
         return 1
     print(json.dumps({k: v for k, v in j.items() if k != "last"}, ensure_ascii=False, indent=1))
     print("---- ข้อความท้าย ----")
-    print(j.get("last") or "(ยังไม่มี)")
+    if j.get("kind") == "qa" and (j.get("qa") or {}).get("verdict"):  # สรุปเต็ม (ใน last ถูกตัดที่ 1500 ตัวอักษร)
+        head, body = qa_summary(j["qa"])
+        print(head + "\n" + body)
+    else:
+        print(j.get("last") or "(ยังไม่มี)")
     return 0
 
 
@@ -2847,7 +3320,7 @@ def ui_state() -> dict:
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
-        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []),
+        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []), qa=j.get("qa") or None,
                    perm_denied=[f"{x.get('kind', '')}: {x.get('path', '')}" for x in j.get("perm_denied") or []][:5])
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
@@ -2895,6 +3368,7 @@ def ui_state() -> dict:
             "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
+            "qa_presets": {p: n for p in sorted({r["project"] for r in rows if r["project"]}) if (n := qa_preset_names(p))},  # ชุดทดสอบที่ตั้งไว้ของแต่ละโปรเจกต์ (ให้ฟอร์มส่งงานเลือกได้)
             "submit_fails": submit_failures(),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
             "review_ttl_min": REVIEW_TTL_MIN,
@@ -2924,8 +3398,8 @@ def job_stats(history: list[dict]) -> dict:
     def kind(r) -> str:
         return r.get("kind") or ("test" if r.get("message") else "work")
 
-    def not_verify(r) -> bool:  # งานตรวจ/สืบสั้นกว่ามาก → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
-        return kind(r) not in AGENT_KINDS
+    def not_verify(r) -> bool:  # งานตรวจ/สืบ/ทดสอบสั้นกว่ามาก (และทดสอบไม่ใช้โมเดล) → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
+        return kind(r) not in AGENT_KINDS and kind(r) != "qa"
     return {"by_project": group(lambda r: r["project_name"], not_verify), "by_model": group(lambda r: r["model"], not_verify),
             "by_kind": group(kind)}
 
@@ -2966,6 +3440,23 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
         project = str(body.get("project") or "").strip().strip('"')
         if not project or not Path(project).is_absolute() or not Path(project).is_dir():
             return [], "โปรเจกต์ต้องเป็น path โฟลเดอร์แบบเต็มที่มีอยู่จริง"
+        if body.get("kind") == "qa":  # นักทดสอบ: เลือกได้เฉพาะ "ชื่อชุด" ที่ตั้งไว้ใน .flash.json — คำสั่งจริงไม่รับจากหน้าเว็บ (กันสั่งรันคำสั่งอะไรก็ได้)
+            names = body.get("names") or []
+            if not isinstance(names, list) or len(names) > 12 or not all(isinstance(n, str) and QA_NAME_RE.match(n) for n in names):
+                return [], "ชื่อชุดทดสอบไม่ถูกต้อง"
+            have = qa_preset_names(project)
+            if not have:
+                return [], "โปรเจกต์นี้ยังไม่ได้ตั้ง qa.presets ใน .flash.json"
+            miss = [n for n in names if n not in have]
+            if miss:
+                return [], f"ไม่มีชุดทดสอบ: {', '.join(miss)} (มี: {', '.join(have)})"
+            argv = [sys.executable, str(REPO / "flashq.py"), "qa", *names, "--project", project]
+            if body.get("no_analyze"):
+                argv.append("--no-analyze")
+            timeout_min = num("timeout_min", 0, 1440)
+            if timeout_min:
+                argv += ["--timeout-min", str(timeout_min)]
+            return argv, ""
         kind = body.get("kind") if body.get("kind") in AGENT_KINDS else ""
         argv = [sys.executable, str(REPO / "flashq.py"), kind or "run"]
         message = str(body.get("message") or "").strip()
@@ -3052,7 +3543,7 @@ def spawn_run(argv: list[str], project: str, wait_sec: float = 8, body: dict | N
     return {"ok": True, "job": "", "pid": p.pid, "out": str(out), "message": "ส่งแล้ว (ยังไม่เห็นไฟล์งาน — ถ้าด่านตรวจล้ม จะมีป้ายเตือนขึ้นบนหน้านี้)"}
 
 
-SUBMIT_KEYS = ("project", "plan", "tasks", "kind", "agent", "message", "switch_on_quota", "timeout_min", "attach", "no_open", "auto", "readonly", "prompt")
+SUBMIT_KEYS = ("project", "plan", "tasks", "kind", "agent", "message", "switch_on_quota", "timeout_min", "attach", "no_open", "auto", "readonly", "prompt", "names", "no_analyze")
 
 
 def submit_failures() -> list[dict]:
@@ -3117,10 +3608,12 @@ def cmd_prune(a) -> int:
 
 
 def _fmt_event(line: str) -> str | None:
-    """แปลง 1 บรรทัด JSON ของ opencode เป็นข้อความอ่านง่าย · None = ข้าม"""
+    """แปลง 1 บรรทัด JSON ของ opencode เป็นข้อความอ่านง่าย · None = ข้าม (บรรทัดที่ไม่ใช่ JSON object เช่น log ของนักทดสอบ = แสดงตามเดิม)"""
     try:
         ev = json.loads(line)
     except ValueError:
+        return line
+    if not isinstance(ev, dict):  # บรรทัดข้อความล้วนที่บังเอิญเป็น JSON (เช่น "123" "true") ต้องไม่ทำให้หน้า log ล้ม
         return line
     part = ev.get("part") or {}
     t = ev.get("type")
@@ -3233,7 +3726,8 @@ def make_ui_server(port: int = 4097):
                     return self._send(404, {"error": "ไม่พบงาน"})
                 return self._send(200, overlap_report(j))
             if u.path == "/api/plans":
-                return self._send(200, {"plans": list_plans(q.get("project", [""])[0])})
+                proj = q.get("project", [""])[0]
+                return self._send(200, {"plans": list_plans(proj), "qa_presets": qa_preset_names(proj) if proj and Path(proj).is_absolute() else []})
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
@@ -3314,6 +3808,8 @@ def make_ui_server(port: int = 4097):
                 spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
                         "tasks": j.get("tasks", ""), "message": j.get("message", ""), "kind": j.get("kind", ""),
                         "agent": j.get("agent", ""), "readonly": j.get("readonly", False), "prompt": j.get("prompt", "")}
+                if j.get("kind") == "qa":  # สั่งซ้ำ = ชุดเดิมที่เคยรัน (ไม่ใช่ทุกชุด) · ชุดจาก --cmd ไม่มีในไฟล์ตั้งค่า → build_run_argv ปฏิเสธพร้อมบอกชื่อ
+                    spec["names"] = str(j.get("tasks") or "").split()
                 argv, err = build_run_argv(spec)
                 if err:
                     return self._send(400, {"ok": False, "message": err})
@@ -4293,6 +4789,10 @@ def claude_check_prompt(j: dict) -> str:
     OK + มีแผน = /flash-check · ผลสืบ = ตรวจเลขอ้างอิงก่อนเชื่อ · ไม่ OK/ตาย = ดู log หาสาเหตุแล้วรายงาน (ยังไม่สั่งซ้ำเอง)"""
     st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()
     plan, jid = j.get("plan") or "", j["id"]
+    if j.get("kind") == "qa":
+        return (f"นักทดสอบ flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` "
+                f"(ผลมาจาก exit code ของคำสั่งทดสอบจริง ไม่ใช่คำบอกของ AI) แล้วรายงานผมเป็นภาษาไทย: ทดสอบอะไร · ผ่าน/ไม่ผ่านชุดไหน · ถ้าไม่ผ่านสาเหตุคืออะไรจากบรรทัดใน log "
+                f"(คำอธิบายของ Flash เป็นแค่ความเห็น ต้องเทียบ log เอง) · ผมต้องทำอะไรต่อ")
     if st == "ok" and j.get("kind") == "investigate":
         return f"ผู้สืบ flashq job {jid} จบแล้ว: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` แล้วตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ จากนั้นสรุปให้ผม"
     if st == "ok" and plan:
@@ -4790,6 +5290,20 @@ def main() -> int:
     inv.set_defaults(attach="none")
     vf.set_defaults(switch_on_quota=2)  # ผู้ตรวจ/ผู้สืบ: โควตาหมดย้าย provider (โมเดลเดิม) ให้เองได้ 2 ครั้ง
     inv.set_defaults(switch_on_quota=2)
+    qa = sp.add_parser("qa", help="นักทดสอบ: รันชุดทดสอบของโปรเจกต์ (flashq รันคำสั่งเอง ตัดสินจาก exit code จริง) · ล้ม → Flash ช่วยอธิบายสาเหตุ")
+    qa.add_argument("qa_names", nargs="*", metavar="ชุด", help="ชื่อชุดจาก .flash.json qa.presets (ไม่ระบุ = ทุกชุด)")
+    qa.add_argument("--cmd", dest="qa_cmd", action="append", default=[], metavar="คำสั่ง", help="คำสั่งทดสอบเฉพาะกิจ (ใช้ซ้ำได้ · ชื่อชุด adhoc, adhoc2…) · ใช้ได้เฉพาะจาก CLI")
+    qa.add_argument("--commit", dest="qa_commit", default="", help="ยืนยันว่า checkout อยู่ที่ commit นี้ (ไม่ตรง = ไม่ทดสอบ · ไม่สลับ commit ให้เอง)")
+    qa.add_argument("--retry", type=int, default=None, help="ล้มแล้วรันซ้ำกี่ครั้ง (0-3 · ผ่านเฉพาะรอบหลังนับ FLAKY = ไม่ผ่าน) · ค่าเริ่มต้นตาม retry ของชุดนั้น (0)")
+    qa.add_argument("--fail-fast", action="store_true", help="ชุดหนึ่งไม่ผ่าน = ไม่รันชุดที่เหลือ")
+    qa.add_argument("--no-analyze", action="store_true", help="ล้มแล้วไม่ต้องให้ Flash อ่าน log อธิบาย (ไม่เรียกโมเดลเลย)")
+    qa.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+    qa.add_argument("--title", default="", help="ชื่องานในคิว")
+    qa.add_argument("--timeout-min", type=float, default=0, help="เวลาสูงสุดต่อชุด (ทับค่าในชุด/qa_timeout_min=30)")
+    qa.add_argument("--variant", help="ระดับความคิดของ Flash ตอนอธิบาย (ค่าเริ่มต้น qa=high)")
+    qa.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
+    qa.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
+    qa.set_defaults(fn=cmd_qa)
     wy = sp.add_parser("why", help="งานที่รันอยู่เป็นอย่างไร: ปกติ/tool ค้าง/รอโมเดล (ไม่ระบุ id = ทุกงานที่รัน)")
     wy.add_argument("id", nargs="?", default="")
     wy.set_defaults(fn=cmd_why)

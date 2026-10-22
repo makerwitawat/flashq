@@ -26,6 +26,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | คิว/ช่อง | `jobs` · `save_job` · `take_slot` · `acquire` · `release` · `request_run_now` |
 | จัดคิวอัตโนมัติ | `plan_files` · `plan_meta` (`flashq-files`/`flashq-parallel`) · `conflict_reason` · `schedule` · `overlap_report` |
 | รันงาน | `ensure_live_server` · `wait_session` · `server_activity` (tool/subagent จาก server) · `ShellWatch` (ตัวเฝ้า shell) · `run_once` · `cmd_run` |
+| นักทดสอบ | `qa_detect`/`qa_suggest_lines` (เดาชุดจากไฟล์ ไม่รัน) · `qa_spec`/`qa_specs` (ตรวจ+ปรับชุดจาก `.flash.json`/`--cmd`) · `qa_exec` (รันคำสั่งเอง + ฆ่าทั้งต้นเมื่อ timeout/cancel) · `qa_verdict` (fail-closed จาก exit code + `expect`) · `qa_summary` · `qa_analyze` (Flash `flash-tester` อ่าน log เฉพาะตอนล้ม — ไม่เปลี่ยนคำตัดสิน) · `cmd_qa` |
 | ขนาดแผน | `PLAN_SOFT`/`PLAN_HARD` · `plan_lint` |
 | CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
@@ -35,7 +36,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ## ไฟล์ข้อมูล (`~/.flashq` หรือ `FLASHQ_HOME`)
 | ไฟล์ | เนื้อหา |
 |---|---|
-| `jobs/<id>.json` | งานหนึ่งงาน: `id` `kind` (work/verify/investigate/test) `status` `project` `plan` `tasks` `message` `agent` `readonly` `title` `model` `slot` `pid`/`pid_start` `child_pid` `session` `logs` `created`/`started`/`finished` `shell_watch` `agent_act` `qv` |
+| `jobs/<id>.json` | งานหนึ่งงาน: `id` `kind` (work/verify/investigate/qa/test) `status` (qa: + `qa` = ผลต่อชุด `[{name,cmd,verdict,secs,head,...}]` · `tasks` = ชื่อชุด) `project` `plan` `tasks` `message` `agent` `readonly` `title` `model` `slot` `pid`/`pid_start` `child_pid` `session` `logs` `created`/`started`/`finished` `shell_watch` `agent_act` `qv` |
 | `logs/<id>_<n>.jsonl` · `.err` | output ของ opencode รอบที่ n (รอบลองใหม่/สลับบัญชีเพิ่มเลข) · stderr |
 | `running.lock` · `running-<n>.lock` | ใครถือช่อง 1 / ช่อง n |
 | `run_now/<id>` | สัญญาณ "รันเลย" จากหน้าเว็บ/`runnow` |

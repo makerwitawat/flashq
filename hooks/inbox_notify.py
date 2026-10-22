@@ -44,6 +44,9 @@ def mine(row: dict, session: str, cwd: str, now: float) -> bool:
 
 def advice(row: dict) -> str:
     st, plan = row.get("status", ""), row.get("plan", "")
+    if row.get("kind") == "qa" and st in ("OK", "FAIL", "TIMEOUT"):  # ผลมาจาก exit code จริง ไม่ใช่คำพูดของโมเดล
+        return (f"ผลทดสอบ (flashq รันเองและตัดสินจาก exit code) — รายงานทีละชุดว่าผ่าน/ไม่ผ่าน ห้ามเปลี่ยนคำตัดสิน · "
+                f"ไม่ผ่านให้ดู python {FLASHQ}/flashq.py log {row.get('job', '')} เทียบ log จริงก่อนเชื่อคำอธิบายของ Flash")
     if st == "OK":
         if row.get("kind") == "investigate":
             return "ผลสืบ — ตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ (ดูบรรทัด CITATIONS ใน log)"
@@ -91,12 +94,15 @@ def main() -> int:
                  "รายงานผู้ใช้ให้ครบ: งานนี้คืออะไร · ผลผ่าน/ไม่ผ่าน · ได้ผลงานอะไรแบบไหน (จากที่ตรวจแล้วจริง) · ถ้าล้มสาเหตุเป็นภาษาคน+ทางแก้ · ผู้ใช้ต้องทำอะไรต่อ:"]
         for f, row in found[:MAX_SHOW]:
             when = time.strftime("%H:%M", time.localtime(float(row.get("at") or now)))
-            tag = {"verify": "[ตรวจ] ", "investigate": "[สืบ] "}.get(row.get("kind"), "")
-            lines.append(f"- job {row.get('job')} {tag}{row.get('plan') or '--message'} {row.get('tasks', '')} → {row.get('status')} "
+            kind = row.get("kind")
+            tag = {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] "}.get(kind, "")
+            name = row.get("plan") or ("" if kind == "qa" else "--message")
+            what = " ".join(x for x in (name, row.get("tasks", "")) if x)
+            lines.append(f"- job {row.get('job')} {tag}{what} → {row.get('status')} "
                          f"({row.get('mins', 0)} นาที · จบ {when}) · {advice(row)}")
             last = (row.get("last") or "").strip().replace("\n", " ")
             if last and row.get("status") != "OK":
-                lines.append(f"    ท้าย: {last[-300:]}")
+                lines.append(f"    ท้าย: {last[:300] if kind == 'qa' else last[-300:]}")  # นักทดสอบ: หัวข้อผลอยู่ต้นข้อความ
         if len(found) > MAX_SHOW:
             lines.append(f"- … และอีก {len(found) - MAX_SHOW} งาน (ดู flashq list --all)")
         for f, _ in found:

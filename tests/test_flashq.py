@@ -2800,5 +2800,284 @@ class NewProjectTest(unittest.TestCase):
         self.assertTrue((self.oc_cfg.parent / "command" / "flash.md").exists(), r.stdout)
 
 
+class QaTest(unittest.TestCase):
+    """นักทดสอบ (flashq qa): flashq รันคำสั่งทดสอบเองแล้วตัดสินจาก exit code จริง · fail-closed · ไม่เรียกโมเดลถ้าไม่ล้ม"""
+    setUp, tearDown, run_q, load_mod = (FlashqTest.setUp, FlashqTest.tearDown, FlashqTest.run_q, FlashqTest.load_mod)
+    start_ui, http, ui_token, wait_job = (FlashqTest.start_ui, FlashqTest.http, FlashqTest.ui_token, FlashqTest.wait_job)
+
+    def py(self, name, body):
+        (self.proj / name).write_text(body, encoding="utf-8")
+        return f'"{sys.executable}" {name}'
+
+    def presets(self, **named):
+        cfg = {"require_plan_in_remote": False, "qa": {"presets": named}}
+        (self.proj / ".flash.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def git(self, *args):
+        r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=self.proj, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def init_git(self):
+        self.git("init", "-q", "-b", "main")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "i")
+
+    def job_files(self):
+        return [json.loads(f.read_text(encoding="utf-8")) for f in sorted((self.home / "jobs").glob("*.json"))]
+
+    def test_verdicts_come_from_exit_code_and_fail_closed(self):
+        """ผ่าน = exit 0 (+ พบ expect) · exit≠0 / ไม่พบ expect / เกินเวลา = ไม่ผ่านทั้งหมด · ผลรวม FAIL ถ้ามีชุดเดียวที่ไม่ใช่ PASS"""
+        ok = self.py("ok.py", "print('3 passed')\n")
+        bad = self.py("bad.py", "import sys\nprint('E AssertionError: boom')\nsys.exit(2)\n")
+        silent = self.py("silent.py", "print('collected 0 items')\n")
+        slow = self.py("slow.py", "import time\ntime.sleep(120)\n")
+        self.presets(ok={"cmd": ok, "expect": r"\d+ passed"}, bad=bad, silent={"cmd": silent, "expect": r"\d+ passed"},
+                     slow={"cmd": slow, "timeout_min": 0.1})
+        r = self.run_q("qa", "ok", "--no-analyze")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertIn("QA=PASS", r.stdout)
+        j = self.job_files()[0]
+        self.assertEqual((j["kind"], j["readonly"], j["status"], j["tasks"]), ("qa", True, "ok", "ok"))
+        t0 = time.time()
+        r = self.run_q("qa", "--no-analyze")  # ไม่ระบุชื่อ = ทุกชุด
+        self.assertLess(time.time() - t0, 60)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("QA=FAIL", r.stdout)
+        self.assertIn("✅ ok", r.stdout)
+        self.assertIn("bad=FAIL", r.stdout)
+        self.assertIn("AssertionError: boom", r.stdout)  # บรรทัดสำคัญจาก log
+        self.assertIn("silent=NOEXPECT", r.stdout)  # exit 0 แต่ไม่พบ "N passed" ห้ามนับผ่าน
+        self.assertIn("slow=TIMEOUT", r.stdout)
+        j = [x for x in self.job_files() if x["tasks"] == "ok bad silent slow"][0]
+        self.assertEqual((j["status"], j["result"]), ("fail", "FAIL"))
+        self.assertEqual([s["verdict"] for s in j["qa"]["specs"]], ["PASS", "FAIL", "NOEXPECT", "TIMEOUT"])
+        self.assertTrue(j["last"].startswith("❌"))
+        self.assertFalse((self.home / "running.lock").exists())
+        self.assertFalse(self.args_out.exists())  # ใช้ --no-analyze = ไม่เรียกโมเดลเลย
+        row = json.loads(sorted((self.home / "inbox").glob("*.json"))[-1].read_text(encoding="utf-8"))
+        self.assertEqual((row["kind"], row["status"]), ("qa", "FAIL"))
+        self.assertTrue(row["last"].startswith("❌"))  # หัวข้อผลอยู่หน้า (ไม่ถูกตัดท้าย)
+        r = self.run_q("list", "--all")
+        self.assertIn("[ทดสอบ] ok bad silent slow  [", r.stdout)  # ไม่มีช่องว่างซ้อนจากแผนที่ว่าง
+
+    def test_only_timeouts_is_timeout_status_and_log_shows_summary(self):
+        slow = self.py("slow.py", "import time\ntime.sleep(120)\n")
+        self.presets(slow={"cmd": slow, "timeout_min": 0.1})
+        r = self.run_q("qa", "slow", "--no-analyze")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        jid = re.search(r"job=(\S+)", r.stdout).group(1)
+        r = self.run_q("log", jid)
+        self.assertIn("slow=TIMEOUT", r.stdout)
+
+    def test_start_errors_never_create_a_job(self):
+        """ตั้งค่าเพี้ยน = ปฏิเสธก่อนรันอะไรทั้งนั้น พร้อมบอกว่าแก้ตรงไหน"""
+        (self.proj / "tests").mkdir()
+        r = self.run_q("qa")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ยังไม่ได้ตั้งชุดทดสอบ", r.stdout)
+        self.assertIn("python -m pytest -q", r.stdout)  # เดาให้เป็นคำแนะนำเท่านั้น
+        self.assertFalse(list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else [])
+        for label, preset, want in [
+                ("หลายบรรทัด", {"cmd": "echo a\necho b"}, "บรรทัดเดียว"), ("ว่าง", {"cmd": " "}, "ไม่มี cmd"),
+                ("regex เสีย", {"cmd": "echo x", "expect": "(unclosed"}, "regex"), ("retry เกิน", {"cmd": "echo x", "retry": 9}, "retry"),
+                ("เวลาเป็นข้อความ", {"cmd": "echo x", "timeout_min": "ซักพัก"}, "ตัวเลข"), ("เวลาน้อยเกิน", {"cmd": "echo x", "timeout_min": 0}, "timeout_min"),
+                ("cwd นอกโปรเจกต์", {"cmd": "echo x", "cwd": ".."}, "อยู่นอกโปรเจกต์"), ("cwd ไม่มี", {"cmd": "echo x", "cwd": "nope"}, "ไม่พบโฟลเดอร์"),
+                ("ชนิดผิด", 42, "ต้องเป็นข้อความคำสั่ง")]:
+            self.presets(t=preset)
+            r = self.run_q("qa", "t", "--no-analyze")
+            self.assertEqual(r.returncode, 1, label + r.stdout)
+            self.assertIn(want, r.stdout, label)
+        self.presets(t="echo x")
+        r = self.run_q("qa", "ไม่มีชุดนี้", "--no-analyze")
+        self.assertIn("ไม่มีชุดทดสอบชื่อ", r.stdout)
+        (self.proj / ".flash.json").write_text("{ไม่ใช่ json", encoding="utf-8")
+        r = self.run_q("qa", "--no-analyze")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("JSON เสีย", r.stdout)
+        self.assertFalse(list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else [])
+
+    def test_adhoc_cmd_and_cwd_inside_project(self):
+        sub = self.proj / "sub"
+        sub.mkdir()
+        (sub / "here.py").write_text("import os\nprint('cwd=' + os.path.basename(os.getcwd()), '1 passed')\n", encoding="utf-8")
+        self.presets(inner={"cmd": f'"{sys.executable}" here.py', "cwd": "sub", "expect": "cwd=sub 1 passed"})
+        r = self.run_q("qa", "inner", "--no-analyze")
+        self.assertIn("QA=PASS", r.stdout, r.stdout)
+        r = self.run_q("qa", "--cmd", f'"{sys.executable}" -c "import sys; sys.exit(3)"', "--no-analyze")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("adhoc=FAIL", r.stdout)
+
+    def test_retry_makes_flaky_not_pass_and_failfast_skips_rest(self):
+        flaky = self.py("flaky.py", "import os, sys\nif os.path.exists('flaky.mark'):\n    print('1 passed')\n    sys.exit(0)\nopen('flaky.mark', 'w').close()\nprint('1 failed')\nsys.exit(1)\n")
+        bad = self.py("bad.py", "import sys\nsys.exit(1)\n")
+        ok = self.py("ok.py", "print('1 passed')\n")
+        self.presets(flaky=flaky, bad=bad, ok=ok)
+        r = self.run_q("qa", "flaky", "--retry", "1", "--no-analyze")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("flaky=FLAKY", r.stdout)  # ผ่านเฉพาะรอบหลัง = ไม่นิ่ง ห้ามนับผ่าน
+        self.assertIn("QA=FAIL", r.stdout)
+        j = self.job_files()[-1]
+        self.assertEqual(len(j["logs"]), 2)  # เก็บ log ทั้งสองรอบ
+        r = self.run_q("qa", "bad", "ok", "--fail-fast", "--no-analyze")
+        self.assertIn("ok=SKIPPED", r.stdout)
+        self.assertIn("ข้าม", r.stdout)
+        r = self.run_q("qa", "bad", "ok", "--no-analyze")
+        self.assertIn("✅ ok", r.stdout)  # ไม่มี fail-fast = รันต่อ
+
+    def test_commit_check_and_head_change_mid_run(self):
+        """--commit ต้องตรงกับ HEAD ของ checkout จริง (ไม่สลับให้) · HEAD เปลี่ยนระหว่างทดสอบ = ผลใช้ไม่ได้ ห้ามนับผ่าน"""
+        mover = self.py("mover.py", "import subprocess\nsubprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', 'x'], check=True)\nprint('1 passed')\n")
+        ok = self.py("ok.py", "print('1 passed')\n")
+        self.presets(mover=mover, ok=ok)
+        self.init_git()
+        first = self.git("rev-parse", "HEAD")
+        r = self.run_q("qa", "ok", "--commit", "deadbeef", "--no-analyze")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ไม่พบ commit", r.stdout)
+        r = self.run_q("qa", "ok", "--commit", first[:10], "--no-analyze")
+        self.assertIn("QA=PASS", r.stdout, r.stdout)
+        self.assertIn(first[:10], r.stdout)  # บอกว่าทดสอบ commit ไหน
+        r = self.run_q("qa", "mover", "ok", "--no-analyze")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("mover=CHANGED", r.stdout)
+        self.assertIn("HEAD เปลี่ยน", r.stdout)
+        self.assertIn("ok=SKIPPED", r.stdout)  # หยุดทันที ไม่ทดสอบต่อบนโค้ดที่เปลี่ยนไปแล้ว
+        self.assertIn("⚠️ ผลใช้ไม่ได้", r.stdout)
+        r = self.run_q("qa", "ok", "--commit", first[:10], "--no-analyze")  # HEAD ขยับไปแล้ว
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("checkout ตอนนี้อยู่ที่", r.stdout)
+
+    def test_analyst_runs_only_on_failure_and_is_advisory(self):
+        """Flash อธิบายเฉพาะตอนล้ม · คำอธิบายไม่เปลี่ยนคำตัดสิน · Flash พัง = บันทึกเหตุแต่ผลยังเป็น FAIL · ได้สิทธิ์อ่านโฟลเดอร์ log รอบนั้นอย่างเดียว"""
+        ok = self.py("ok.py", "print('1 passed')\n")
+        bad = self.py("bad.py", "import sys\nprint('E boom')\nsys.exit(1)\n")
+        self.presets(ok=ok, bad=bad)
+        r = self.run_q("qa", "ok")
+        self.assertIn("QA=PASS", r.stdout)
+        self.assertFalse(self.args_out.exists())  # ผ่าน = ไม่เรียกโมเดลเลย
+        env_out = self.tmp / "env.json"
+        r = self.run_q("qa", "bad", env={"FAKE_TEXT": "สาเหตุ: boom ในเทสต์", "FAKE_ENV_OUT": str(env_out)})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("QA=FAIL", r.stdout)
+        self.assertIn("คำอธิบายจากนักทดสอบ", r.stdout)
+        self.assertIn("สาเหตุ: boom ในเทสต์", r.stdout)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "flash-tester")
+        self.assertIn("--format", argv)
+        perm = json.loads(env_out.read_text(encoding="utf-8"))
+        self.assertIn("logs", json.dumps(perm).replace("\\\\", "/"))  # เปิดอ่านโฟลเดอร์ log เฉพาะรอบนี้
+        j = [x for x in self.job_files() if x["tasks"] == "bad"][-1]
+        self.assertEqual((j["status"], j["qa"]["verdict"]), ("fail", "FAIL"))
+        r = self.run_q("qa", "bad", env={"FAKE_MODE": "fail"})
+        self.assertIn("QA=FAIL", r.stdout)
+        self.assertIn("ไม่มีคำอธิบายจาก Flash", r.stdout)
+
+    def test_conflict_rules_keep_code_still_while_testing(self):
+        mod = self.load_mod("flashq_qa_conflict")
+        P, other = str(self.proj), str(self.tmp / "other")
+        qa = {"id": "q", "project": P, "kind": "qa", "readonly": True}
+        qa2 = {"id": "q2", "project": P, "kind": "qa", "readonly": True}
+        writer = {"id": "w", "project": P, "plan": "A.md", "tasks": "T-01"}
+        verify = {"id": "v", "project": P, "kind": "verify", "readonly": True, "plan": "A.md"}
+        info = lambda j: self.fail("qa ไม่ควรไปแกะแผน")  # noqa: E731
+        self.assertIn("นักทดสอบอีกงาน", mod.conflict_reason(qa, qa2, info))
+        self.assertIn("ต้องรอให้จบก่อนถึงจะทดสอบได้", mod.conflict_reason(qa, writer, info))
+        self.assertIn("รอให้จบก่อนถึงจะแก้ไฟล์ได้", mod.conflict_reason(writer, qa, info))
+        self.assertEqual(mod.conflict_reason(qa, verify, info), "")  # ผู้ตรวจอ่านอย่างเดียว รันคู่ได้
+        self.assertEqual(mod.conflict_reason(qa, {**qa2, "project": other}, info), "")  # คนละโปรเจกต์
+
+    def test_ui_submit_picks_preset_names_only(self):
+        """หน้าเว็บส่งได้แค่ "ชื่อชุด" — คำสั่งจริงมาจาก .flash.json เท่านั้น (ใส่ cmd มาก็ไม่ถูกใช้) · ชื่อแปลก/ไม่มีในไฟล์ = 400"""
+        marker = self.proj / "pwned.txt"
+        ok = self.py("ok.py", "print('1 passed')\n")
+        self.presets(ok={"cmd": ok, "expect": r"\d+ passed"})
+        mod = self.load_mod("flashq_qa_argv")
+        base = {"project": str(self.proj), "kind": "qa"}
+        argv, err = mod.build_run_argv({**base, "names": ["ok"], "no_analyze": True, "cmd": f"echo x > {marker}"})
+        self.assertEqual(err, "")
+        self.assertEqual(argv[2:], ["qa", "ok", "--project", str(self.proj), "--no-analyze"])
+        self.assertNotIn(str(marker), " ".join(argv))
+        for names in (["ok; calc"], ["../x"], ["nope"], "ok", [1], ["ok"] * 13):
+            self.assertNotEqual(mod.build_run_argv({**base, "names": names})[1], "", names)
+        self.assertEqual(mod.build_run_argv({**base})[1], "")  # ไม่ระบุชื่อ = ทุกชุด
+        (self.proj / ".flash.json").write_text("{}", encoding="utf-8")
+        self.assertIn("ยังไม่ได้ตั้ง qa.presets", mod.build_run_argv({**base, "names": ["ok"]})[1])
+        self.assertEqual(mod.qa_preset_names(str(self.proj)), [])
+        self.assertEqual(mod.qa_preset_names(str(self.tmp / "ไม่มี")), [])
+
+    def test_ui_end_to_end_submit_state_and_retry(self):
+        ok = self.py("ok.py", "print('2 passed')\n")
+        bad = self.py("bad.py", "import sys\nsys.exit(1)\n")
+        self.presets(ok={"cmd": ok, "expect": r"\d+ passed"}, bad=bad)
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        plans = json.loads(self.http(base + "/api/plans?project=" + urllib.parse.quote(str(self.proj)))[1])
+        self.assertEqual(plans["qa_presets"], ["ok", "bad"])
+        self.assertEqual(json.loads(self.http(base + "/api/plans?project=relative")[1])["qa_presets"], [])
+        code, body = self.http(base + "/api/submit", json.dumps({"project": str(self.proj), "kind": "qa", "names": ["ok"], "no_analyze": True}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        jid = json.loads(body)["job"]
+        self.wait_job(jid, "ok")
+        code, body = self.http(base + "/api/submit", json.dumps({"project": str(self.proj), "kind": "qa", "names": ["ok && calc"]}).encode(), hdr)
+        self.assertEqual(code, 400, body)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["qa_presets"][str(self.proj)] if str(self.proj) in st["qa_presets"] else st["qa_presets"][next(iter(st["qa_presets"]))], ["ok", "bad"])
+        row = next(x for x in st["history"] if x["id"] == jid)
+        self.assertEqual((row["kind"], row["qa"]["verdict"], row["qa"]["specs"][0]["verdict"]), ("qa", "PASS", "PASS"))
+        self.assertTrue(any(x["name"] == "qa" for x in st["stats"]["by_kind"]))
+        code, body = self.http(base + "/api/retry", json.dumps({"id": jid}).encode(), hdr)  # สั่งซ้ำ = ชุดเดิม ไม่ใช่ทุกชุด
+        self.assertEqual(code, 200, body)
+        self.wait_job(json.loads(body)["job"], "ok")
+        self.assertEqual(sorted(j["tasks"] for j in self.job_files()), ["ok", "ok"])
+
+    def test_cancel_kills_running_test_command(self):
+        """ยกเลิกกลางทาง = คำสั่งทดสอบ (ลูก) ต้องตายด้วย ไม่ทิ้งค้างพอร์ต/ไฟล์"""
+        mod = self.load_mod("flashq_qa_cancel")
+        slow = self.py("slow.py", "import time\ntime.sleep(300)\n")
+        self.presets(slow=slow)
+        p = self.run_q("qa", "slow", "--no-analyze", wait=False)
+        self.addCleanup(lambda: (p.kill(), p.communicate(timeout=30)))
+        j, t0 = {}, time.time()
+        while time.time() - t0 < 30:
+            fs = list((self.home / "jobs").glob("*.json"))
+            j = json.loads(fs[0].read_text(encoding="utf-8")) if fs else {}
+            if j.get("child_pid"):
+                break
+            time.sleep(0.3)
+        self.assertTrue(j.get("child_pid"), j)
+        self.assertTrue(mod.pid_alive(j["child_pid"]))
+        r = self.run_q("cancel", j["id"])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        t0 = time.time()
+        while mod.pid_alive(j["child_pid"]) and time.time() - t0 < 15:
+            time.sleep(0.3)
+        self.assertFalse(mod.pid_alive(j["child_pid"]))
+        self.assertFalse((self.home / "running.lock").exists())
+
+    def test_hook_tags_qa_and_never_suggests_flash_check(self):
+        hook = REPO / "hooks" / "inbox_notify.py"
+        inbox = self.home / "inbox"
+        inbox.mkdir(parents=True)
+        row = {"job": "J1", "project": str(self.proj), "session": "s1", "kind": "qa", "plan": "", "tasks": "unit lint", "status": "FAIL",
+               "mins": 1.2, "last": "❌ ไม่ผ่าน 1/2 ชุด: lint=FAIL\nรายละเอียด", "at": time.time()}
+        (inbox / "a.json").write_text(json.dumps(row), encoding="utf-8")
+        r = subprocess.run([sys.executable, str(hook)], input=json.dumps({"session_id": "s1", "cwd": str(self.proj)}), capture_output=True,
+                           text=True, encoding="utf-8", env=self.env, timeout=30)
+        self.assertIn("[ทดสอบ] unit lint", r.stdout)
+        self.assertIn("lint=FAIL", r.stdout)  # หัวข้อผล (ต้นข้อความ) ต้องไม่ถูกตัด
+        self.assertNotIn("--message", r.stdout)
+        self.assertNotIn("/flash-check", r.stdout)
+        self.assertIn("exit code", r.stdout)
+
+    def test_log_viewer_survives_non_dict_json_lines(self):
+        mod = self.load_mod("flashq_qa_fmt")
+        for line in ("123", "[1, 2]", '"text"', "null", "ข้อความธรรมดา"):
+            mod._fmt_event(line)  # ต้องไม่พัง
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
