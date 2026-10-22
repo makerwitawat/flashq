@@ -1775,6 +1775,7 @@ const capRows = (rows, idle) => !rows.length ? [idle]
 const stripHead = (ico, name, n) => `${ico} ${name}` + (n ? ` · ${n} งาน` : "");
 // แถบที่ไม่มีงาน = แถบเตี้ย (บรรทัดเดียว: ชื่อซ้าย · สถานะขวา) · มีงาน = แถบเต็ม (หัว + 3 บรรทัด) — ฉากสั้นลง ไม่ต้องมีแถบเลื่อน
 const STRIP_FULL = 86, STRIP_SLIM = 40;
+const standX = (x) => Math.max(DESK_X0 + 70, Math.min(x, SCENE_W - 500));  // ตัวละครในแถบยืนตรงคอลัมน์โต๊ะของงาน แต่ไม่ล้ำเข้าพื้นที่ข้อความ (ชิดขวา ยาวสุด ~450 หน่วย)
 const stripLabels = (id, head, rows, sy, slim) => slim
   ? `<text class="of-tb" id="${id}H" x="${DESK_X0 + 18}" y="${sy + 25}">${head}</text><text class="of-tm" id="${id}T0" x="${SCENE_W - 26}" y="${sy + 25}" text-anchor="end">${esc(rows[0] || "")}</text>`
   : `<text class="of-tb" id="${id}H" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${head}</text>${stripTexts(id, rows, sy)}`;
@@ -1802,8 +1803,8 @@ function guardSceneRows(m) {
   if (k) rows.push(`🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`);
   m.watched.forEach((w) => {
     const sw = w.shell_watch, at = sw.at ? new Date(sw.at.replace(" ", "T")).getTime() : Date.now();
-    const kat = sw.kill_in == null ? "" : ` · ฆ่าถ้ายังไม่จบก่อน ${new Date(at + sw.kill_in * 1000).toLocaleTimeString("en-GB")}`;
-    const head = `ช่อง ${m.desks.indexOf(w) + 1} ${trunc(w.project_name, 12)} · ${trunc(sw.cmd, 30)}`;
+    const kat = sw.kill_in == null ? "" : ` · จะฆ่า ${new Date(at + sw.kill_in * 1000).toLocaleTimeString("en-GB")}`;
+    const head = `ช่อง ${m.desks.indexOf(w) + 1} ${trunc(w.project_name, 12)} · ${trunc(sw.cmd, 26)}`;
     rows.push(sw.state === "suspect" ? `❗ ${head} · สงสัย (${sw.pids} โปรเซส)${kat}`
       : sw.state === "quiet" ? `❗ ${head} · นิ่ง ${dur(sw.quiet_sec)}${kat}`
       : sw.state === "killed" ? `🛡 ${head} · ฆ่าคำสั่งค้างแล้ว`
@@ -1828,7 +1829,7 @@ function sceneSVG(m) {
   const workerStrip = (sy, id, ico, name, role, hue, title, rows) => {
     const vi = m.desks.map((r, i) => (r && roleOf(r) === role ? i : -1)).filter((i) => i >= 0), busy = vi.length > 0;
     return `<g class="of-st-${role}${busy ? " of-busy" : ""}"><title>${esc(title)}</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="${busy ? STRIP_FULL : STRIP_SLIM}" rx="12"/>
-      ${busy ? person({ seed: role, hue, pose: "stand", mood: "flat", x: deskPX(vi[0]), y: sy + 78, s: 0.9, checker: role }) : ""}
+      ${busy ? person({ seed: role, hue, pose: "stand", mood: "flat", x: standX(deskPX(vi[0])), y: sy + 78, s: 0.9, checker: role }) : ""}
       ${stripLabels(id, stripHead(ico, name, vi.length), rows, sy, !busy)}</g>`;
   };
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
@@ -1844,7 +1845,7 @@ function sceneSVG(m) {
   {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = นั่งพักที่โซฟา (ห้องพักล่างสุด) · มีงานตรวจรันอยู่ = ยืนประจำในแถบนี้ บอกช่องที่ตรวจ
     const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
     const rv = m.reviews[0], fin = m.reviewFin;
-    const sy = Y.insp, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
+    const sy = Y.insp, py = sy + 78, colX = vi.length ? standX(deskPX(vi[0])) : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const rows = inspRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่ต้องวาดฉากใหม่)
     g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="${busyOf.insp ? STRIP_FULL : STRIP_SLIM}" rx="12"/>
@@ -1853,7 +1854,7 @@ function sceneSVG(m) {
   }
   {  // ยามเฝ้า shell: ว่าง = นั่งพักที่โซฟา · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
     const sy = Y.guard, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
-    const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? deskPX(di) : DESK_X0 + 70;
+    const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? standX(deskPX(di)) : DESK_X0 + 70;
     const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
     const rows = guardSceneRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่วาดฉากใหม่)
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
