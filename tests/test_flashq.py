@@ -1360,7 +1360,9 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual((row["subs"][0]["title"], row["subs"][1]["ago_sec"] >= 899), ("ทำ T-04", True))
         self.assertIsNone(mod._agent_act_row({"at": time.time() - 400, "updated": 0, "subs": []}))  # ข้อมูลเก่าเกิน = ไม่ใช้
         # server เปิดที่ ~/.flashq → ทุกคำขอต้องบอกโฟลเดอร์โปรเจกต์ ไม่งั้นหา session ไม่เจอ
-        self.assertTrue(queries and all(q == urllib.parse.urlencode({"directory": "D:/งาน/proj"}) for q in queries), queries)
+        d = urllib.parse.urlencode({"directory": "D:/งาน/proj"})
+        self.assertTrue(queries and all(q in (d, d + "&limit=2") for q in queries), queries)
+        self.assertIn(d + "&limit=2", queries)  # ขอข้อความล่าสุดแค่ 2 — session ยาวมากดึงทั้งประวัติแล้ว server ตัดการเชื่อมต่อ (วินิจฉัยไม่ได้)
         self.assertIsNone(mod.server_activity("http://127.0.0.1:1", "ses_p"))
 
     def fake_live_server(self, mode: dict):
@@ -1410,7 +1412,7 @@ class FlashqTest(unittest.TestCase):
         asks = [p for m, p in hits if m == "GET" and "/session/" in p]
         self.assertGreater(len(asks), 3)
         want = urllib.parse.urlencode({"directory": str(self.proj.resolve())})
-        self.assertTrue(all(p.endswith("?" + want) for p in asks), asks[:3])
+        self.assertTrue(all(p.endswith("?" + want) or p.endswith("?" + want + "&limit=2") for p in asks), asks[:3])
         mode["active"] = False
         hits.clear()
         r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env={**env, "FAKE_SLEEP": "60"})

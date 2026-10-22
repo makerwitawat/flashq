@@ -1171,8 +1171,10 @@ def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
     import urllib.request
     qs = ("?" + urllib.parse.urlencode({"directory": directory})) if directory else ""
 
-    def get(path):
-        return json.loads(urllib.request.urlopen(server.rstrip("/") + path + qs, timeout=8).read())
+    def get(path, limit=0):
+        # ข้อความล่าสุดเท่านั้น (limit) — session หลักยาวมาก server ส่งทั้งประวัติไม่ทัน/ตัดการเชื่อมต่อ ทำให้วินิจฉัยไม่ได้
+        q = qs + (("&" if qs else "?") + f"limit={limit}" if limit else "")
+        return json.loads(urllib.request.urlopen(server.rstrip("/") + path + q, timeout=8).read())
     try:
         updated, running, ids, titles, cupd = 0, [], [sid], {}, {}
         k = 0
@@ -1190,7 +1192,13 @@ def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
         subs = []  # ผู้ช่วยย่อยแต่ละตัว: ชื่องาน · ขยับล่าสุด · tool ล่าสุด (การ์ดหน้าเว็บแสดงแทน "log เงียบ" ของ session หลัก)
         for i in ids:
             su, doing = cupd.get(i, 0), ""
-            for m in get(f"/session/{urllib.parse.quote(i)}/message")[-2:]:
+            try:
+                msgs = get(f"/session/{urllib.parse.quote(i)}/message", limit=2)[-2:]
+            except Exception:
+                if i == sid:
+                    raise  # session หลักถามไม่ได้ = ไม่มีข้อมูลพอ (None) · ลูกตัวใดตัวหนึ่งพลาดข้ามได้
+                msgs = []
+            for m in msgs:
                 su = max(su, (m.get("info", {}).get("time") or {}).get("created", 0))
                 for p in m.get("parts", []):
                     st = p.get("state") or {}
@@ -2312,7 +2320,9 @@ def diagnose_job(j: dict) -> dict:
     mins = lambda s: f"{s / 60:.0f} นาที" if s is not None else "?"
     base = f"log เงียบ {mins(d['log_idle_sec'])}" + (f" · subagent/tool ขยับล่าสุด {mins(d['server_idle_sec'])} ที่แล้ว" if d["server_idle_sec"] is not None else "")
     if act is None:
-        d.update(verdict="unknown", text=base + " · แยกสาเหตุไม่ได้ (ไม่ได้ต่อ server ให้ถามสถานะ tool — งานนี้รัน --attach none หรือ server ไม่ตอบ)")
+        d.update(verdict="unknown", text=base + " · แยกสาเหตุไม่ได้ ("
+                                      + ("ถาม server ไม่สำเร็จ — server ไม่ตอบ/ตัดการเชื่อมต่อ ลองใหม่อีกครั้ง" if attach.startswith("http") and sid
+                                         else "งานนี้ไม่ได้ต่อ server (--attach none) จึงถามสถานะ tool ไม่ได้") + ")")
         return d
     d["running"] = [{"tool": r["tool"], "what": r["what"], "min": round((time.time() - r["since"]) / 60, 1)} for r in act["running"]]
     if quiet is not None and quiet < 180:
