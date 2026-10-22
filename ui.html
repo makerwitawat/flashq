@@ -1769,13 +1769,22 @@ function inspText(m) {
     : fin ? (fin.status === "pass" ? "🎉 ตรวจผ่านแล้ว " : "😢 ตรวจไม่ผ่าน ") + trunc(fin.plan_name, 22)
     : "ว่าง · นั่งพักที่โซฟา รองานตรวจ";
 }
-function guardSceneText(m) {
-  const w = m.watched[0], sw = w && w.shell_watch, k = m.kill, di = w ? m.desks.indexOf(w) : -1;
-  const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
-  return caught ? `🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`
-    : alert ? `${guardText(sw)} · ${trunc(sw.cmd, 24)} (ช่อง ${di + 1})`
-    : sw ? `เฝ้าคำสั่ง ${trunc(sw.cmd, 34)} (ช่อง ${di + 1}) · โปรเซสยังขยับ`
-    : "ว่าง · นั่งพักที่โซฟา พร้อมเฝ้า shell";
+const guardHead = (m) => "🛡 ยามเฝ้า shell" + (m.watched.length ? ` · เฝ้า ${m.watched.length} งาน` : "");
+const GUARD_ROWS = 3;  // ป้ายยามในฉากมีกี่บรรทัด (ทุกงานที่ถูกเฝ้า เรียงร้ายแรงสุดก่อน · เกินแล้วบรรทัดสุดท้ายบอก "+N งานอื่น")
+function guardSceneRows(m) {
+  const rows = [], k = m.kill;
+  if (k) rows.push(`🚨 จับได้! ฆ่าคำสั่งค้าง ${trunc(k.cmd, 34)} (${trunc(k.project_name, 12)}) → งานทำต่อ`);
+  m.watched.forEach((w) => {
+    const sw = w.shell_watch, at = sw.at ? new Date(sw.at.replace(" ", "T")).getTime() : Date.now();
+    const kat = sw.kill_in == null ? "" : ` · ฆ่าถ้ายังไม่จบก่อน ${new Date(at + sw.kill_in * 1000).toLocaleTimeString("en-GB")}`;
+    const head = `ช่อง ${m.desks.indexOf(w) + 1} ${trunc(w.project_name, 12)} · ${trunc(sw.cmd, 30)}`;
+    rows.push(sw.state === "suspect" ? `❗ ${head} · สงสัย (${sw.pids} โปรเซส)${kat}`
+      : sw.state === "quiet" ? `❗ ${head} · นิ่ง ${dur(sw.quiet_sec)}${kat}`
+      : sw.state === "killed" ? `🛡 ${head} · ฆ่าคำสั่งค้างแล้ว`
+      : `🛡 ${head} · ยังขยับ (${sw.pids} โปรเซส) รัน ${dur(sw.run_sec)}`);
+  });
+  if (!rows.length) return ["ว่าง · นั่งพักที่โซฟา พร้อมเฝ้า shell"];
+  return rows.length > GUARD_ROWS ? [...rows.slice(0, GUARD_ROWS - 1), `+${rows.length - GUARD_ROWS + 1} รายการอื่น (ดูที่การ์ดของแต่ละงาน)`] : rows;
 }
 function sceneSVG(m) {
   // จัดโต๊ะ: ≤5 ช่อง = แถวเดียว · มากกว่านั้นแบ่งแถวให้เท่ากัน (≤5 ต่อแถว) · กว้างเกินพื้นที่ = ย่อโต๊ะทั้งชุด (ไม่ล้นขอบ/ไม่เหลือแถวโหรงเหรง)
@@ -1810,13 +1819,13 @@ function sceneSVG(m) {
     const sy = stripY + 102, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
     const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? deskPX(di) : DESK_X0 + 70;
     const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
-    const txt = guardSceneText(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ
+    const rows = guardSceneRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่วาดฉากใหม่)
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
       <rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
       ${sw || caught ? person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" }) : ""}
       ${alert ? `<text x="${(sw ? colX : DESK_X0 + 70) + 22}" y="${sy + 18}" font-size="16" class="of-blinkt">❗</text>` : ""}
-      <text class="of-tb" x="${SCENE_W - 26}" y="${sy + 34}" text-anchor="end">🛡 ยามเฝ้า shell</text>
-      <text class="of-tm" id="ofGuardT" x="${SCENE_W - 26}" y="${sy + 54}" text-anchor="end">${esc(txt)}</text></g>`;
+      <text class="of-tb" id="ofGuardH" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${guardHead(m)}</text>
+      ${Array.from({ length: GUARD_ROWS }, (_, i) => `<text class="of-tm" id="ofGuardT${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("")}</g>`;
   }
   g += loungeSVG(m.lounge, stripY + 196);
   if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 290);
@@ -2063,7 +2072,7 @@ function officeUpdate() {
   }
   const now = Date.now();
   setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
-  setText("ofInspT", inspText(m)); setText("ofGuardT", guardSceneText(m));
+  setText("ofInspT", inspText(m)); setText("ofGuardH", guardHead(m)); { const gr = guardSceneRows(m); for (let i = 0; i < GUARD_ROWS; i++) setText("ofGuardT" + i, gr[i] || ""); }
   /* งานที่กำลังทำ */
   const infos = m.runs.map(runInfo);
   m.runs.forEach((r, k) => {
