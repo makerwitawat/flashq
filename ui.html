@@ -463,6 +463,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <div class="of-tile"><div class="k">รอคิว</div><div class="v" id="ofTQ">-</div><div class="s" id="ofTQs"></div></div>
     <div class="of-tile"><div class="k">คาดว่าเสร็จทั้งหมด (ประมาณ)</div><div class="v" id="ofTE">-</div><div class="s" id="ofTEs"></div></div>
     <div class="of-tile"><div class="k">วันนี้จบแล้ว</div><div class="v" id="ofTD">-</div><div class="s" id="ofTDs"></div></div>
+    <div class="of-tile" title="สรุปจากการ์ด 🪙 ในมุมมองแดชบอร์ด · ประมาณการ (สมมติ Claude ใช้ token เท่ากัน) · เทียบรุ่นแรกในตาราง (ค่าเริ่มต้น Sonnet = ขอบล่าง)"><div class="k">🪙 ประหยัดเทียบ Claude (ประมาณ)</div><div class="v" id="ofTK">-</div><div class="s" id="ofTKs"></div></div>
   </div>
   <div class="of-body">
   <div class="of-colL">
@@ -1935,6 +1936,14 @@ function flashUsageHTML(s) {
     <div class="muted" style="font-size:0.8em" title="ค่า Claude ที่หักมาจากผล flashq usage <แผน> ที่เคยรันไว้เท่านั้น — session ของ Claude ที่ไม่เคยรันคำสั่งนี้ไม่ถูกนับ ตัวเลขประหยัดจึงเป็นค่าประมาณที่ค่อนข้างสูง">ประมาณการ: สมมติ Claude ใช้ token เท่ากัน (จริง ๆ มักใช้น้อยกว่า) · หักค่า Claude ที่ยังใช้วางแผน/ตรวจ ${usd(ov.usd)} (วัดได้ ${ov.sessions || 0} session) — รัน <span class="mono">flashq usage &lt;แผน&gt;</span> เพื่อให้นับครบ</div>` : ""}
     <div style="height:0.5rem"></div>${tbl("วัน", s.by_day)}<div style="height:0.4rem"></div>${tbl("โปรเจกต์", s.by_project)}`;
 }
+// ช่อง "ประหยัด" บนหน้า office: ตัวเลขช่วงเดียวกับการ์ดแดชบอร์ด · เทียบรุ่นแรกในตาราง (ขอบล่าง) · วันนี้ = แถวสุดท้ายของ by_day ถ้าเป็นวันนี้
+function officeUsageTile(s) {
+  const c = (s.compare || [])[0], t = s.total || {};
+  if (!s.jobs) { setText("ofTK", "-"); setText("ofTKs", "ยังไม่มีข้อมูล token"); return; }
+  const day = (s.by_day || []).slice(-1)[0], today = new Date().toLocaleDateString("sv-SE");
+  setText("ofTK", c ? `~${usd(c.saved_net)}` : usd(t.usd));
+  setText("ofTKs", `${s.since_days} วัน · Flash ${fmtTok(t.tokens)} token จ่าย ${usd(t.usd)}${c ? ` · Claude ${c.model.replace(/^claude-/, "")} ≈ ${usd(c.equiv_usd)}` : ""}${day && day.name === today ? ` · วันนี้ ${fmtTok(day.tokens)} (${usd(day.usd)})` : ""}${s.subagent && !s.subagent.included ? " · ยังไม่รวม subagent" : ""}`);
+}
 async function loadFlashUsage() {
   const days = $("fuDays").value || "30";
   try {
@@ -1942,6 +1951,7 @@ async function loadFlashUsage() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
     setHTML("flashUsage", flashUsageHTML(d));
+    officeUsageTile(d);
   } catch (e) { setHTML("flashUsage", `<div class="empty">โหลดสรุป token ไม่ได้: ${esc(e.message || e)}</div>`); }
 }
 $("fuDays").value = store.get("fuDays", "30");
