@@ -38,6 +38,7 @@
 import argparse
 import contextlib
 import ctypes
+import difflib
 import hashlib
 import json
 import os
@@ -84,6 +85,7 @@ DEFAULTS = {
     "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
     "agent_stall_floor_min": 4,
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
+    "doc_timeout_min": 30,  # ช่างเอกสาร (flashq doc): เวลาสูงสุดต่อ 1 รัน · ทับรายชุดได้ด้วย timeout_min ใน doc.presets.<ชื่อ>
     "qa_timeout_min": 30,  # นักทดสอบ (flashq qa): เวลาสูงสุดต่อ 1 ชุดทดสอบ · ทับรายชุดได้ด้วย timeout_min ใน qa.presets.<ชื่อ> · เกิน = ฆ่าทั้งต้นแล้วรายงาน TIMEOUT
     "variants": {"investigate": "high", "verify": "low", "qa": "high"},  # ระดับความคิด (opencode --variant) ตามชนิดงาน · ไม่มีชนิดนั้น/ค่าว่าง = ไม่ส่ง (ใช้ค่าเริ่มต้นของ provider) · ทับได้ใน .flash.json / config.json · --variant ใน CLI ชนะทุกอย่าง
     "shell_idle_min": 4,  # ตัวเฝ้า shell: คำสั่งที่ทั้งชุดโปรเซส CPU+I/O ไม่ขยับเลยเกินนี้ (นาที) = ค้าง → ฆ่าเฉพาะคำสั่งนั้น (0 = ปิด)
@@ -1014,6 +1016,9 @@ def conflict_reason(a: dict, b: dict, info) -> str:
                 else "นักทดสอบกำลังทดสอบโปรเจกต์นี้อยู่ — รอให้จบก่อนถึงจะแก้ไฟล์ได้")
     if a.get("readonly") or b.get("readonly"):  # งานอ่านอย่างเดียว (เช่น ผู้ตรวจ) ไม่แก้ไฟล์ → ไม่ชนใคร
         return ""
+    if a.get("kind") == "doc" or b.get("kind") == "doc":  # ช่างเอกสารตัดสินจาก "ไฟล์ที่เปลี่ยนในโปรเจกต์" จึงต้องไม่มีใครแก้ไฟล์พร้อมกัน (ไม่งั้นแยกไม่ออกว่าใครแก้)
+        return ("ช่างเอกสารกำลังแก้ไฟล์โปรเจกต์นี้อยู่ — รอให้จบก่อน" if b.get("kind") == "doc"
+                else "มีงานที่แก้ไฟล์กำลังรันในโปรเจกต์เดียวกัน — ช่างเอกสารต้องรอให้จบก่อน (ไม่งั้นแยกไม่ออกว่าใครแก้ไฟล์ไหน)")
     ia, ib = info(a), info(b)
     if not ia["parallel"] or not ib["parallel"]:
         mine = not ia["parallel"]
@@ -2589,13 +2594,646 @@ def cmd_qa(a) -> int:
     return rc_out
 
 
+# ---------- ช่างเอกสาร (flashq doc) — ขั้น 1: ตัวตัดสินด้วยกลไก ----------
+# หลักการ: Flash แก้เอกสารได้เฉพาะไฟล์ที่ชุด (doc.presets.<ชื่อ>.paths ใน .flash.json) อนุญาต · flashq ตรวจผลเองจาก git/ไฟล์จริง ไม่ฟังโมเดลว่า "เรียบร้อย"
+# ผ่าน = DRAFT (ร่างรอผู้ใช้ดู diff) ไม่ใช่ "ถูกต้อง" · ทุกอย่างที่ไม่ใช่ DRAFT ไม่ผ่านหมด (fail-closed)
+DOC_MAX_PATHS = 32
+DOC_MAX_BRIEF = 4000
+DOC_TEXT_CAP = 1024 * 1024       # ไฟล์เอกสารที่ตรวจเนื้อหาได้ใหญ่สุด · เกินหรือมี NUL = ตรวจไม่ได้ (UNCHECKED)
+DOC_WHY_MAX = 8
+DOC_PROTECTED_RE = re.compile(r"(?:^|/)(?:\.git(?:/|$)|\.flash\.json$|\.env(?:\.[^/]*)?$|id_(?:rsa|ed25519|ecdsa)[^/]*$|[^/]*\.(?:pem|key|p12|pfx|keystore)$)", re.I)
+DOC_GUARD_FILES = (".flash.json", ".env", ".env.local", ".env.production", ".git/config", ".git/HEAD", ".git/hooks")
+DOC_SECRET_RES = [re.compile(p) for p in (
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----", r"\bAKIA[0-9A-Z]{16}\b", r"\bgh[pousr]_[A-Za-z0-9]{30,}", r"\bgithub_pat_[A-Za-z0-9_]{20,}",
+    r"\bsk-[A-Za-z0-9_-]{20,}", r"\bxox[abpr]-[A-Za-z0-9-]{10,}", r"\bAIza[0-9A-Za-z_-]{35}", r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")]
+DOC_SECRET_ASSIGN_RE = re.compile(r"(?i)\b(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)\b[\"']?\s*[:=]\s*[\"']?([^\s\"'<>`,;]{8,})")
+DOC_PLACEHOLDER_RE = re.compile(r"[<>{}$*]|\.\.\.|x{4,}|your|example|changeme|placeholder|redacted|dummy|sample", re.I)
+DOC_REF_RE = re.compile(r"`([^`\s]{3,200})`")
+DOC_REF_OK_RE = re.compile(r"[\w.@+-]+(?:/[\w.@+-]+)+\.[A-Za-z0-9]{1,6}")
+DOC_HOSTPORT_RE = re.compile(r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|local|localhost|test)):\d+")
+
+
+def doc_norm_path(p: str) -> str:
+    p = p.strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def doc_glob_re(pat: str) -> re.Pattern:
+    """glob แบบ .gitignore ย่อ: `**/` = กี่โฟลเดอร์ก็ได้ (รวมศูนย์) · `**` = อะไรก็ได้ · `*`/`?` ไม่ข้าม `/` · ตรงทั้งเส้นทาง (ไม่ใช่แค่ท่อนหนึ่ง)"""
+    out, i = "", 0
+    while i < len(pat):
+        if pat.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pat.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pat[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pat[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pat[i]), i + 1
+    return re.compile(out + r"\Z")
+
+
+def doc_allowed(rel: str, spec: dict) -> bool:
+    """ไฟล์นี้อยู่ใน paths ของชุด และไม่ใช่ไฟล์ต้องห้าม (.git · .flash.json · .env* · กุญแจ)"""
+    rel = doc_norm_path(rel)
+    return not DOC_PROTECTED_RE.search(rel) and any(doc_glob_re(p).match(rel) for p in spec["paths"])
+
+
+def doc_spec(name: str, v, default_min: float) -> dict | str:
+    """ตรวจ 1 ชุดเอกสาร → dict ที่ใช้รันได้ หรือข้อความผิดพลาด (paths กว้างเกิน/หลุดนอกโปรเจกต์/ครอบไฟล์ต้องห้าม = ปฏิเสธตั้งแต่ตอนอ่านค่า)"""
+    if isinstance(v, list):
+        v = {"paths": v}
+    if not isinstance(v, dict):
+        return f"ชุดเอกสาร '{name}' ต้องเป็น {{\"paths\": [...], \"brief\": \"...\"}}"
+    paths = v.get("paths")
+    if not (isinstance(paths, list) and 1 <= len(paths) <= DOC_MAX_PATHS and all(isinstance(p, str) for p in paths)):
+        return f"ชุดเอกสาร '{name}': paths ต้องเป็นรายการข้อความ 1-{DOC_MAX_PATHS} รายการ เช่น [\"docs/**\", \"README.md\"]"
+    norm = []
+    for raw in paths:
+        p = doc_norm_path(raw)
+        if not p or len(p) > 200 or "\x00" in p:
+            return f"ชุดเอกสาร '{name}': path '{raw[:40]}' ว่าง/ยาวเกิน/มีอักขระต้องห้าม"
+        if p.startswith(("/", "~")) or re.match(r"[A-Za-z]:", p) or ".." in p.split("/"):
+            return f"ชุดเอกสาร '{name}': path '{raw}' ต้องเป็นเส้นทางสัมพัทธ์ใต้โปรเจกต์ (ห้ามขึ้นต้น / ~ ไดรฟ์ หรือมี ..)"
+        if not re.search(r"[\w-]", p):
+            return f"ชุดเอกสาร '{name}': path '{raw}' กว้างเกินไป (ต้องมีชื่อโฟลเดอร์หรือนามสกุลระบุ)"
+        rx = doc_glob_re(p)
+        if p.rstrip("/") in ("**", "*") or any(rx.match(s) for s in (".flash.json", ".env", ".env.local", ".git/config", ".git/hooks/pre-commit", "id_rsa", "server.pem", "secrets.key")):
+            return f"ชุดเอกสาร '{name}': path '{raw}' ครอบไฟล์ต้องห้าม (.git · .flash.json · .env* · กุญแจ) หรือกว้างเกินไป"
+        norm.append(p)
+    brief = v.get("brief") or ""
+    if not isinstance(brief, str) or len(brief) > DOC_MAX_BRIEF or "\x00" in brief:
+        return f"ชุดเอกสาร '{name}': brief ต้องเป็นข้อความไม่เกิน {DOC_MAX_BRIEF} ตัวอักษร"
+    raw_t = v.get("timeout_min")
+    try:
+        timeout = default_min if raw_t in (None, "") else float(raw_t)
+    except (TypeError, ValueError):
+        return f"ชุดเอกสาร '{name}': timeout_min ต้องเป็นตัวเลข"
+    if not 0.1 <= timeout <= 1440:
+        return f"ชุดเอกสาร '{name}': timeout_min ต้องอยู่ระหว่าง 0.1-1440"
+    return {"name": name, "paths": list(dict.fromkeys(norm)), "brief": brief.strip(), "timeout_min": timeout}
+
+
+def doc_guard(root: Path) -> dict:
+    """สถานะไฟล์ต้องห้ามที่ git status อาจไม่เห็น (ถูก .gitignore เช่น .env) — เทียบก่อน/หลังรัน"""
+    out = {}
+    for rel in DOC_GUARD_FILES:
+        p = root / rel
+        try:
+            st = p.stat()
+            out[rel] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            out[rel] = None
+    hooks = root / ".git" / "hooks"
+    if hooks.is_dir():
+        for f in sorted(hooks.iterdir())[:64]:
+            try:
+                st = f.stat()
+                out[".git/hooks/" + f.name] = (st.st_size, st.st_mtime_ns)
+            except OSError:
+                pass
+    return out
+
+
+def doc_changed(before: dict | None, after: dict | None) -> list[str]:
+    """ไฟล์ที่เปลี่ยนระหว่างรัน · snapshot_changes มองไม่เห็นการลบไฟล์ที่เดิมสะอาด (ไม่มีในก่อน = None เท่ากับหลังลบ = None) → เทียบเองตรงนี้ ไม่แก้ของเดิมที่ readonly ใช้อยู่"""
+    if before is None or after is None:
+        return []
+    n = lambda v: None if v is None else tuple(v)  # snapshot ที่อ่านกลับจาก JSON เป็น list
+    return sorted({doc_norm_path(p) for p in after if p not in before or n(after[p]) != n(before[p])} | {doc_norm_path(p) for p in before if p not in after})
+
+
+def doc_guarded(guard0: dict, guard1: dict) -> list[str]:
+    n = lambda v: None if v is None else tuple(v)  # guard ที่อ่านกลับจาก JSON เป็น list
+    return [p for p in guard1 if n(guard1[p]) != n(guard0.get(p))] + [p for p in guard0 if p not in guard1]
+
+
+def doc_before(root: Path, snap: dict | None) -> dict:
+    """ข้อความของไฟล์ที่ "สกปรกอยู่แล้ว" ก่อนรัน — ใช้เป็นฐานเทียบ (ไม่นับการแก้ของผู้ใช้เองเป็นของช่างเอกสาร)"""
+    out = {}
+    for rel in (snap or {}):
+        try:
+            if (root / rel).is_file() and (root / rel).stat().st_size <= DOC_TEXT_CAP:
+                out[rel] = (root / rel).read_bytes().decode("utf-8", "replace")
+        except OSError:
+            pass
+    return out
+
+
+def doc_added(root: Path, rel: str, head: str, before_texts: dict) -> tuple[list[str] | None, bool]:
+    """บรรทัดที่เพิ่ม/แก้ในไฟล์นี้ (เทียบกับฐานก่อนรัน) → (บรรทัด, ถูกลบหรือไม่) · None = ตรวจเนื้อหาไม่ได้ (ไบนารี/ใหญ่เกิน)"""
+    f = root / rel
+    if not f.is_file():
+        return [], True
+    try:
+        data = f.read_bytes()
+    except OSError:
+        return None, False
+    if len(data) > DOC_TEXT_CAP or b"\x00" in data:
+        return None, False
+    if rel in before_texts:
+        base = before_texts[rel]
+    else:
+        r = run_timeout(["git", "-C", str(root), "show", f"{head}:{rel}"], 30, text=False) if head else None
+        if r is not None and r.returncode == 0 and (len(r.stdout) > DOC_TEXT_CAP or b"\x00" in r.stdout):
+            return None, False
+        base = r.stdout.decode("utf-8", "replace") if r is not None and r.returncode == 0 else ""  # ไม่มีใน HEAD = ไฟล์ใหม่
+    new = data.decode("utf-8", "replace").splitlines()
+    diff = difflib.unified_diff(base.splitlines(), new, n=0, lineterm="")
+    return [x[1:] for x in diff if x.startswith("+") and not x.startswith("+++")], False
+
+
+def doc_secrets(rel: str, lines: list[str]) -> list[str]:
+    hits = []
+    for n, line in enumerate(lines, 1):
+        bad = next((rx.pattern[:24] for rx in DOC_SECRET_RES if rx.search(line)), "")
+        if not bad:
+            m = DOC_SECRET_ASSIGN_RE.search(line)
+            if m and not DOC_PLACEHOLDER_RE.search(m.group(1)):
+                bad = "ค่ารหัส/โทเค็นในบรรทัดที่ตั้งค่า"
+        if bad:
+            hits.append(f"{rel} (บรรทัดที่เพิ่มลำดับ {n}): คล้ายความลับ — {bad}")  # ไม่พิมพ์ค่าจริงซ้ำ
+    return hits
+
+
+def doc_badrefs(root: Path, rel: str, lines: list[str]) -> list[str]:
+    """เส้นทางไฟล์ใน `...` และ file:line ที่เอกสารเพิ่งเขียนต้องมีจริง (ตรวจแค่ "มีอยู่จริง" ไม่ได้ตรวจว่าอธิบายถูก)"""
+    text = DOC_HOSTPORT_RE.sub("", "\n".join(lines))
+    rroot, bad = root.resolve(), []
+    cands = []
+    for tok in dict.fromkeys(DOC_REF_RE.findall(text)):
+        t = doc_norm_path(tok)
+        first = t.split("/")[0]
+        if not DOC_REF_OK_RE.fullmatch(t) or t.startswith("/") or (first.startswith(("http", "www")) or ("." in first and not first.startswith("."))):
+            continue
+        cands.append(t)
+    missing = []
+    for t in cands:
+        for base in (rroot, (rroot / rel).parent):
+            try:
+                if (base / t).resolve().is_relative_to(rroot) and (base / t).is_file():
+                    break
+            except OSError:
+                pass
+        else:
+            missing.append(t)
+    if missing:
+        ignored = set()  # ไฟล์ที่ถูก .gitignore (log/ไฟล์ตอนรัน) เอกสารพูดถึงได้แม้ยังไม่มีในเครื่อง
+        try:
+            p = subprocess.run(["git", "-C", str(root), "check-ignore", "--stdin"], input="\n".join(missing), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
+            if p.returncode in (0, 1):
+                ignored = set(p.stdout.split("\n"))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        bad += [f"{rel}: อ้างถึง `{t}` แต่ไม่พบไฟล์นี้" for t in missing if t not in ignored]
+    bad += [f"{rel}: {b}" for b in check_citations(text, root)["bad"]]
+    return bad
+
+
+def doc_verdict(spec: dict, run: dict, root: Path, before: dict | None, after: dict | None, before_texts: dict,
+                guard0: dict, guard1: dict) -> tuple[str, list[str], list[str]]:
+    """คำตัดสินช่างเอกสารจากไฟล์จริง → (verdict, เหตุผล, ไฟล์ที่เปลี่ยน) · DRAFT = ผ่านทุกด่านกลไก (ยังต้องให้ผู้ใช้ดู diff) · อย่างอื่นไม่ผ่านหมด
+    ลำดับด่าน: รันไม่จบ → HEAD เปลี่ยน → แตะนอกขอบเขต → ไม่มีอะไรเปลี่ยน → ตรวจเนื้อหาไม่ได้ → ลบไฟล์ → ความลับ → อ้างไฟล์ที่ไม่มี"""
+    st = run.get("status", "DONE")
+    if st != "DONE":
+        return {"TIMEOUT": "TIMEOUT", "HANG": "TIMEOUT"}.get(st, "ERROR"), [f"agent จบด้วยสถานะ {st}"], []
+    if before is None or after is None:
+        return "ERROR", ["อ่านสถานะ git ไม่ได้ จึงตรวจไม่ได้ว่าแก้อะไรไปบ้าง"], []
+    head0, head1 = run.get("head0", ""), run.get("head1", "")
+    if head0 != head1:
+        return "CHANGED", [f"HEAD เปลี่ยนระหว่างรัน ({head0[:8]} → {head1[:8]}) — ช่างเอกสารห้าม commit และห้ามมีใครอื่น commit คั่น"], []
+    changed, guarded = doc_changed(before, after), doc_guarded(guard0, guard1)
+    outside = [p for p in changed if not doc_allowed(p, spec)] + [p for p in guarded if p not in changed]
+    if outside:
+        return "OUTSIDE", [f"แตะไฟล์นอกขอบเขตชุด '{spec['name']}': {p}" for p in outside[:DOC_WHY_MAX]] + \
+            ([f"(และอีก {len(outside) - DOC_WHY_MAX} ไฟล์)"] if len(outside) > DOC_WHY_MAX else []), changed + [p for p in guarded if p not in changed]
+    if not changed:
+        return "NOCHANGE", ["ไม่มีไฟล์เปลี่ยนเลย (เอกสารอาจตรงกับโค้ดอยู่แล้ว หรือ agent ไม่ได้ลงมือ)"], []
+    added, unchecked, deleted = {}, [], []
+    for p in changed:
+        lines, gone = doc_added(root, p, head1, before_texts)
+        if gone:
+            deleted.append(p)
+        elif lines is None:
+            unchecked.append(p)
+        else:
+            added[p] = lines
+    if unchecked:
+        return "UNCHECKED", [f"ตรวจเนื้อหาไม่ได้ (ไบนารี/ใหญ่เกิน {DOC_TEXT_CAP // 1024} KB): {p}" for p in unchecked[:DOC_WHY_MAX]], changed
+    if deleted:
+        return "DELETED", [f"ลบไฟล์เอกสาร: {p} (ช่างเอกสารไม่ควรลบ — กู้ได้ด้วย git checkout)" for p in deleted[:DOC_WHY_MAX]], changed
+    secrets = [h for p, ls in added.items() for h in doc_secrets(p, ls)]
+    if secrets:
+        return "SECRET", secrets[:DOC_WHY_MAX], changed
+    refs = [b for p, ls in added.items() for b in doc_badrefs(root, p, ls)]
+    if refs:
+        return "BADREF", refs[:DOC_WHY_MAX] + ([f"(และอีก {len(refs) - DOC_WHY_MAX} จุด)"] if len(refs) > DOC_WHY_MAX else []), changed
+    return "DRAFT", [f"แก้ {len(changed)} ไฟล์ ผ่านด่านกลไกทั้งหมด — รอผู้ใช้ดู diff"], changed
+
+
+# ---------- ช่างเอกสาร — ขั้น 2: สั่งงาน · สำรอง/ย้อนกลับ · รับ/ทิ้ง ----------
+DOC_AUTO_REVERT = ("OUTSIDE", "SECRET")   # ผลที่อันตราย (แตะนอกขอบเขต/มีความลับ) → ย้อนให้เองทันที · ผลอื่นเก็บไฟล์ไว้ให้ผู้ใช้ดู
+DOC_BACKUP_CAP = 20 * 1024 * 1024
+DOC_SNAP_CAP = 500
+DOC_ICON = {"DRAFT": "📝", "TIMEOUT": "⏱", "ERROR": "⛔", "CHANGED": "⚠️", "OUTSIDE": "🚫", "NOCHANGE": "➖", "UNCHECKED": "⚠️", "DELETED": "🗑",
+            "SECRET": "🔑", "BADREF": "🔗", "CANCELLED": "✋"}
+DOC_MEANING = {"TIMEOUT": "เกินเวลา", "ERROR": "agent ล้มเหลวหรือ flashq ตรวจไม่ได้", "CHANGED": "HEAD เปลี่ยนระหว่างรัน (ห้าม commit/สลับ branch)",
+               "OUTSIDE": "แตะไฟล์นอกขอบเขตของชุด", "NOCHANGE": "ไม่มีไฟล์เปลี่ยน", "UNCHECKED": "ตรวจเนื้อหาไฟล์ไม่ได้ (ไบนารี/ใหญ่เกิน)",
+               "DELETED": "ลบไฟล์เอกสาร", "SECRET": "พบข้อความคล้ายความลับ", "BADREF": "อ้างถึงไฟล์/บรรทัดที่ไม่มีจริง", "CANCELLED": "ถูกยกเลิกกลางทาง"}
+
+
+def doc_sha(p: Path) -> str:
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""  # ไม่มีไฟล์
+
+
+def doc_backup(root: Path, jid: str, snap: dict | None, guard: dict) -> dict:
+    """สำรองไฟล์ที่ "สกปรกอยู่แล้ว" ก่อนให้ agent แตะ + ไฟล์ต้องห้ามนอก .git ที่มีอยู่ (.env ฯลฯ) → ใช้ย้อนกลับเฉพาะไฟล์ที่ช่างเอกสารแตะ
+    saved = สำรองแล้ว · absent = ก่อนรันไม่มีไฟล์นี้ (ย้อน = ลบ) · skipped = ใหญ่เกินสำรอง (ย้อนเองไม่ได้)"""
+    dest = HOME / "docbak" / jid
+    saved, absent, skipped = [], [], []
+    for rel in dict.fromkeys([doc_norm_path(p) for p in (snap or {})] + [g for g in guard if not g.startswith(".git")]):
+        if rel.startswith(".git/") or rel == ".git":
+            continue
+        p = root / rel
+        try:
+            if not p.is_file():
+                absent.append(rel)
+            elif p.stat().st_size > DOC_BACKUP_CAP:
+                skipped.append(rel)
+            else:
+                (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dest / rel)
+                saved.append(rel)
+        except OSError:
+            skipped.append(rel)
+    return {"dir": str(dest), "saved": saved, "absent": absent, "skipped": skipped}
+
+
+def doc_restore(root: Path, bak: dict, rels: list[str], head0: str) -> list[str]:
+    """ย้อนไฟล์เหล่านี้ไปสถานะก่อนช่างเอกสารรัน: เคยสกปรก = คืนจากสำรอง · ไม่มีก่อนรัน = ลบ · สะอาดและอยู่ใน HEAD = checkout จาก HEAD เดิม · คืนรายการปัญหา"""
+    rroot, problems = root.resolve(), []
+    for raw in rels:
+        rel = doc_norm_path(raw)
+        p = rroot / rel
+        try:
+            safe = bool(rel) and ".." not in rel.split("/") and not rel.startswith(".git") and p.resolve().is_relative_to(rroot)
+        except OSError:
+            safe = False
+        if not safe:
+            problems.append(f"{rel}: path ไม่ปลอดภัย ข้ามไม่ย้อน")
+            continue
+        try:
+            if rel in bak.get("saved", []):
+                shutil.copy2(Path(bak["dir"]) / rel, p)
+            elif rel in bak.get("skipped", []):
+                problems.append(f"{rel}: ใหญ่เกินสำรอง ย้อนเองไม่ได้ (ใช้ git/ที่สำรองของคุณ)")
+            elif rel in bak.get("absent", []) or run_timeout(["git", "-C", str(root), "cat-file", "-e", f"{head0}:{rel}"], 30).returncode != 0:
+                p.unlink(missing_ok=True)  # ก่อนรันไม่มี / ไม่อยู่ใน HEAD = ไฟล์ใหม่ที่ช่างเอกสารสร้าง
+                for d in p.parents:  # เก็บโฟลเดอร์ว่างที่สร้างค้างไว้ (หยุดที่รากโปรเจกต์/โฟลเดอร์ที่ไม่ว่าง)
+                    if d == rroot:
+                        break
+                    try:
+                        d.rmdir()
+                    except OSError:
+                        break
+            else:
+                r = run_timeout(["git", "-C", str(root), "checkout", head0, "--", rel], 60)
+                if r.returncode != 0:
+                    problems.append(f"{rel}: git checkout ล้มเหลว ({r.stderr.strip()[:100]})")
+        except OSError as e:
+            problems.append(f"{rel}: {e}")
+    return problems
+
+
+def doc_prompt(spec: dict, since: str) -> str:
+    base = (f"ดูโค้ดที่เปลี่ยนด้วย git log/diff {since}..HEAD (และ git status สำหรับที่ยังไม่ commit)" if since
+            else "ดูโค้ดที่เปลี่ยนล่าสุดด้วย git log -20 --stat, git diff และ git status (รวมที่ยังไม่ commit) แล้วตัดสินเองว่าเอกสารส่วนไหนล้าสมัย")
+    return "\n".join([
+        f"ช่างเอกสาร ชุด '{spec['name']}': อัปเดตเอกสารให้ตรงกับโค้ดตามหน้าที่ของคุณ",
+        "ไฟล์ที่แก้ได้เท่านั้น (เทียบจากรากโปรเจกต์): " + ", ".join(spec["paths"]),
+        "ห้ามแก้ไฟล์อื่น · ห้าม commit/stage/push/สลับ branch · ห้ามลบไฟล์ · ห้ามใส่ความลับ รหัสผ่าน หรือโทเค็น · "
+        "ไฟล์ที่อ้างใน `...` ต้องมีอยู่จริงเท่านั้น (ตรวจก่อนเขียน) · ไม่แน่ใจว่าโค้ดทำงานอย่างไร = ไปอ่านโค้ดก่อน อย่าเดา",
+        base,
+        *([f"โจทย์เพิ่มเติมของโปรเจกต์นี้: {spec['brief']}"] if spec.get("brief") else []),
+        "จบด้วยสรุปสั้น ๆ: แก้ไฟล์ไหน เพราะโค้ดส่วนไหนเปลี่ยน · ถ้าไม่มีอะไรต้องแก้ ให้บอกเหตุผล"])
+
+
+def doc_summary(d: dict) -> tuple[str, str]:
+    """(หัวข้อ 1 บรรทัด, รายละเอียด) ภาษาคน"""
+    v, name, ch = d.get("verdict") or "ERROR", d.get("name", ""), d.get("changed") or []
+    ic = DOC_ICON.get(v, "?")
+    if v == "DRAFT":
+        head = f"{ic} ร่างเอกสารชุด '{name}' แก้ {len(ch)} ไฟล์ — ผ่านด่านกลไกแล้ว รอคุณดู diff"
+    else:
+        head = f"{ic} ช่างเอกสารชุด '{name}' ไม่ผ่าน: {DOC_MEANING.get(v, v)}"
+        if d.get("state") == "reverted":
+            head += " (ย้อนไฟล์กลับให้แล้ว)"
+        elif ch:
+            head += f" (ไฟล์ที่แก้ค้างอยู่ {len(ch)} ไฟล์)"
+    lines = [f"  • {x}" for x in (d.get("why") or [])[:DOC_WHY_MAX + 1]]
+    lines += [f"ไฟล์ที่เปลี่ยน: {', '.join(ch[:10])}" + (f" (+{len(ch) - 10})" if len(ch) > 10 else "")] if ch else []
+    if d.get("revert_problems"):
+        lines += ["ย้อนบางไฟล์ไม่ได้ — ตรวจเอง:"] + [f"  ✗ {x}" for x in d["revert_problems"][:6]]
+    if d.get("state") == "pending":
+        jid = d.get("job", "<job>")
+        lines.append(f"ดู diff: git -C <โปรเจกต์> diff · " + (f"รับ: flashq doc-review {jid} accept · " if v == "DRAFT" else "") + f"ทิ้ง: flashq doc-review {jid} discard (ยังไม่มีการ commit)")
+    if d.get("agent_text"):
+        lines.append("สรุปจากช่างเอกสาร (Flash · ความเห็น ไม่ใช่คำตัดสิน): " + one_line(d["agent_text"], 500))
+    return head, "\n".join(lines)
+
+
+def doc_finalize(job: dict, root: Path, d: dict, snap0, guard0, texts, head1: str, run_status: str) -> None:
+    """ตรวจผลหลัง agent จบ → เติมผลใน d (verdict/why/changed/state) · ผลอันตรายย้อนไฟล์ให้ทันที"""
+    snap1, guard1 = dirty_snapshot(root), doc_guard(root)
+    spec = {"name": d["name"], "paths": d["paths"]}
+    v, why, changed = doc_verdict(spec, {"status": "DONE" if run_status == "OK" else run_status, "head0": d["head0"], "head1": head1},
+                                  root, snap0, snap1, texts, guard0, guard1)
+    if v in ("TIMEOUT", "ERROR") and not changed:  # agent ไม่จบ/ตรวจไม่ได้ แต่อาจแก้ไฟล์ค้างไว้ → ต้องรายงาน ไม่ปล่อยเงียบ
+        changed = doc_changed(snap0, snap1) + [p for p in doc_guarded(guard0, guard1)]
+        if changed:
+            why = why + [f"มีไฟล์ถูกแก้ค้างไว้ {len(changed)} ไฟล์ (ดู diff ก่อน — จะทิ้งก็ได้)"]
+    d.update(verdict=v, why=why, changed=changed, state="pending" if changed else "none")
+    if v in DOC_AUTO_REVERT and changed:
+        probs = doc_restore(root, d["backup"], changed, d["head0"])
+        d["revert_problems"] = probs
+        d["state"] = "reverted" if not probs else "pending"
+    d["after_sha"] = {p: doc_sha(root / p) for p in changed} if d["state"] == "pending" else {}
+
+
+def doc_cancelled(j: dict) -> str:
+    """ช่างเอกสารถูกยกเลิก (process ถูกฆ่า ไม่มีโอกาสตรวจผลเอง) → ดูว่า agent แก้อะไรค้างไว้ แล้วบันทึกให้ผู้ใช้ทิ้งได้ · ไม่ย้อนให้เอง (ผู้ใช้เป็นคนกดยกเลิก)"""
+    d, root = j["doc"], Path(j["project"])
+    d.update(verdict="CANCELLED", why=["ผู้ใช้ยกเลิกกลางทาง — ไม่ได้ตรวจเนื้อหา"], phase="done", name=d.get("name", ""))
+    try:
+        ch = doc_changed(d.get("snap0"), dirty_snapshot(root)) + doc_guarded(d.get("guard0") or {}, doc_guard(root))
+    except Exception:
+        ch = []
+    d.update(changed=ch, state="pending" if ch else "none", after_sha={p: doc_sha(root / p) for p in ch})
+    j["last"] = "\n".join(doc_summary({**d, "job": j["id"]}))[:1500]
+    return f"ไฟล์ที่ช่างเอกสารแก้ค้างไว้ {len(ch)} ไฟล์ (ทิ้งได้ด้วย flashq doc-review {j['id'][:12]} discard)" if ch else "ไม่มีไฟล์ถูกแก้"
+
+
+def doc_since(root: Path, name: str, given: str) -> tuple[str, str]:
+    """ฐานเทียบ "โค้ดที่เปลี่ยน": --since (ต้องเป็น commit จริง) · ไม่ระบุ = HEAD ตอนที่ช่างเอกสารชุดนี้ถูกรับ (accepted) ครั้งล่าสุด · ไม่มี = "" · คืน (ref, ข้อผิดพลาด)"""
+    def commit(ref: str) -> str:
+        return _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}") if re.fullmatch(r"[\w./~^-]{1,100}", ref or "") and not ref.startswith("-") else ""
+    if given:
+        c = commit(given)
+        return (c, "") if c else ("", f"--since '{given}' ไม่ใช่ commit ที่มีในโปรเจกต์นี้")
+    done = [j for j in jobs() if j.get("kind") == "doc" and _pnorm(j.get("project", "")) == _pnorm(str(root)) and (j.get("doc") or {}).get("name") == name
+            and (j.get("doc") or {}).get("state") == "accepted"]
+    done.sort(key=lambda j: j.get("finished", ""))
+    return (commit(done[-1]["doc"].get("head0", "")) if done else ""), ""
+
+
+def cmd_doc(a) -> int:
+    root, is_git = project_root(Path(a.project or os.getcwd()))
+    if not is_git:
+        print("FLASH_RUN=FAIL ช่างเอกสารใช้ได้เฉพาะโปรเจกต์ git (ต้องมี diff ให้ตรวจและย้อนกลับ)")
+        return 1
+    cfg = project_cfg(root)
+    block = cfg.get("doc") if isinstance(cfg.get("doc"), dict) else {}
+    presets = block.get("presets") if isinstance(block.get("presets"), dict) else {}
+    name = a.doc_name or (next(iter(presets)) if len(presets) == 1 else "")
+    errs = []
+    if not presets:
+        errs.append("โปรเจกต์นี้ยังไม่ได้ตั้งชุดเอกสาร (.flash.json → doc.presets เช่น {\"docs\": {\"paths\": [\"docs/**\", \"README.md\"], \"brief\": \"...\"}})")
+    elif not name:
+        errs.append(f"ต้องระบุชื่อชุด (doc.presets มี: {', '.join(presets)})")
+    elif name not in presets:
+        errs.append(f"ไม่มีชุดเอกสารชื่อ '{name}' ใน .flash.json (doc.presets มี: {', '.join(presets)})")
+    elif not QA_NAME_RE.match(name):
+        errs.append(f"ชื่อชุดเอกสาร '{name}' ใช้ได้แค่ตัวอักษร/ตัวเลข _ . - (ยาวไม่เกิน 40)")
+    spec = None
+    if not errs:
+        spec = doc_spec(name, presets[name], float(cfg.get("doc_timeout_min") or DEFAULTS["doc_timeout_min"]))
+        if isinstance(spec, str):
+            errs.append(spec)
+    since, err = doc_since(root, name, a.since) if not errs else ("", "")
+    if err:
+        errs.append(err)
+    exe = opencode_cmd()
+    if not errs and not exe:
+        errs.append("ไม่พบคำสั่ง opencode ใน PATH")
+    if not errs and not _git(root, "rev-parse", "HEAD"):
+        errs.append("โปรเจกต์นี้ยังไม่มี commit เลย")
+    if errs:
+        print("FLASH_RUN=FAIL ช่างเอกสารเริ่มไม่ได้:")
+        for e in errs:
+            print(f"  - {e}")
+        return 1
+    if a.timeout_min:
+        spec["timeout_min"] = float(a.timeout_min)
+    prompt = doc_prompt(spec, since)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    jid = f"{ts}_{os.getpid()}"
+    title = one_line(a.title or f"flash-doc {name}", 200)
+    bad = cmd_shim_unsafe(exe, title, prompt)
+    if bad:
+        print(f"FLASH_RUN=FAIL opencode ถูกเรียกผ่าน cmd.exe แต่บรีฟมีอักขระ {bad} ที่ cmd.exe ตีความเอง → ตัดอักขระเหล่านี้ออกจาก doc.presets.{name} หรือตั้ง FLASHQ_OPENCODE เป็น opencode.exe ตัวจริง")
+        return 1
+    for d in (JOBS, LOGS):
+        d.mkdir(parents=True, exist_ok=True)
+    agent = "flash-writer"
+    d = {"name": name, "job": jid, "paths": spec["paths"], "since": since, "head0": "", "phase": "queued", "state": "", "verdict": "", "why": [], "changed": []}
+    job = {"id": jid, "project": str(root), "plan": "", "tasks": name, "message": "", "kind": "doc", "agent": agent, "prompt": prompt, "readonly": False,
+           "title": title, "model": a.model or agent_model(agent), "status": "queued", "pid": os.getpid(), "pid_start": proc_start(os.getpid()),
+           "created": now(), "qv": QUEUE_VERSION, "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "doc": d}
+    save_job(job)
+    got = acquire(job, a.wait_min, a.no_wait)
+    if got != "ok":
+        job.update(status="busy" if got == "busy" else "queue_timeout", finished=now())
+        save_job(job)
+        notify_job(job, job["status"].upper())
+        return 2 if got == "busy" else 3
+
+    status, rc_out, t_start, res = "FAIL", 1, time.time(), {"status": "FAIL"}
+    snap0 = guard0 = texts = None
+    try:
+        job.update(status="running", started=now())
+        save_job(job)
+        print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
+        head0 = _git(root, "rev-parse", "HEAD")
+        snap0, guard0 = dirty_snapshot(root), doc_guard(root)
+        if snap0 is None or not head0:
+            raise RuntimeError("อ่านสถานะ git ไม่ได้ จึงตรวจไม่ได้ว่าช่างเอกสารแก้อะไร — ไม่เริ่ม")
+        texts = doc_before(root, snap0)
+        if len(snap0) > DOC_SNAP_CAP:
+            raise RuntimeError(f"ไฟล์ที่ยังไม่ commit เกิน {DOC_SNAP_CAP} ไฟล์ — commit/เก็บงานเก่าก่อนค่อยใช้ช่างเอกสาร (แยกไม่ออกว่าใครแก้ไฟล์ไหน)")
+        d.update(head0=head0, phase="write", backup=doc_backup(root, jid, snap0, guard0), guard0=guard0, snap0=dict(snap0))
+        save_job(job)
+        print(f"DOC_START ชุด {name} paths={', '.join(spec['paths'])} since={since[:10] or '-'} timeout={spec['timeout_min']:g}นาที", flush=True)
+        ext_dirs = external_dirs(cfg)
+        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext_dirs)} if ext_dirs else None
+        variant = variant_for("doc", a.variant, root)
+        job.update(attach="", **({"variant": variant} if variant else {}))
+        save_job(job)
+        attempt, nostart_retry, stall_retry, switches, tried = 0, 1, 1, 0, set()
+        while True:
+            attempt += 1
+            cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
+            if job["model"]:
+                cmd += ["--model", job["model"]]
+            if variant:
+                cmd += ["--variant", variant]
+            cmd += ["--agent", agent, "--", prompt]
+            res = run_once(job, cmd, root, "", spec["timeout_min"], True, attempt, cfg["agent_stall_min"], cfg["agent_stall_floor_min"], 0, env)
+            if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:
+                stall_retry -= 1
+                print(f"TIMEOUT ({job.get('timeout_reason', '')}) → ลองใหม่อัตโนมัติ 1 ครั้ง (ไฟล์ที่แก้ไว้แล้วคงอยู่ · ช่างเอกสารอ่านต่อจากสถานะปัจจุบัน)", flush=True)
+                continue
+            if res["status"] == "NOSTART" and nostart_retry > 0:
+                nostart_retry -= 1
+                print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
+                continue
+            if res["status"] == "QUOTA" and job["model"] and switches < a.switch_on_quota:
+                tried.add(job["model"])
+                alts = other_providers(job["model"], tried)
+                if alts:
+                    switches += 1
+                    print(f"QUOTA → ย้าย provider {job['model']} → {alts[0]} (โมเดลเดิม) แล้วสั่งซ้ำ (ครั้งที่ {switches})", flush=True)
+                    job["model"] = alts[0]
+                    save_job(job)
+                    continue
+            break
+        d["phase"] = "check"
+        save_job(job)
+        doc_finalize(job, root, d, snap0, guard0, texts, _git(root, "rev-parse", "HEAD"), res["status"])
+        d["agent_text"] = (res.get("last") or "")[-800:]
+        status = "OK" if d["verdict"] == "DRAFT" else ("TIMEOUT" if d["verdict"] == "TIMEOUT" else "FAIL")
+        rc_out = 0 if status == "OK" else 1
+    except Exception as e:
+        d.update(verdict="ERROR", why=[f"flashq ผิดพลาดกลางทาง: {e}"])
+        if d.get("phase") in ("write", "check") and d.get("backup") and snap0 is not None:  # agent อาจแก้ไฟล์ค้างไว้ → บันทึกไว้ให้ทิ้งได้
+            try:
+                ch = doc_changed(snap0, dirty_snapshot(root)) + doc_guarded(guard0, doc_guard(root))
+                d.update(changed=ch, state="pending" if ch else "none", after_sha={p: doc_sha(root / p) for p in ch})
+            except Exception:
+                d["state"] = "pending"
+        print(f"ERROR: {e}", flush=True)
+    finally:
+        mins = (time.time() - t_start) / 60
+        if not d.get("verdict"):  # ถูกขัดจังหวะ (Ctrl+C ฯลฯ) ก่อนตัดสิน
+            d.update(verdict="ERROR", why=["ถูกขัดจังหวะก่อนตรวจผล — ไฟล์ที่แก้ค้างอาจมี (ดู git status)"], state="pending")
+        head_line, body = doc_summary(d)
+        d["phase"] = "done"
+        job.update(status=status.lower(), result=status, rc=rc_out, finished=now(), last=(head_line + "\n" + body)[:1500])
+        save_job(job)
+        release(job)
+        notify_job(job, status, mins)
+    print(f"FLASH_RUN={status} exit={rc_out} เวลา={mins:.1f} นาที tool={res.get('tools', 0)} session={job.get('session', '')} job={jid}")
+    print(f"DOC={d['verdict']} {head_line}")
+    print("---- สรุปผลช่างเอกสาร ----")
+    print(body)
+    return rc_out
+
+
+def doc_review(j: dict, action: str, force: bool = False) -> tuple[bool, str]:
+    """ผู้ใช้ตัดสินร่างของช่างเอกสาร (ใช้ร่วมกับ CLI และหน้าเว็บ) · accept = เก็บไฟล์ไว้ (ไม่ commit ให้) · discard = ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะ"""
+    d = j.get("doc") if j.get("kind") == "doc" else None
+    if not d:
+        return False, f"job {j['id']} ไม่ใช่งานช่างเอกสาร"
+    if live_state(j) in ("queued", "running"):
+        return False, f"job {j['id']} ยังทำงานอยู่ — รอให้จบ (หรือ cancel) ก่อน"
+    if d.get("state") != "pending":
+        return False, f"job {j['id']} ไม่มีร่างรอตัดสิน (state={d.get('state') or '-'})"
+    root = Path(j["project"])
+    if action == "accept":
+        if d.get("verdict") != "DRAFT":
+            return False, f"รับไม่ได้: ผลคือ {d.get('verdict')} ({DOC_MEANING.get(d.get('verdict'), '')}) — ผ่านด่านกลไกไม่ครบ · แก้เองแล้ว commit ก็ได้ หรือสั่ง discard"
+        d.update(state="accepted", accepted=now())
+        save_job(j)
+        return True, f"รับร่างเอกสารแล้ว ({len(d.get('changed') or [])} ไฟล์) — ไฟล์อยู่ใน checkout ยังไม่ได้ commit · ตรวจ diff แล้ว commit เองเมื่อพร้อม"
+    head = _git(root, "rev-parse", "HEAD")
+    if head != d.get("head0"):
+        return False, f"ทิ้งไม่ได้: HEAD เปลี่ยนแล้ว ({(d.get('head0') or '')[:10]} → {head[:10]}) — ย้อนเองด้วย git (ไม่เสี่ยงทับงานที่ commit ไปแล้ว)"
+    changed = d.get("changed") or []
+    edited = [p for p in changed if d.get("after_sha", {}).get(p) is not None and doc_sha(root / p) != d["after_sha"][p]]
+    if edited and not force:
+        return False, "ทิ้งไม่ได้: มีไฟล์ที่ถูกแก้ต่อหลังช่างเอกสารจบ (ย้อนแล้วงานของคุณหาย): " + ", ".join(edited[:6]) + " · ยืนยันด้วย --force"
+    probs = doc_restore(root, d.get("backup") or {}, changed, d["head0"])
+    if probs:
+        d["revert_problems"] = probs
+        save_job(j)
+        return False, "ย้อนไม่ครบ:\n" + "\n".join(f"  ✗ {p}" for p in probs)
+    d.update(state="discarded", discarded=now())
+    save_job(j)
+    return True, f"ทิ้งร่างแล้ว — ย้อน {len(changed)} ไฟล์กลับสถานะก่อนช่างเอกสารรัน"
+
+
+def cmd_doc_review(a) -> int:
+    """flashq doc-review <id> accept|discard"""
+    j = find_job(a.id)
+    if not j:
+        return 1
+    ok, msg = doc_review(j, a.action, a.force)
+    print(msg)
+    return 0 if ok else 1
+
+
+DOC_DIFF_FILES, DOC_DIFF_CHARS = 20, 200_000
+
+
+def doc_diff(j: dict) -> dict:
+    """diff ที่ช่างเอกสารทำ (เทียบกับสถานะก่อนรัน: ไฟล์ที่เคยสกปรก = เทียบกับที่สำรองไว้ · ไม่งั้นเทียบ HEAD เดิม · ไฟล์ใหม่ = ทั้งไฟล์) — ทำใน Python ไม่เรียก git diff (เห็นไฟล์ใหม่ด้วย)"""
+    d = j.get("doc") or {}
+    root, head0, bak = Path(j.get("project", "")), d.get("head0", ""), d.get("backup") or {}
+    parts, total, rroot = [], 0, root.resolve()
+    changed = [doc_norm_path(p) for p in d.get("changed") or []]
+    for rel in changed[:DOC_DIFF_FILES]:
+        if not rel or ".." in rel.split("/") or rel.startswith(".git"):
+            continue
+        try:
+            if not (rroot / rel).resolve().is_relative_to(rroot):
+                continue
+            if rel in bak.get("saved", []):
+                old = (Path(bak["dir"]) / rel).read_bytes()
+            elif rel in bak.get("absent", []) or run_timeout(["git", "-C", str(root), "cat-file", "-e", f"{head0}:{rel}"], 30).returncode != 0:
+                old = b""
+            else:
+                old = subprocess.run(["git", "-C", str(root), "show", f"{head0}:{rel}"], capture_output=True, timeout=30).stdout
+            p = rroot / rel
+            new = p.read_bytes() if p.is_file() else b""
+        except (OSError, subprocess.SubprocessError):
+            parts.append(f"--- {rel}\n(อ่านไฟล์ไม่ได้)\n")
+            continue
+        if b"\x00" in old[:4096] or b"\x00" in new[:4096]:
+            parts.append(f"--- {rel}\n(ไฟล์ไบนารี ดู diff ไม่ได้)\n")
+            continue
+        txt = "".join(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(True), new.decode("utf-8", "replace").splitlines(True),
+                                          f"ก่อน/{rel}", f"หลัง/{rel}", n=2)) or f"--- {rel}\n(เนื้อหาเท่าเดิม)\n"
+        total += len(txt)
+        if total > DOC_DIFF_CHARS:
+            parts.append(f"(diff ยาวเกิน {DOC_DIFF_CHARS} ตัวอักษร — ตัดที่ {rel} · ดูส่วนที่เหลือด้วย git diff)\n")
+            break
+        parts.append(txt if txt.endswith("\n") else txt + "\n")
+    if len(changed) > DOC_DIFF_FILES:
+        parts.append(f"(และอีก {len(changed) - DOC_DIFF_FILES} ไฟล์ — ดูด้วย git diff)\n")
+    return {"id": j.get("id"), "files": changed, "diff": "".join(parts)}
+
+
+def doc_preset_names(project: str) -> list[str]:
+    """ชื่อชุดเอกสารที่ตั้งไว้ในโปรเจกต์ (อ่าน .flash.json ตรง ๆ ไม่เรียก git)"""
+    doc = read_json(Path(project) / ".flash.json").get("doc") if project else None
+    presets = doc.get("presets") if isinstance(doc, dict) else None
+    return [n for n in presets if QA_NAME_RE.match(str(n))] if isinstance(presets, dict) else []
+
+
 def kind_tag(j: dict) -> str:
-    return {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] "}.get(j.get("kind"), "")
+    return {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] ", "doc": "[เอกสาร] "}.get(j.get("kind"), "")
 
 
 def plan_label(j: dict) -> str:
-    """ชื่องานที่แสดงคู่ kind_tag: แผน · ไม่มีแผน = --message · นักทดสอบไม่มีทั้งคู่ (ชื่อชุดอยู่ใน tasks)"""
-    return j.get("plan") or ("" if j.get("kind") == "qa" else "--message")
+    """ชื่องานที่แสดงคู่ kind_tag: แผน · ไม่มีแผน = --message · นักทดสอบ/ช่างเอกสารไม่มีทั้งคู่ (ชื่อชุดอยู่ใน tasks)"""
+    return j.get("plan") or ("" if j.get("kind") in ("qa", "doc") else "--message")
 
 
 def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
@@ -2610,7 +3248,7 @@ def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
         last = job.get("last") or ""
         row = {"job": job["id"], "project": job.get("project", ""), "session": job.get("claude_session", ""),
                "kind": job.get("kind", ""), "plan": job.get("plan", ""), "tasks": job.get("tasks", ""), "status": status,
-               "mins": round(mins, 1), "last": last[:600] if job.get("kind") == "qa" else last[-600:], "at": time.time()}  # นักทดสอบ: หัวข้อผลอยู่บรรทัดแรก
+               "mins": round(mins, 1), "last": last[:600] if job.get("kind") in ("qa", "doc") else last[-600:], "at": time.time()}  # นักทดสอบ/ช่างเอกสาร: หัวข้อผลอยู่บรรทัดแรก
         write_json(INBOX / f"{time.strftime('%Y%m%d-%H%M%S')}-{job['id']}.json", row)
         if os.name == "nt" and status != "CANCELLED" and cfg.get("notify_toast", True) is not False and not os.environ.get("FLASHQ_NO_TOAST"):  # ผู้ใช้กดยกเลิกเอง ไม่ต้องเด้งซ้ำ
             ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
@@ -2875,6 +3513,9 @@ def cmd_log(a) -> int:
     if j.get("kind") == "qa" and (j.get("qa") or {}).get("verdict"):  # สรุปเต็ม (ใน last ถูกตัดที่ 1500 ตัวอักษร)
         head, body = qa_summary(j["qa"])
         print(head + "\n" + body)
+    elif j.get("kind") == "doc" and (j.get("doc") or {}).get("verdict"):
+        head, body = doc_summary({**j["doc"], "job": j["id"]})
+        print(head + "\n" + body)
     else:
         print(j.get("last") or "(ยังไม่มี)")
     return 0
@@ -2926,6 +3567,8 @@ def cancel_job(j: dict) -> tuple[bool, str]:
     if reaped and orphan:
         note = (note + " · " if note else "") + reaped
     j.update(status="cancelled", finished=now())
+    if j.get("kind") == "doc" and isinstance(j.get("doc"), dict) and j["doc"].get("phase") in ("write", "check"):
+        note = (note + " · " if note else "") + doc_cancelled(j)  # ช่างเอกสารถูกฆ่ากลางทาง → ไฟล์ที่แก้ค้างต้องถูกบันทึกไว้ให้ทิ้งได้
     save_job(j)
     release(j)
     notify_job(j, "CANCELLED", max(0.0, (_ts(j["finished"]) - _ts(j["started"])) / 60) if j.get("started") else 0.0)  # Claude ที่สั่งงานจะได้รู้ว่าผู้ใช้ยกเลิก ไม่ใช่งานพัง
@@ -3354,7 +3997,7 @@ def ui_state() -> dict:
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]
         row = {k: j.get(k, "") for k in ("id", "project", "plan", "tasks", "message", "title", "model",
                                          "kind", "agent", "readonly", "created", "started", "finished", "session", "result", "rc")}
-        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []), qa=j.get("qa") or None,
+        row.update(state=st, project_name=Path(j.get("project", "")).name, attempts=len(j.get("logs") or []), qa=j.get("qa") or None, doc=doc_row(j),
                    perm_denied=[f"{x.get('kind', '')}: {x.get('path', '')}" for x in j.get("perm_denied") or []][:5])
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
@@ -3403,11 +4046,22 @@ def ui_state() -> dict:
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
             "qa_presets": {p: n for p in sorted({r["project"] for r in rows if r["project"]}) if (n := qa_preset_names(p))},  # ชุดทดสอบที่ตั้งไว้ของแต่ละโปรเจกต์ (ให้ฟอร์มส่งงานเลือกได้)
+            "doc_presets": {p: n for p in sorted({r["project"] for r in rows if r["project"]}) if (n := doc_preset_names(p))},
             "submit_fails": submit_failures(),
             "stats": job_stats(history), "reviews": rv_act, "reviews_done": rv_done,
             "review_ttl_min": REVIEW_TTL_MIN,
             "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
             "goals": goals}
+
+
+def doc_row(j: dict) -> dict | None:
+    """ส่วนของช่างเอกสารที่หน้าเว็บต้องใช้ (ไม่ส่ง backup/snapshot ภายใน)"""
+    d = j.get("doc") if j.get("kind") == "doc" else None
+    if not d:
+        return None
+    return {"name": d.get("name", ""), "verdict": d.get("verdict", ""), "state": d.get("state", ""), "phase": d.get("phase", ""),
+            "why": (d.get("why") or [])[:DOC_WHY_MAX + 1], "changed": (d.get("changed") or [])[:40], "n_changed": len(d.get("changed") or []),
+            "revert_problems": (d.get("revert_problems") or [])[:6], "agent_text": one_line(d.get("agent_text") or "", 500)}
 
 
 def job_stats(history: list[dict]) -> dict:
@@ -3432,8 +4086,8 @@ def job_stats(history: list[dict]) -> dict:
     def kind(r) -> str:
         return r.get("kind") or ("test" if r.get("message") else "work")
 
-    def not_verify(r) -> bool:  # งานตรวจ/สืบ/ทดสอบสั้นกว่ามาก (และทดสอบไม่ใช้โมเดล) → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
-        return kind(r) not in AGENT_KINDS and kind(r) != "qa"
+    def not_verify(r) -> bool:  # งานตรวจ/สืบ/ทดสอบ/เอกสารต่างจากงานทำตามแผน (และทดสอบไม่ใช้โมเดล) → ไม่ปนสถิติ/เวลาเฉลี่ยของงานทำจริง
+        return kind(r) not in AGENT_KINDS and kind(r) not in ("qa", "doc")
     return {"by_project": group(lambda r: r["project_name"], not_verify), "by_model": group(lambda r: r["model"], not_verify),
             "by_kind": group(kind)}
 
@@ -3487,6 +4141,20 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
             argv = [sys.executable, str(REPO / "flashq.py"), "qa", *names, "--project", project]
             if body.get("no_analyze"):
                 argv.append("--no-analyze")
+            timeout_min = num("timeout_min", 0, 1440)
+            if timeout_min:
+                argv += ["--timeout-min", str(timeout_min)]
+            return argv, ""
+        if body.get("kind") == "doc":  # ช่างเอกสาร: เลือกได้เฉพาะ "ชื่อชุด" ที่ตั้งไว้ใน .flash.json (paths/brief มาจากไฟล์ ไม่รับจากหน้าเว็บ)
+            names = body.get("names") or []
+            if not isinstance(names, list) or len(names) != 1 or not isinstance(names[0], str) or not QA_NAME_RE.match(names[0]):
+                return [], "ต้องเลือกชุดเอกสาร 1 ชุด"
+            have = doc_preset_names(project)
+            if not have:
+                return [], "โปรเจกต์นี้ยังไม่ได้ตั้ง doc.presets ใน .flash.json"
+            if names[0] not in have:
+                return [], f"ไม่มีชุดเอกสาร: {names[0]} (มี: {', '.join(have)})"
+            argv = [sys.executable, str(REPO / "flashq.py"), "doc", names[0], "--project", project]
             timeout_min = num("timeout_min", 0, 1440)
             if timeout_min:
                 argv += ["--timeout-min", str(timeout_min)]
@@ -3761,7 +4429,13 @@ def make_ui_server(port: int = 4097):
                 return self._send(200, overlap_report(j))
             if u.path == "/api/plans":
                 proj = q.get("project", [""])[0]
-                return self._send(200, {"plans": list_plans(proj), "qa_presets": qa_preset_names(proj) if proj and Path(proj).is_absolute() else []})
+                ok = bool(proj) and Path(proj).is_absolute()
+                return self._send(200, {"plans": list_plans(proj), "qa_presets": qa_preset_names(proj) if ok else [], "doc_presets": doc_preset_names(proj) if ok else []})
+            if u.path == "/api/doc_diff":
+                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0] and x.get("kind") == "doc"), None)
+                if not j:
+                    return self._send(404, {"error": "ไม่พบงานช่างเอกสาร"})
+                return self._send(200, doc_diff(j))
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
@@ -3790,6 +4464,16 @@ def make_ui_server(port: int = 4097):
                 if live_state(j) != "running":
                     return self._send(409, {"ok": False, "message": f"งานนี้ไม่ได้กำลังทำ (สถานะ {live_state(j)})"})
                 ok, msg = cancel_job(j)
+                return self._send(200 if ok else 409, {"ok": ok, "message": msg})
+            if path == "/api/doc_review":  # ปุ่มรับ/ทิ้งร่างของช่างเอกสาร — ทิ้งต้องยืนยัน confirm=id · ทับไฟล์ที่ผู้ใช้แก้ต่อต้องส่ง force=true
+                j = next((x for x in jobs() if x.get("id") == body.get("id") and x.get("kind") == "doc"), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงานช่างเอกสาร"})
+                if body.get("action") not in ("accept", "discard"):
+                    return self._send(400, {"ok": False, "message": "action ต้องเป็น accept หรือ discard"})
+                if body["action"] == "discard" and body.get("confirm") != j["id"]:
+                    return self._send(400, {"ok": False, "message": "ต้องยืนยันด้วย id ของงาน"})
+                ok, msg = doc_review(j, body["action"], body.get("force") is True)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/runnow":  # รันเลย (ช่องพิเศษ) — มีไฟล์ซ้อนต้องส่ง ack_overlap=true
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
@@ -3842,6 +4526,8 @@ def make_ui_server(port: int = 4097):
                 spec = {**body, "project": j.get("project", ""), "plan": j.get("plan", ""),
                         "tasks": j.get("tasks", ""), "message": j.get("message", ""), "kind": j.get("kind", ""),
                         "agent": j.get("agent", ""), "readonly": j.get("readonly", False), "prompt": j.get("prompt", "")}
+                if j.get("kind") == "doc":
+                    spec["names"] = [str(j.get("tasks") or "")]
                 if j.get("kind") == "qa":  # สั่งซ้ำ = ชุดเดิมที่เคยรัน (ไม่ใช่ทุกชุด) · ชุดจาก --cmd ไม่มีในไฟล์ตั้งค่า → build_run_argv ปฏิเสธพร้อมบอกชื่อ
                     spec["names"] = str(j.get("tasks") or "").split()
                 argv, err = build_run_argv(spec)
@@ -4823,6 +5509,10 @@ def claude_check_prompt(j: dict) -> str:
     OK + มีแผน = /flash-check · ผลสืบ = ตรวจเลขอ้างอิงก่อนเชื่อ · ไม่ OK/ตาย = ดู log หาสาเหตุแล้วรายงาน (ยังไม่สั่งซ้ำเอง)"""
     st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()
     plan, jid = j.get("plan") or "", j["id"]
+    if j.get("kind") == "doc":
+        return (f"ช่างเอกสาร flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` (ผลมาจากการตรวจด้วยกลไกของ flashq ไม่ใช่คำบอกของ AI) "
+                f"แล้ว `git diff` ของโปรเจกต์ ตรวจว่าเอกสารที่แก้ตรงกับโค้ดจริง (เปิดไฟล์ที่เอกสารอ้างถึงเทียบเอง) แล้วรายงานผมเป็นภาษาไทย: แก้ไฟล์ไหน · ถูก/ผิดตรงไหน · ควรรับหรือทิ้ง "
+                f"(ห้าม commit/รับ/ทิ้งเองจนกว่าผมสั่ง)")
     if j.get("kind") == "qa":
         return (f"นักทดสอบ flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` "
                 f"(ผลมาจาก exit code ของคำสั่งทดสอบจริง ไม่ใช่คำบอกของ AI) แล้วรายงานผมเป็นภาษาไทย: ทดสอบอะไร · ผ่าน/ไม่ผ่านชุดไหน · ถ้าไม่ผ่านสาเหตุคืออะไรจากบรรทัดใน log "
@@ -5338,7 +6028,23 @@ def main() -> int:
     qa.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
     qa.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
     qa.set_defaults(fn=cmd_qa)
-    wy = sp.add_parser("why", help="งานที่รันอยู่เป็นอย่างไร: ปกติ/tool ค้าง/รอโมเดล (ไม่ระบุ id = ทุกงานที่รัน)")
+    dc = sp.add_parser("doc", help="ช่างเอกสาร: Flash อัปเดตเอกสารให้ตรงกับโค้ดที่เปลี่ยน (แก้ไฟล์จริงเฉพาะ doc.presets.<ชื่อ>.paths · ตัดสินด้วยกลไก · ไม่ commit ให้ · รอคุณรับ/ทิ้ง)")
+    dc.add_argument("doc_name", nargs="?", default="", metavar="ชุด", help="ชื่อชุดจาก .flash.json doc.presets (มีชุดเดียว = ไม่ต้องระบุ)")
+    dc.add_argument("--since", default="", help="เทียบโค้ดที่เปลี่ยนตั้งแต่ commit/tag นี้ (ไม่ระบุ = ตั้งแต่ครั้งล่าสุดที่รับร่างของชุดนี้ · ไม่เคย = ให้ Flash ดูประวัติล่าสุดเอง)")
+    dc.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+    dc.add_argument("--title", default="", help="ชื่องานในคิว")
+    dc.add_argument("--model", help="โมเดล (ค่าเริ่มต้นตาม agent flash-writer)")
+    dc.add_argument("--timeout-min", type=float, default=0, help="เวลาสูงสุด (ทับค่าในชุด/doc_timeout_min=30)")
+    dc.add_argument("--variant", help="ระดับความคิดของ Flash")
+    dc.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
+    dc.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
+    dc.set_defaults(fn=cmd_doc, switch_on_quota=2)
+    dr = sp.add_parser("doc-review", help="ตัดสินร่างของช่างเอกสาร: accept = เก็บไฟล์ไว้ (ไม่ commit ให้) · discard = ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะ")
+    dr.add_argument("id")
+    dr.add_argument("action", choices=["accept", "discard"])
+    dr.add_argument("--force", action="store_true", help="discard ทั้งที่มีไฟล์ถูกแก้ต่อหลังช่างเอกสารจบ (งานแก้ต่อนั้นจะหาย)")
+    dr.set_defaults(fn=cmd_doc_review)
+    wy =sp.add_parser("why", help="งานที่รันอยู่เป็นอย่างไร: ปกติ/tool ค้าง/รอโมเดล (ไม่ระบุ id = ทุกงานที่รัน)")
     wy.add_argument("id", nargs="?", default="")
     wy.set_defaults(fn=cmd_why)
     sp.add_parser("status", help="งานที่ทำอยู่ + คิว").set_defaults(fn=cmd_status)

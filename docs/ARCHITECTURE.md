@@ -27,6 +27,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | จัดคิวอัตโนมัติ | `plan_files` · `plan_meta` (`flashq-files`/`flashq-parallel`) · `conflict_reason` · `schedule` · `overlap_report` |
 | รันงาน | `ensure_live_server` · `wait_session` · `server_activity` (tool/subagent จาก server) · `ShellWatch` (ตัวเฝ้า shell) · `run_once` · `cmd_run` |
 | นักทดสอบ | `qa_detect`/`qa_suggest_lines` (เดาชุดจากไฟล์ ไม่รัน) · `qa_spec`/`qa_specs` (ตรวจ+ปรับชุดจาก `.flash.json`/`--cmd`) · `qa_exec` (รันคำสั่งเอง + ฆ่าทั้งต้นเมื่อ timeout/cancel) · `qa_verdict` (fail-closed จาก exit code + `expect`) · `qa_summary` · `qa_analyze` (Flash `flash-tester` อ่าน log เฉพาะตอนล้ม — ไม่เปลี่ยนคำตัดสิน) · `cmd_qa` |
+| ช่างเอกสาร | `doc_spec` (ตรวจชุดจาก `.flash.json` · paths กว้างเกิน/ครอบไฟล์ต้องห้าม = ปฏิเสธ) · `doc_guard`/`doc_before`/`doc_changed` (snapshot ก่อน-หลัง · ตรวจการลบไฟล์เองเพราะ `snapshot_changes` ไม่เห็น) · `doc_verdict` (fail-closed: ผ่านได้ทางเดียว `DRAFT` · `doc_secrets`/`doc_badrefs`) · `doc_backup`/`doc_restore` (สำรองไฟล์ที่สกปรกก่อนรัน → `~/.flashq/docbak/<job>` · ย้อนเฉพาะไฟล์ที่แตะ) · `doc_finalize` (`OUTSIDE`/`SECRET` ย้อนทันที) · `doc_since` · `cmd_doc` · `doc_review`/`cmd_doc_review` (รับ/ทิ้ง) · `doc_diff` (diff ใน Python เห็นไฟล์ใหม่) · `doc_row` (ส่วนที่หน้าเว็บใช้ ไม่ส่ง backup) |
 | ขนาดแผน | `PLAN_SOFT`/`PLAN_HARD` · `plan_lint` |
 | CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
@@ -36,9 +37,10 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ## ไฟล์ข้อมูล (`~/.flashq` หรือ `FLASHQ_HOME`)
 | ไฟล์ | เนื้อหา |
 |---|---|
-| `jobs/<id>.json` | งานหนึ่งงาน: `id` `kind` (work/verify/investigate/qa/test) `status` (qa: + `qa` = ผลต่อชุด `[{name,cmd,verdict,secs,head,...}]` · `tasks` = ชื่อชุด) `project` `plan` `tasks` `message` `agent` `readonly` `title` `model` `slot` `pid`/`pid_start` `child_pid` `session` `logs` `created`/`started`/`finished` `shell_watch` `agent_act` `qv` |
+| `jobs/<id>.json` | งานหนึ่งงาน: `id` `kind` (work/verify/investigate/qa/test/doc) `status` (qa: + `qa` = ผลต่อชุด `[{name,cmd,verdict,secs,head,...}]` · `tasks` = ชื่อชุด · doc: + `doc` = `{name,verdict,state,why,changed,head0,after_sha,backup,...}` · `tasks` = ชื่อชุดเอกสาร) `project` `plan` `tasks` `message` `agent` `readonly` `title` `model` `slot` `pid`/`pid_start` `child_pid` `session` `logs` `created`/`started`/`finished` `shell_watch` `agent_act` `qv` |
 | `logs/<id>_<n>.jsonl` · `.err` | output ของ opencode รอบที่ n (รอบลองใหม่/สลับบัญชีเพิ่มเลข) · stderr |
 | `running.lock` · `running-<n>.lock` | ใครถือช่อง 1 / ช่อง n |
+| `docbak/<job>/` | สำเนาไฟล์ที่ "สกปรกอยู่แล้ว" + ไฟล์ต้องห้ามก่อนช่างเอกสารแตะ (ไว้ย้อนตอนทิ้งร่าง/OUTSIDE/SECRET · ไฟล์เกิน 20MB ข้ามการสำรอง) |
 | `run_now/<id>` | สัญญาณ "รันเลย" จากหน้าเว็บ/`runnow` |
 | `config.json` | `max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads` |
 | `goals/<gid>.json` | สำเนาสถานะเป้าหมาย: `items` (G-xx) `rounds` (เพิ่มเฉพาะตอน verify) `rounds_max` `hours` `started` `owner` (session Claude Code) |
@@ -48,13 +50,14 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ในโปรเจกต์: `.flash.json` · แผน `docs/plans/PLAN_*FLASH*.md` · เป้าหมาย `GOAL_*.md` · สถานะธง `.tmp/flashq-goal/` (base commit + ลายนิ้วมือเกณฑ์)
 
 ## API ของหน้าเว็บ (127.0.0.1 เท่านั้น)
-- GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans`
-- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/goal` · `/api/switch`
+- GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans` (คืน `qa_presets`/`doc_presets` ด้วย) · `/api/doc_diff?id=` (diff ของร่างเอกสาร)
+- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/goal` · `/api/switch` · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
 - คำสั่งที่หน้าเว็บสั่งรัน (`submit`/`retry`) สร้าง argv เป็น list (`build_run_argv`) แล้ว `spawn_run` แบบ detached ไม่ผ่าน shell
 
 ## `ui.html`
 - หน้าเดียว ไม่มี build step · poll `/api/state` ทุก 3 วิ แล้ว render ใหม่เฉพาะส่วนที่ signature เปลี่ยน
 - สองมุมมอง: แดชบอร์ด และ 🏢 ออฟฟิศ (`sceneSVG` วาดฉาก SVG · `deskSVG` ต่อช่อง · การ์ดงาน `runCardHTML` · แถบขั้น `goalStepsHTML`/`runGoalHTML`/`planTrailHTML`)
+- โหมดสั่งงาน "เอกสาร": เลือกได้แค่ชื่อชุดจาก `doc_presets` · การ์ดงานเอกสารแสดงคำตัดสิน (`DOC_ICON`) + ปุ่มดู diff (`openDocDiff` · `#docDiffDlg`) / รับ / ทิ้ง
 - ค่าที่จำในเบราว์เซอร์ผ่าน `store` (localStorage ห่อ try/catch): มุมมอง · ขนาดฟอนต์ · แผงพับ · ย่อการ์ด (`compactRuns`/`compactGoals`) · เสียง
 
 ## ตัวแปรแวดล้อม

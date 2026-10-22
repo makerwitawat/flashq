@@ -47,6 +47,13 @@ def advice(row: dict) -> str:
     if row.get("kind") == "qa" and st in ("OK", "FAIL", "TIMEOUT"):  # ผลมาจาก exit code จริง ไม่ใช่คำพูดของโมเดล
         return (f"ผลทดสอบ (flashq รันเองและตัดสินจาก exit code) — รายงานทีละชุดว่าผ่าน/ไม่ผ่าน ห้ามเปลี่ยนคำตัดสิน · "
                 f"ไม่ผ่านให้ดู python {FLASHQ}/flashq.py log {row.get('job', '')} เทียบ log จริงก่อนเชื่อคำอธิบายของ Flash")
+    if row.get("kind") == "doc" and st in ("OK", "FAIL", "TIMEOUT"):  # ผลมาจากด่านกลไกของ flashq (git diff/ไฟล์จริง) ไม่ใช่คำพูดของโมเดล
+        job = row.get("job", "")
+        if st == "OK":
+            return (f"ร่างเอกสารผ่านด่านกลไกแล้ว แต่ยังไม่ถูกรับและไม่ได้ commit — ตรวจ git diff ของโปรเจกต์ เทียบกับโค้ดจริง (เปิดไฟล์ที่เอกสารอ้างถึงดูเอง) แล้วรายงานผู้ใช้ว่าถูก/ผิดตรงไหน · "
+                    f"ห้ามรับ/ทิ้ง/commit เองจนกว่าผู้ใช้สั่ง (รับ: python {FLASHQ}/flashq.py doc-review {job} accept · ทิ้ง: ... discard)")
+        return (f"ช่างเอกสารไม่ผ่านด่านกลไก (สาเหตุอยู่ต้นข้อความท้าย · ดูเต็มด้วย python {FLASHQ}/flashq.py log {job}) — บอกผู้ใช้สาเหตุเป็นภาษาคน · "
+                f"ถ้ามีไฟล์ค้าง (ไม่ได้ย้อนให้) ให้ดู git diff แล้วเสนอ discard · ห้ามสั่งซ้ำเองจนกว่าผู้ใช้สั่ง")
     if st == "OK":
         if row.get("kind") == "investigate":
             return "ผลสืบ — ตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ (ดูบรรทัด CITATIONS ใน log)"
@@ -97,14 +104,14 @@ def main() -> int:
         for f, row in found[:MAX_SHOW]:
             when = time.strftime("%H:%M", time.localtime(float(row.get("at") or now)))
             kind = row.get("kind")
-            tag = {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] "}.get(kind, "")
-            name = row.get("plan") or ("" if kind == "qa" else "--message")
+            tag = {"verify": "[ตรวจ] ", "investigate": "[สืบ] ", "qa": "[ทดสอบ] ", "doc": "[เอกสาร] "}.get(kind, "")
+            name = row.get("plan") or ("" if kind in ("qa", "doc") else "--message")
             what = " ".join(x for x in (name, row.get("tasks", "")) if x)
             lines.append(f"- job {row.get('job')} {tag}{what} → {row.get('status')} "
                          f"({row.get('mins', 0)} นาที · จบ {when}) · {advice(row)}")
             last = (row.get("last") or "").strip().replace("\n", " ")
-            if last and row.get("status") != "OK":
-                lines.append(f"    ท้าย: {last[:300] if kind == 'qa' else last[-300:]}")  # นักทดสอบ: หัวข้อผลอยู่ต้นข้อความ
+            if last and (row.get("status") != "OK" or kind == "doc"):
+                lines.append(f"    ท้าย: {last[:300] if kind in ('qa', 'doc') else last[-300:]}")  # นักทดสอบ/ช่างเอกสาร: หัวข้อผลอยู่ต้นข้อความ
         if len(found) > MAX_SHOW:
             lines.append(f"- … และอีก {len(found) - MAX_SHOW} งาน (ดู flashq list --all)")
         for f, _ in found:
