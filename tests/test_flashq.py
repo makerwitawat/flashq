@@ -1666,6 +1666,21 @@ class FlashqTest(unittest.TestCase):
             self.assertIn(want, r.stdout)
         self.assertTrue((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").is_file())
 
+    def test_goal_check_warns_ui_counting_only(self):
+        """งาน UI (มีคนตรวจเรื่องหน้าตา): เกณฑ์เครื่องเป็นการนับล้วน + ไม่อ้าง mockup = เตือน · อ้าง mockup แล้วเตือนข้อ mockup หาย"""
+        acc = f"\"{sys.executable}\" tests/acc.py"
+        body = (f"- [ ] G-01 มีคำอธิบาย ≥12 จุด · ตรวจ: `{acc}`\n- [ ] G-02 หน้าตาใช้ง่าย · คนตรวจ: เปิดหน้าแรกลองเลือกค่า\n"
+                "goal-files: src/*\ngoal-locked: tests/acc.py\ngoal-max-rounds: 5\n")
+        self.goal_repo(body)
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CHECK=OK", r.stdout, r.stdout)
+        self.assertIn("เป็นการนับล้วน (G-01)", r.stdout)
+        self.assertIn("ยังไม่มีเกณฑ์อ้าง mockup", r.stdout)
+        (self.proj / "docs/plans/GOAL_x.md").write_text(body + f"- [ ] G-03 โครงหน้าตรง mockup_B.html · ตรวจ: `{acc}`\n", encoding="utf-8")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertNotIn("นับล้วน", r.stdout)
+        self.assertNotIn("อ้าง mockup", r.stdout)
+
     def test_goal_verify_loop_and_brakes(self):
         """verify: ไม่ผ่าน = CONTINUE · พังซ้ำเหมือนเดิม 2 รอบ = STOP · ผ่าน + คนตรวจ = DONE_NEEDS_USER · แก้ไฟล์ล็อก/นอกขอบเขต = STOP
         · แก้เกณฑ์หลังเริ่ม = STOP จนกว่า check --reset · ครบงบรอบ = STOP"""
