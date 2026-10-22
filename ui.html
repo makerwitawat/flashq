@@ -182,7 +182,7 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-tile .v { font-size: 1.35rem; font-weight: 700; line-height: 1.3; }
 .of-tile .s { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
 /* ฉากกว้างเท่ากรอบเสมอ: JS (fitScene) ตั้ง viewBox = กว้างกรอบ ÷ (rem/13) → ตัวหนังสือในภาพโตตามปุ่มซูมเท่าส่วนอื่นของหน้า ไม่หดตามกรอบ · จัดวางไม่ลงต่ำกว่า 840 หน่วยฉาก (ย่อได้แค่ตอนนั้น) · แคบกว่า 36rem = เลื่อนซ้าย-ขวา */
-.of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.of-scene { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
 .of-scene svg { display: block; width: 100%; height: auto; }
 .of-stage { min-width: 36rem; }
 @media (max-width: 720px) {
@@ -191,9 +191,7 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
 body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
-body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; }
 body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
-body[data-of="2"] .of-scene { max-height: calc(100vh - 14rem); overflow-y: auto; }  /* ฉากสูงกว่าจอ = เลื่อนในกรอบ (ไม่ย่อภาพ) */
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); align-items: start; }  /* การ์ดย่อไม่ถูกยืดสูงตามใบข้าง ๆ */
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }  /* คอลัมน์ไม่ขยายตามข้อความยาว (ไม่ล้นทับการ์ดข้าง ๆ) */
 .of-card.quiet { border-color: var(--quota); }
@@ -1775,6 +1773,11 @@ const STRIP_ROWS = 3;  // ป้ายแต่ละแถบในฉากม
 const capRows = (rows, idle) => !rows.length ? [idle]
   : rows.length > STRIP_ROWS ? [...rows.slice(0, STRIP_ROWS - 1), `+${rows.length - STRIP_ROWS + 1} รายการอื่น (ดูที่การ์ดของแต่ละงาน)`] : rows;
 const stripHead = (ico, name, n) => `${ico} ${name}` + (n ? ` · ${n} งาน` : "");
+// แถบที่ไม่มีงาน = แถบเตี้ย (บรรทัดเดียว: ชื่อซ้าย · สถานะขวา) · มีงาน = แถบเต็ม (หัว + 3 บรรทัด) — ฉากสั้นลง ไม่ต้องมีแถบเลื่อน
+const STRIP_FULL = 86, STRIP_SLIM = 40;
+const stripLabels = (id, head, rows, sy, slim) => slim
+  ? `<text class="of-tb" id="${id}H" x="${DESK_X0 + 18}" y="${sy + 25}">${head}</text><text class="of-tm" id="${id}T0" x="${SCENE_W - 26}" y="${sy + 25}" text-anchor="end">${esc(rows[0] || "")}</text>`
+  : `<text class="of-tb" id="${id}H" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${head}</text>${stripTexts(id, rows, sy)}`;
 const stripTexts = (id, rows, sy) => Array.from({ length: STRIP_ROWS }, (_, i) =>
   `<text class="of-tm" id="${id}T${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("");
 function setStrip(id, head, rows) { setText(id + "H", head); for (let i = 0; i < STRIP_ROWS; i++) setText(id + "T" + i, rows[i] || ""); }
@@ -1814,15 +1817,19 @@ function sceneSVG(m) {
   const ds = Math.min(1, areaW / (cols * DW)), dw = DW * ds, dh = DH * ds;
   const ox = DESK_X0 + Math.max(0, (areaW - cols * dw) / 2);
   const deskX = (i) => ox + (i % cols) * dw, deskY = (i) => DESK_Y0 + Math.floor(i / cols) * dh, deskPX = (i) => deskX(i) + 72 * ds;
-  const stripY = DESK_Y0 + rows * dh + 6, H = Math.max(530, stripY + 572 + (m.goals.length ? 94 : 0));
+  const stripY = DESK_Y0 + rows * dh + 6;
+  const busyOf = { insp: !!(m.reviews.length || m.reviewFin || roleCount(m, "check")), sleuth: roleCount(m, "sleuth") > 0, guard: !!(m.watched.length || m.kill), qa: roleCount(m, "qa") > 0, doc: roleCount(m, "doc") > 0 };
+  let yy = stripY + 8; const Y = {};
+  for (const k of ["insp", "sleuth", "guard", "qa", "doc"]) { Y[k] = yy; yy += (busyOf[k] ? STRIP_FULL : STRIP_SLIM) + 8; }
+  Y.lounge = yy; yy += 94; Y.goals = yy;
+  const H = Math.max(530, yy + (m.goals.length ? 94 : 0));
   const total = m.runs.length;
   // แถบของนักทดสอบ/ช่างเอกสาร: มีงาน = ยืนที่ช่องแรกของตัวเอง + ป้ายรายการทุกงาน · ว่าง = นั่งโซฟา
   const workerStrip = (sy, id, ico, name, role, hue, title, rows) => {
     const vi = m.desks.map((r, i) => (r && roleOf(r) === role ? i : -1)).filter((i) => i >= 0), busy = vi.length > 0;
-    return `<g class="of-st-${role}${busy ? " of-busy" : ""}"><title>${esc(title)}</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+    return `<g class="of-st-${role}${busy ? " of-busy" : ""}"><title>${esc(title)}</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="${busy ? STRIP_FULL : STRIP_SLIM}" rx="12"/>
       ${busy ? person({ seed: role, hue, pose: "stand", mood: "flat", x: deskPX(vi[0]), y: sy + 78, s: 0.9, checker: role }) : ""}
-      <text class="of-tb" id="${id}H" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${stripHead(ico, name, vi.length)}</text>
-      ${stripTexts(id, rows, sy)}</g>`;
+      ${stripLabels(id, stripHead(ico, name, vi.length), rows, sy, !busy)}</g>`;
   };
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
@@ -1837,31 +1844,29 @@ function sceneSVG(m) {
   {  // ผู้ตรวจประจำออฟฟิศ: ว่าง = นั่งพักที่โซฟา (ห้องพักล่างสุด) · มีงานตรวจรันอยู่ = ยืนประจำในแถบนี้ บอกช่องที่ตรวจ
     const vi = m.desks.map((r, i) => (r && roleOf(r) === "check" ? i : -1)).filter((i) => i >= 0), vr = vi.length ? m.desks[vi[0]] : null;
     const rv = m.reviews[0], fin = m.reviewFin;
-    const sy = stripY + 8, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
+    const sy = Y.insp, py = sy + 78, colX = vi.length ? deskPX(vi[0]) : DESK_X0 + 70;
     const busy = !!(vr || rv), cheer = !busy && fin && fin.status === "pass", sad = !busy && fin && fin.status === "fail";
     const rows = inspRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่ต้องวาดฉากใหม่)
-    g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+    g += `<g class="of-st-insp${busy ? " of-busy" : ""}${cheer ? " of-st-ok" : ""}"><title>ผู้ตรวจ (verify · อ่านอย่างเดียว)</title><rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="${busyOf.insp ? STRIP_FULL : STRIP_SLIM}" rx="12"/>
       ${busy || fin ? person({ seed: "inspector", hue: 265, pose: cheer ? "cheer" : "stand", mood: cheer ? "happy" : sad ? "sad" : busy ? "flat" : "smile", x: colX, y: py, s: 0.9, checker: "check" }) : ""}
-      <text class="of-tb" id="ofInspH" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${stripHead("🔍", "ผู้ตรวจ", inspCount(m))}</text>
-      ${stripTexts("ofInsp", rows, sy)}</g>`;
+      ${stripLabels("ofInsp", stripHead("🔍", "ผู้ตรวจ", inspCount(m)), rows, sy, !busyOf.insp)}</g>`;
   }
   {  // ยามเฝ้า shell: ว่าง = นั่งพักที่โซฟา · เฝ้าคำสั่ง = ยืนที่ช่องนั้น · คำสั่งนิ่ง = ระวัง · ฆ่าคำสั่งค้าง = ฉลอง "จับได้!" ~90 วิ
-    const sy = stripY + 196, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
+    const sy = Y.guard, py = sy + 78, w = m.watched[0], sw = w && w.shell_watch, k = m.kill;
     const di = w ? m.desks.indexOf(w) : -1, colX = di >= 0 ? deskPX(di) : DESK_X0 + 70;
     const alert = sw && (sw.state === "quiet" || sw.state === "suspect"), caught = !!k && !alert;
     const rows = guardSceneRows(m);  // officeUpdate อัปเดตข้อความนี้ทุกวิ (ช่องบรรทัดคงที่ ไม่วาดฉากใหม่)
     g += `<g class="of-st-guard${sw ? " of-busy" : ""}${caught ? " of-st-ok" : ""}${alert ? " of-alert" : ""}"><title>ยามเฝ้า shell: ดูว่าคำสั่งที่ opencode รันยังทำงานอยู่ไหม · นิ่งสนิท/ลูกกำพร้าถือ handle = ฆ่าเฉพาะคำสั่งนั้น</title>
-      <rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="86" rx="12"/>
+      <rect class="of-carpet" x="${DESK_X0}" y="${sy}" width="${SCENE_W - DESK_X0 - 10}" height="${busyOf.guard ? STRIP_FULL : STRIP_SLIM}" rx="12"/>
       ${sw || caught ? person({ seed: "guard", hue: 215, pose: caught ? "cheer" : "stand", mood: caught ? "happy" : alert ? "flat" : "smile", x: sw ? colX : DESK_X0 + 70, y: py, s: 0.9, checker: "guard" }) : ""}
       ${alert ? `<text x="${(sw ? colX : DESK_X0 + 70) + 22}" y="${sy + 18}" font-size="16" class="of-blinkt">❗</text>` : ""}
-      <text class="of-tb" id="ofGuardH" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${guardHead(m)}</text>
-      ${stripTexts("ofGuard", rows, sy)}</g>`;
+      ${stripLabels("ofGuard", guardHead(m), rows, sy, !busyOf.guard)}</g>`;
   }
-  g += workerStrip(stripY + 102, "ofSleuth", "🕵️", "ผู้สืบ", "sleuth", 25, "ผู้สืบ (Flash แบบอ่านอย่างเดียว ไล่หาต้นตอบั๊ก)", sleuthRows(m));
-  g += workerStrip(stripY + 290, "ofQa", "🧪", "นักทดสอบ", "qa", 150, "นักทดสอบ (flashq รันชุดทดสอบเอง · อ่านอย่างเดียว)", qaRows(m));
-  g += workerStrip(stripY + 384, "ofDoc", "📝", "ช่างเอกสาร", "doc", 35, "ช่างเอกสาร (Flash แก้ไฟล์เอกสาร · flashq ตรวจผล)", docRows(m));
-  g += loungeSVG(m.lounge, stripY + 478);
-  if (m.goals.length) g += goalPolesSVG(m.goals, stripY + 572, Math.max(1, Math.min(5, Math.floor((SCENE_W - 415) / 190))));  // กี่เสาที่พอดีก่อนถึงข้อความหัวแถบ (1000 = 3)
+  g += workerStrip(Y.sleuth, "ofSleuth", "🕵️", "ผู้สืบ", "sleuth", 25, "ผู้สืบ (Flash แบบอ่านอย่างเดียว ไล่หาต้นตอบั๊ก)", sleuthRows(m));
+  g += workerStrip(Y.qa, "ofQa", "🧪", "นักทดสอบ", "qa", 150, "นักทดสอบ (flashq รันชุดทดสอบเอง · อ่านอย่างเดียว)", qaRows(m));
+  g += workerStrip(Y.doc, "ofDoc", "📝", "ช่างเอกสาร", "doc", 35, "ช่างเอกสาร (Flash แก้ไฟล์เอกสาร · flashq ตรวจผล)", docRows(m));
+  g += loungeSVG(m.lounge, Y.lounge);
+  if (m.goals.length) g += goalPolesSVG(m.goals, Y.goals, Math.max(1, Math.min(5, Math.floor((SCENE_W - 415) / 190))));  // กี่เสาที่พอดีก่อนถึงข้อความหัวแถบ (1000 = 3)
   const SHOW = 5;
   m.queue.slice(0, SHOW).forEach((j, k) => {
     const y = 150 + k * 70, clash = /^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason || ""), kico = isDoc(j) ? "📝" : isQa(j) ? "🧪" : isSleuth(j) ? "🕵️" : isVerify(j) ? "🔍" : "";  // ไอคอนชนิดงานข้างเลขคิว (งานแก้ตามแผนไม่มี)
