@@ -54,7 +54,7 @@ description: >-
 
 ## 3. เขียนแผน
 - คัดลอก `{{FLASHQ}}/templates/FLASH_PLAN_TEMPLATE.md` → `<plan_dir>/PLAN_FLASH_<เรื่อง>.md` · เติม base commit (`git rev-parse --short HEAD`) + กติกาโปรเจกต์ใน §0
-- **เติม `flashq-files:` ใน §0 ทุกครั้ง** = ทุกไฟล์ที่ทุกงาน T-xx จะแตะ (path จากรากโปรเจกต์ · คั่นด้วย `,` · glob ได้ เช่น `Client/Src/UI/*.cpp`) — คิวกลางโหมด auto ใช้ตัดสินว่ารันพร้อมงานอื่นได้ไหม (ไม่เติม = เดาจาก backtick · ดึงไม่ได้ = ต้องรอ) · แผนแตะไฟล์ที่ทุกโมดูลใช้ร่วม (เช่น CMakeLists.txt ระดับราก, Common/, Util/) หรือ build/สคริปต์ทั้งโปรเจกต์ → `flashq-parallel: no` · ห้ามเหลือ placeholder `<...>`
+- **เติม `flashq-files:` ใน §0 ทุกครั้ง** = ทุกไฟล์ที่ทุกงาน T-xx จะแตะ (path จากรากโปรเจกต์ · คั่นด้วย `,` · glob ได้ เช่น `Client/Src/UI/*.cpp`) — คิวกลางโหมด auto ใช้ตัดสินว่ารันพร้อมงานอื่นได้ไหม (ไม่เติม = เดาจาก backtick · ดึงไม่ได้ = ต้องรอ) · แผนแตะไฟล์ที่ทุกโมดูลใช้ร่วม (เช่น CMakeLists.txt ระดับราก, Common/, Util/) หรือ build/สคริปต์ทั้งโปรเจกต์ → `flashq-parallel: no — <เหตุผลสั้น ๆ>` (**ต้องเขียนเหตุผลต่อท้ายทุกครั้ง** หน้าเว็บ/`status` แสดงให้ผู้ใช้เห็นตอนงานรอ) · ห้ามเหลือ placeholder `<...>`
 - commit เฉพาะไฟล์แผน + push เข้า `<remote>/<main_branch>` (อยู่ worktree/branch อื่น → merge แล้ว `git push <remote> HEAD:<main_branch>` · **ห้าม rebase**) — ทำตามกติกา commit ของโปรเจกต์ถ้ามี
 - **ยืนยัน**: `git fetch <remote> <main_branch>; git merge-base --is-ancestor <hash แผน> <remote>/<main_branch>` ต้อง exit 0
 

@@ -2293,12 +2293,19 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(flashq.plan_meta(P, "A.md"), {"files": ["Client/UI/*.h", "Client/a.cpp"], "parallel": True})
         self.assertEqual(flashq.plan_meta(P, "D.md"), {"files": None, "parallel": False})  # placeholder ถูกข้าม
         self.assertEqual(flashq.job_info({"project": P, "plan": "D.md", "tasks": "T-01"})["files"], ["Tools/t.py"])
+        (self.proj / "H.md").write_text("# H\nflashq-files: MapEditor/b.cpp\nflashq-parallel: no — แตะ build ทั้งโปรเจกต์\n", encoding="utf-8")
+        self.assertEqual(flashq.plan_meta(P, "H.md")["why"], "แตะ build ทั้งโปรเจกต์")
+        self.assertNotIn("why", flashq.plan_meta(P, "D.md"))
         J = lambda plan, proj=P: {"id": plan, "project": proj, "plan": plan, "tasks": "T-01"}
         c = lambda a, b: flashq.conflict_reason(J(a), J(b), flashq.job_info)
         self.assertEqual(c("A.md", "B.md"), "")  # Client กับ MapEditor ไม่ชน
         self.assertIn("Client/UI/*.h", c("A.md", "C.md"))  # glob ครอบไฟล์
         self.assertIn("แผนสั่งให้รอ", c("D.md", "B.md"))
         self.assertIn("flashq-parallel", c("B.md", "D.md"))
+        self.assertIn("แผนไม่ได้เขียนเหตุผล", c("D.md", "B.md"))
+        self.assertIn("เหตุผลจากแผน: แตะ build ทั้งโปรเจกต์", c("H.md", "A.md"))
+        self.assertIn("ไฟล์ที่ซ้อนกันจริง: MapEditor/b.cpp", c("H.md", "B.md"))
+        self.assertIn("ไฟล์ที่ประกาศไม่ซ้อนกัน", c("H.md", "A.md"))
         self.assertIn("ใช้ร่วม", c("E.md", "B.md"))  # Common/ = โฟลเดอร์ร่วมค่าเริ่มต้น
         self.assertIn("CMakeLists.txt", c("F.md", "B.md"))  # ไฟล์ระดับรากที่มีจริง
         self.assertIn("Proto/p.h", c("G.md", "B.md"))  # parallel_shared ของโปรเจกต์

@@ -956,8 +956,12 @@ def plan_meta(project: str, plan: str) -> dict:
             continue
         val = m[2].strip().strip("`").strip()
         if m[1].lower() == "parallel":
-            if val.lower().split(" ")[0] in NO_WORDS:
+            word = (val.lower().split(None, 1) or [""])[0]
+            if word in NO_WORDS:
                 out["parallel"] = False
+                why = val[len(word):].strip(" \t—–-:;,()")  # `flashq-parallel: no — เหตุผล` (ไม่บังคับ)
+                if why:
+                    out["why"] = why
             continue
         if re.search(r"<[^>]*>", val):  # placeholder ของแม่แบบที่ยังไม่เติม
             continue
@@ -975,7 +979,7 @@ def job_info(j: dict) -> dict:
     meta = plan_meta(j.get("project", ""), j.get("plan", ""))
     declared = meta["files"] is not None
     files = meta["files"] if declared else plan_files(j.get("project", ""), j.get("plan", ""), j.get("tasks", ""))
-    return {"files": files, "parallel": meta["parallel"], "declared": declared}
+    return {"files": files, "parallel": meta["parallel"], "declared": declared, "why": meta.get("why", "")}
 
 
 def shared_paths(project: str) -> list[str]:
@@ -1000,10 +1004,15 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     if a.get("readonly") or b.get("readonly"):  # งานอ่านอย่างเดียว (เช่น ผู้ตรวจ) ไม่แก้ไฟล์ → ไม่ชนใคร
         return ""
     ia, ib = info(a), info(b)
-    if not ia["parallel"]:
-        return "แผนสั่งให้รอ (flashq-parallel: no)"
-    if not ib["parallel"]:
-        return "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
+    if not ia["parallel"] or not ib["parallel"]:
+        mine = not ia["parallel"]
+        head = "แผนสั่งให้รอ (flashq-parallel: no)" if mine else "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
+        why = (ia if mine else ib).get("why")
+        head += f" · เหตุผลจากแผน: {why}" if why else " · แผนไม่ได้เขียนเหตุผลไว้"
+        if ia["files"] is not None and ib["files"] is not None:  # บอกด้วยว่าไฟล์ซ้อนกันจริงไหม ผู้ใช้จะตัดสินใจกดรันเลยได้
+            over = sorted({x for x in ia["files"] for y in ib["files"] if paths_overlap(x, y)})
+            head += (" · ไฟล์ที่ซ้อนกันจริง: " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")) if over else " · ไฟล์ที่ประกาศไม่ซ้อนกัน"
+        return head
     if ia["files"] is None:
         return "ดึงรายการไฟล์ของงานนี้ไม่ได้ (ใส่ flashq-files: ในแผน)"
     if ib["files"] is None:
@@ -1059,7 +1068,7 @@ def schedule(held: list[dict] | None = None) -> dict:
         for r in active if mode == "auto" else ():  # ช่องเต็มก็ยังตรวจ เพื่อบอกเหตุชน + นับกันอดตาย
             c = conflict_reason(q, r, info)
             if c:
-                why = c if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {r['id']}: {c}"
+                why = f"{c} · รอ {r['id']} จบก่อน" if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {r['id']}: {c}"
                 break
         if not why:
             if free <= 0:
