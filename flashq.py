@@ -2612,7 +2612,7 @@ def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
                "kind": job.get("kind", ""), "plan": job.get("plan", ""), "tasks": job.get("tasks", ""), "status": status,
                "mins": round(mins, 1), "last": last[:600] if job.get("kind") == "qa" else last[-600:], "at": time.time()}  # นักทดสอบ: หัวข้อผลอยู่บรรทัดแรก
         write_json(INBOX / f"{time.strftime('%Y%m%d-%H%M%S')}-{job['id']}.json", row)
-        if os.name == "nt" and cfg.get("notify_toast", True) is not False and not os.environ.get("FLASHQ_NO_TOAST"):
+        if os.name == "nt" and status != "CANCELLED" and cfg.get("notify_toast", True) is not False and not os.environ.get("FLASHQ_NO_TOAST"):  # ผู้ใช้กดยกเลิกเอง ไม่ต้องเด้งซ้ำ
             ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
                   "$n=New-Object System.Windows.Forms.NotifyIcon;$n.Icon=[System.Drawing.SystemIcons]::Information;$n.Visible=$true;"
                   "$n.ShowBalloonTip(8000,$env:FQ_T,$env:FQ_B,'Info');Start-Sleep 9;$n.Dispose()")
@@ -2928,6 +2928,7 @@ def cancel_job(j: dict) -> tuple[bool, str]:
     j.update(status="cancelled", finished=now())
     save_job(j)
     release(j)
+    notify_job(j, "CANCELLED", max(0.0, (_ts(j["finished"]) - _ts(j["started"])) / 60) if j.get("started") else 0.0)  # Claude ที่สั่งงานจะได้รู้ว่าผู้ใช้ยกเลิก ไม่ใช่งานพัง
     return True, f"ยกเลิก {j['id']} แล้ว" + (f" · {note}" if note else "")
 
 

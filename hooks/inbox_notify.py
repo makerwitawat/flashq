@@ -51,6 +51,8 @@ def advice(row: dict) -> str:
         if row.get("kind") == "investigate":
             return "ผลสืบ — ตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ (ดูบรรทัด CITATIONS ใน log)"
         return f"ตรวจด้วย /flash-check {plan}" if plan else "อ่าน git diff/log แล้วตรวจผลก่อนรายงาน"
+    if st == "CANCELLED":
+        return "ถูกยกเลิกด้วยคำสั่ง cancel/ปุ่มยกเลิก (ไม่ใช่งานพัง) — ห้ามส่งซ้ำเองจนกว่าผู้ใช้สั่ง · ถ้ารันไปแล้วบางส่วนให้ดู git status ว่ามีไฟล์ค้างครึ่งทางไหม"
     if st == "QUEUE_TIMEOUT" or st == "BUSY":
         return "ยังไม่ได้รันเลย (คิวไม่ว่าง) — สั่งใหม่เมื่อคิวว่าง"
     return f"ไม่สำเร็จ — ดูสาเหตุด้วย python {FLASHQ}/flashq.py log {row.get('job', '')} ก่อนสั่งซ้ำ แล้วบอกผู้ใช้สาเหตุ"

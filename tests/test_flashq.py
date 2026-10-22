@@ -460,6 +460,26 @@ class FlashqTest(unittest.TestCase):
         self.run_q("sweep")
         self.assertEqual(len(list((self.home / "inbox").glob("*.json"))), 1)  # แจ้งซ้ำไม่ได้
 
+    def test_cancel_job_notifies_claude(self):
+        """ยกเลิกงาน (cancel/ปุ่มหน้าเว็บ) → inbox CANCELLED ให้ session ที่สั่ง · hook บอกว่าไม่ใช่งานพังและห้ามส่งซ้ำเอง · งานที่ไม่ได้ทำงานอยู่ = ไม่แจ้ง"""
+        (self.home / "jobs").mkdir(parents=True, exist_ok=True)
+        job = {"id": "canjob01", "status": "running", "pid": 99999999, "pid_start": 0, "project": str(self.proj),
+               "plan": "PLAN.md", "tasks": "T-01", "claude_session": "s1", "created": "2026-10-22T10:00:00", "last": "ทำไปครึ่งทาง"}
+        (self.home / "jobs" / "canjob01.json").write_text(json.dumps(job), encoding="utf-8")
+        r = self.run_q("cancel", "canjob01")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        files = list((self.home / "inbox").glob("*.json"))
+        self.assertEqual(len(files), 1)
+        row = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual((row["status"], row["session"], row["job"]), ("CANCELLED", "s1", "canjob01"))
+        out = subprocess.run([sys.executable, str(REPO / "hooks" / "inbox_notify.py")], input=json.dumps({"session_id": "s1", "cwd": str(self.proj)}),
+                             capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=30).stdout
+        self.assertIn("CANCELLED", out)
+        self.assertIn("ไม่ใช่งานพัง", out)
+        self.assertNotIn("ก่อนสั่งซ้ำ", out)
+        self.assertEqual(self.run_q("cancel", "canjob01").returncode, 1)  # จบไปแล้ว ยกเลิกซ้ำไม่ได้
+        self.assertFalse(list((self.home / "inbox").glob("*.json")))  # และไม่แจ้งซ้ำ
+
     def test_claude_check_button_opens_new_session(self):
         """ปุ่ม "เปิด Claude ตรวจ": งานจบ → ลิงก์ session ใหม่พิมพ์ข้อความรอ (OK = /flash-check · ล้ม = ดูสาเหตุ) · งานยังรัน = ปฏิเสธ · กดซ้ำเร็ว ๆ = ปฏิเสธ · ไม่มีแอป+ไม่มี CLI = คืนข้อความให้คัดลอก"""
         mod = self.load_mod("flashq_ccheck")
