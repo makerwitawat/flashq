@@ -766,6 +766,34 @@ class FlashqTest(unittest.TestCase):
             rows = [json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "reviews").glob("rv_*.json")]
             self.assertEqual([x["tasks"] for x in rows], [want])  # แผนเดียวกันเริ่มใหม่ = ทับป้ายเก่า
 
+    def test_review_done_matches_plan_name_loosely(self):
+        """review done ปิดป้ายได้แม้ชื่อแผนตอน start ต่างแบบ (ตัด .md · ชื่อสั้นเป็นท้ายของชื่อเต็มที่ขอบ "_") — เคยพลาดจริง: start VIEWFIX2 แต่ done PLAN_..._VIEWFIX2 ป้ายเลยค้าง"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        m = flashq.review_name_match
+        self.assertEqual(m("PLAN_X_FLASH.md", "plan_x_flash"), 2)
+        self.assertEqual(m("VIEWFIX2", "docs/plans/PLAN_MAPEDITOR_FLASH_VIEWFIX2.md"), 1)
+        self.assertEqual(m("PLAN_MAPEDITOR_FLASH_VIEWFIX2", "VIEWFIX2.md"), 1)
+        self.assertEqual(m("FIX2", "PLAN_X_VIEWFIX2"), 0)  # ต้องตรงที่ขอบ "_" ไม่ใช่แค่ลงท้ายเหมือนกัน
+        self.assertEqual(m("PLAN_A", "PLAN_B"), 0)
+        self.assertEqual(m("", "PLAN_A"), 0)
+        rdir = self.home / "reviews"
+
+        def rows():
+            return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(rdir.glob("rv_*.json"))]
+        self.assertEqual(self.run_q("review", "start", "VIEWFIX2", "T-00").returncode, 0)
+        r = self.run_q("review", "done", "PLAN_MAPEDITOR_FLASH_VIEWFIX2", "pass")
+        self.assertIn("REVIEW=PASS", r.stdout + r.stderr)
+        self.assertEqual([x["status"] for x in rows()], ["pass"])
+        # start ซ้ำด้วยชื่อเต็ม ทิ้งป้ายค้างที่ชื่อสั้นของโปรเจกต์เดียวกัน
+        self.assertEqual(self.run_q("review", "start", "VIEWFIX3", "T-00").returncode, 0)
+        self.assertEqual(self.run_q("review", "start", "PLAN_X_FLASH_VIEWFIX3.md", "T-00").returncode, 0)
+        self.assertEqual([x["status"] for x in rows() if x["plan_name"].lower().endswith("viewfix3") or x["plan_name"].endswith("VIEWFIX3.md")], ["reviewing"])
+        # ชื่อไม่เกี่ยวกัน = ไม่ปิดป้ายของแผนอื่น
+        r = self.run_q("review", "done", "PLAN_OTHER.md", "fail")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual([x["status"] for x in rows()].count("reviewing"), 1)
+
     def test_plan_trail(self):
         """การ์ดงานบอกเส้นทางของแผน: ผู้สืบก่อนแผน (≤6 ชม. โปรเจกต์เดียวกัน) · เคยรัน · ผู้ตรวจ · Claude ตรวจ — ไม่นับงานหลังจากนี้/โปรเจกต์อื่น"""
         mod = self.load_mod("flashq_trail")

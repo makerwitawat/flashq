@@ -4623,6 +4623,21 @@ def ui_reviews() -> tuple[list[dict], list[dict]]:
     return act, sorted(done, key=lambda r: r.get("finished", ""), reverse=True)[:10]
 
 
+def review_name_match(a: str, b: str) -> int:
+    """ชื่อแผนของป้ายผู้ตรวจตรงกันไหม: 2 = ตรงทุกตัว (ไม่สนตัวพิมพ์/.md) · 1 = ชื่อสั้นเป็นท้ายของชื่อเต็มที่ขอบ "_"
+    (เช่น VIEWFIX2 ↔ PLAN_MAPEDITOR_FLASH_VIEWFIX2) · 0 = ไม่ตรง — start กับ done เรียกคนละแบบก็ปิดป้ายได้"""
+    def norm(s: str) -> str:
+        s = (s or "").replace("\\", "/").split("/")[-1].strip().lower()
+        return s[:-3] if s.endswith(".md") else s
+    x, y = norm(a), norm(b)
+    if not x or not y:
+        return 0
+    if x == y:
+        return 2
+    short, full = sorted((x, y), key=len)
+    return 1 if full.endswith("_" + short) else 0
+
+
 def cmd_review(a) -> int:
     """ป้ายสถานะผู้ตรวจ: start = เริ่มตรวจ · done = จบ (pass/fail) · list — ไม่รันอะไรเลย แค่ให้หน้าออฟฟิศแสดงผู้ตรวจ"""
     REVIEWS.mkdir(parents=True, exist_ok=True)
@@ -4646,7 +4661,7 @@ def cmd_review(a) -> int:
         proj = str(Path(a.project).resolve()) if a.project else str(Path.cwd())
         rid = f"rv_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
         for r in _review_rows():  # แผนเดียวกันเริ่มใหม่ = ทิ้งป้ายค้างเก่าที่ยังเป็น reviewing
-            if r.get("status") == "reviewing" and r.get("plan_name") == key and r.get("project") == proj:
+            if r.get("status") == "reviewing" and review_name_match(r.get("plan_name", ""), key) and r.get("project") == proj:
                 (REVIEWS / f"{r['id']}.json").unlink(missing_ok=True)
         write_json(REVIEWS / f"{rid}.json", {"id": rid, "project": proj, "project_name": Path(proj).name, "plan_name": key,
                                               "tasks": a.tasks_or_result or "", "status": "reviewing", "started": now()})
@@ -4656,7 +4671,11 @@ def cmd_review(a) -> int:
         if a.tasks_or_result not in ("pass", "fail"):
             print("done ต้องตามด้วย pass หรือ fail", file=sys.stderr)
             return 1
-        cand = [r for r in _review_rows() if r.get("status") == "reviewing" and r.get("plan_name") == key]
+        cand = [(review_name_match(r.get("plan_name", ""), key), r) for r in _review_rows() if r.get("status") == "reviewing"]
+        cand = [(m, r) for m, r in cand if m]
+        if a.project:  # ระบุโปรเจกต์มา = ปิดเฉพาะป้ายของโปรเจกต์นั้น
+            proj = str(Path(a.project).resolve())
+            cand = [(m, r) for m, r in cand if r.get("project") == proj]
         if not cand:
             print(f"ไม่พบป้ายที่กำลังตรวจของแผน {key} (ข้าม)", file=sys.stderr)
             return 0
