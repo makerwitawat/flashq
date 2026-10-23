@@ -260,6 +260,32 @@ class FlashqTest(unittest.TestCase):
         ok = text.replace("ก่อน (ตรงตัว 2 บรรทัด)", "ก่อน (ต้องเจอ 2 ที่ แก้ทั้งสองที่)").replace("`src\\missing.h` + ", "")
         self.assertEqual(flashq.plan_precheck(ok, "T-02", src)[0], [])
 
+    def test_plan_precheck_warns_on_unknown_skill(self):
+        """บรรทัด skill: ในงาน → ชื่อต้องตรงโฟลเดอร์ skills/ (โปรเจกต์ .opencode/.claude หรือส่วนกลาง) · ไม่ตรง = เตือน ไม่บล็อก · placeholder/`-` ไม่นับ"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        self.write_precheck_proj()
+        for d, n in ((".opencode", "proj-build"), (".claude", "proj-docs")):
+            (self.proj / d / "skills" / n).mkdir(parents=True)
+            (self.proj / d / "skills" / n / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        self.assertEqual(flashq.plan_skill_names("  - skill: `proj-build`, proj-docs"), ["proj-build", "proj-docs"])
+        self.assertEqual(flashq.plan_skill_names("  - **สกิล:** x-one"), ["x-one"])
+        for empty in ("  - skill: `<ชื่อ skill — ไม่มีลบบรรทัดนี้>`", "  - skill: -", "  - skill: none", "  - ก่อน: `skill: a`"):
+            self.assertEqual(flashq.plan_skill_names(empty), [], empty)
+        plan = ("## งาน\n"
+                "- [ ] **T-01** `src/a.cpp`\n"
+                "  - skill: `proj-build`, proj-docs\n"
+                "- [ ] **T-02** `src/a.cpp`\n"
+                "  - skill: `no-such-skill-zz`\n"
+                "- [ ] **T-03** `src/a.cpp`\n"
+                "  - skill: `<ชื่อ>`\n")
+        src = flashq.PlanSource(self.proj)
+        self.assertEqual(flashq.plan_precheck(plan, "T-01", src), ([], []))
+        errs, warns = flashq.plan_precheck(plan, "T-02", src)
+        self.assertEqual(errs, [])
+        self.assertTrue(any("บรรทัด 5 (T-02)" in w and "`no-such-skill-zz`" in w for w in warns), warns)
+        self.assertEqual(flashq.plan_precheck(plan, "T-03", src), ([], []))
+
     def test_plan_precheck_blocks_run(self):
         self.write_precheck_proj()
         r = self.run_q("run", "PRE.md", "T-03", "--attach", "none", "--no-open")
@@ -573,17 +599,82 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(st["model"], "claude-sonnet-5")
         self.assertEqual(len(st["hooks"]["Stop"]), 1)
         pre = st["hooks"]["PreToolUse"]
-        self.assertEqual(len(pre), 2)
+        self.assertEqual(len(pre), 3)
         self.assertEqual(pre[0]["matcher"], "Read")
         self.assertIn("image_guard.py", pre[0]["hooks"][0]["command"])
         self.assertEqual(pre[1]["matcher"], "Bash|PowerShell")
         self.assertIn("run_guard.py", pre[1]["hooks"][0]["command"])
+        self.assertEqual(pre[2]["matcher"], "Read|Grep|Glob|Bash|PowerShell")
+        self.assertTrue(pre[2]["hooks"][0]["command"].endswith("delegate_guard.py\" pretool"))
         r = self.run_q("install", "--hooks", env=env)
         self.assertIn("เหมือนเดิม  hook", r.stdout)
-        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 2)
+        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 3)
         ups = json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["UserPromptSubmit"]
-        self.assertEqual(len(ups), 1)
+        self.assertEqual(len(ups), 2)
         self.assertIn("inbox_notify.py", ups[0]["hooks"][0]["command"])
+        self.assertTrue(ups[1]["hooks"][0]["command"].endswith("delegate_guard.py\" prompt"))
+
+    def test_delegate_guard_hook(self):
+        """ยามมอบงานสืบ: ผู้ใช้สั่งส่งสืบ → แทรกคำสั่ง + ตั้งงบอ่าน · อ่านเกินงบ = บล็อก (exit 2) · ไฟล์แผน/กติกาไม่นับ · ส่ง investigate แล้วเหลืองบยืนยัน 2 · ข้อความอื่นปลดงบ · ปิดได้"""
+        guard = REPO / "hooks" / "delegate_guard.py"
+        env = dict(os.environ, FLASHQ_HOME=str(self.tmp / "dg_home"), PYTHONIOENCODING="utf-8")
+
+        def hook(mode, payload):
+            return subprocess.run([sys.executable, str(guard), mode], input=json.dumps(payload), capture_output=True,
+                                  text=True, encoding="utf-8", env=env, timeout=30)
+
+        def tool(name, **ti):
+            return hook("pretool", {"session_id": "s1", "tool_name": name, "tool_input": ti})
+
+        for txt, want in (("ส่งสืบหน่อย บั๊กนี้", True), ("ให้ flash ตามหาต้นตอ", True), ("ส่ง deepseek ไปดู", True),
+                          ("แก้บั๊กนี้ให้หน่อย", False), ("ทำไมไม่อัพเดท", False)):
+            r = subprocess.run([sys.executable, str(guard), "test", txt], capture_output=True, text=True, encoding="utf-8", env=env, timeout=30)
+            self.assertEqual(r.stdout.startswith("ตรง"), want, (txt, r.stdout))
+        self.assertEqual(tool("Read", file_path="a.py").stdout, "", "ยังไม่ได้สั่งส่งสืบ = ไม่ยุ่ง")
+        r = hook("prompt", {"session_id": "s1", "prompt": "ส่งสืบ บั๊กหน้าเว็บ"})
+        self.assertIn("/flash-investigate", r.stdout)
+        for _ in range(3):
+            self.assertEqual(tool("Grep", pattern="x", path="src/a.py").returncode, 0)
+        self.assertEqual(tool("Read", file_path="D:/p/docs/plans/PLAN_FLASH_x.md").returncode, 0)  # ไฟล์แผนไม่นับงบ
+        r = tool("Read", file_path="src/b.py")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("flash-investigate", r.stderr)
+        self.assertEqual(tool("Bash", command="python D:/MyCode/flashq/flashq.py investigate --project . brief.md").returncode, 0)
+        self.assertEqual(tool("Bash", command="cd /p && grep -rn foo .").returncode, 0)  # หลังส่งแล้วเหลืองบยืนยัน 2
+        self.assertEqual(tool("Read", file_path="src/a.py").returncode, 0)
+        self.assertEqual(tool("Read", file_path="src/a.py").returncode, 2)
+        hook("prompt", {"session_id": "s1", "prompt": "ok แก้เลย"})  # ข้อความอื่น = ปลดงบ
+        self.assertEqual(tool("Read", file_path="src/a.py").returncode, 0)
+        hook("prompt", {"session_id": "s1", "prompt": "ส่งสืบ"})
+        (self.tmp / "dg_home" / "config.json").write_text('{"delegate_guard": false}', encoding="utf-8")
+        for _ in range(5):
+            self.assertEqual(tool("Read", file_path="src/a.py").returncode, 0)  # ปิดถาวรในคอนฟิก
+
+    def test_install_check(self):
+        """install --check: ยังไม่ติดตั้ง/ล้าหลัง = INSTALL=STALE exit 1 และไม่เขียนอะไร · ตรงต้นฉบับ = INSTALL=OK · ไฟล์ของผู้ใช้เองไม่นับว่าล้าหลัง"""
+        claude = self.tmp / "claude_home"
+        env = {"FLASHQ_CLAUDE_HOME": str(claude)}
+        r = self.run_q("install", "--check", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("INSTALL=STALE", r.stdout)
+        self.assertIn("ยังไม่ได้ติดตั้ง", r.stdout)
+        self.assertFalse((claude / "commands").exists(), "--check ต้องไม่เขียนอะไร")
+        self.run_q("install", "--models", "skip", env=env)
+        r = self.run_q("install", "--check", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("INSTALL=OK", r.stdout)
+        plan = claude / "commands" / "flash-plan.md"
+        txt = plan.read_text(encoding="utf-8")
+        plan.write_text(txt + "\nเก่า\n", encoding="utf-8")
+        r = self.run_q("install", "--check", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ล้าหลัง", r.stdout)
+        self.assertIn("flash-plan.md", r.stdout)
+        self.assertEqual(plan.read_text(encoding="utf-8"), txt + "\nเก่า\n", "--check ต้องไม่ทับไฟล์")
+        plan.write_text("ของผู้ใช้เอง\n", encoding="utf-8")  # ไม่มี flashq:managed = ไม่ใช่ของ flashq ไม่นับล้าหลัง
+        r = self.run_q("install", "--check", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ข้าม", r.stdout)
 
     def test_run_guard_hook(self):
         """ยามส่งงาน: คำสั่งส่งงานต้อง run_in_background จริง · `&` · sleep · nohup · Start-Process · ต่อท่อ head/tail = บล็อก (exit 2) · ถูกวิธี = ผ่านพร้อมคำเตือน · คำสั่งอื่น/--help/ปิดยาม = เงียบ"""
@@ -1101,6 +1192,47 @@ class FlashqTest(unittest.TestCase):
         self.assertIsNone(st["running"])
         self.assertEqual(st["dead"], [])
         self.assertEqual({h["id"]: h["state"] for h in st["history"]}, {run_id: "cancelled", dead_id: "dead"})
+
+    def test_ui_dismiss_all_and_auto_clear_dead(self):
+        """ป้ายงานตาย: รับทราบทั้งหมดในครั้งเดียว · หายเองเมื่อไฟล์งานเก่าเกิน dead_clear_hours (0 = ปิด) · ตั้งค่าผ่าน /api/config"""
+        (self.home / "jobs").mkdir(parents=True)
+        ids = ["20980101_000000_1", "20980101_000000_2", "20980101_000000_3"]
+        for i in ids:
+            (self.home / "jobs" / f"{i}.json").write_text(json.dumps(
+                {"id": i, "status": "running", "pid": 999999, "created": "2098-01-01 00:00:00",
+                 "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}), encoding="utf-8")
+        old = time.time() - 30 * 3600
+        os.utime(self.home / "jobs" / f"{ids[0]}.json", (old, old))  # เก่า 30 ชม.
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        page = self.http(base + "/")[1]
+        self.assertIn("data-dismiss-all", page)  # ปุ่มในแผงแดชบอร์ด
+        self.assertIn("data-ofdead", page)       # เก้าอี้ในหน้า office คลิกรับทราบได้
+
+        # ค่าเริ่มต้น 24 ชม. → งานเก่า 30 ชม. หายเอง อีกสองงานที่เพิ่งเขียนยังอยู่
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["dead_clear_hours"], 24)
+        self.assertEqual(sorted(d["id"] for d in st["dead"]), ids[1:])
+        status = lambda i: json.loads((self.home / "jobs" / f"{i}.json").read_text(encoding="utf-8"))["status"]
+        self.assertEqual([status(i) for i in ids], ["dead", "running", "running"])
+
+        # ปิดการหายเอง (0) → งานเก่าไม่ถูกล้าง
+        old2 = time.time() - 90 * 3600
+        os.utime(self.home / "jobs" / f"{ids[1]}.json", (old2, old2))
+        code, body = self.http(base + "/api/config", json.dumps({"dead_clear_hours": 0}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(self.http(base + "/api/state")[1])["dead_clear_hours"], 0)
+        self.assertEqual(len(json.loads(self.http(base + "/api/state")[1])["dead"]), 2)
+        self.assertEqual(self.http(base + "/api/config", json.dumps({"dead_clear_hours": "x"}).encode(), hdr)[0], 400)
+
+        # รับทราบทั้งหมด · ต้องมี token
+        self.assertEqual(self.http(base + "/api/dismiss", json.dumps({"all": True}).encode(), {"Content-Type": "application/json"})[0], 403)
+        code, body = self.http(base + "/api/dismiss", json.dumps({"all": True}).encode(), hdr)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(body)["cleared"], 2)
+        st = json.loads(self.http(base + "/api/state")[1])
+        self.assertEqual(st["dead"], [])
+        self.assertEqual([status(i) for i in ids], ["dead"] * 3)
 
     def test_ui_second_instance_reuses(self):
         """เปิด ui ซ้ำพอร์ตเดิม → ไม่ bind ซ้อน (Windows SO_REUSEADDR) แต่บอกว่าเปิดอยู่แล้วและจบ 0"""

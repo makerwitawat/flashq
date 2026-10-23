@@ -1,6 +1,6 @@
 ---
 description: >-
-  (Claude Code · ทุกโปรเจกต์) วางแผนให้ DeepSeek Flash ทำ (ยืนยันจุดแก้ → แผน T-xx → ส่งเข้าคิวกลาง flashq) · /flash-plan <งาน>. Triggers: ให้ deepseek ทำ, ส่งงานให้ deepseek, ส่งงานให้ flash
+  (Claude Code · ทุกโปรเจกต์) วางแผนให้ DeepSeek Flash ทำ (ยืนยันจุดแก้ → แผน T-xx → ส่งเข้าคิวกลาง flashq) · /flash-plan <งาน>. Triggers: ให้ deepseek ทำ, ส่งงานให้ deepseek, ส่งงานให้ flash, ส่ง flash ทำ
 effort: high
 ---
 <!-- flashq:managed — ติดตั้งโดย `flashq.py install` (ต้นฉบับ {{FLASHQ}}/claude/commands/) -->
@@ -23,8 +23,10 @@ effort: high
 | "ใส่ภาคผนวกโค้ดเต็มไว้ท้ายแผน Flash จะได้คัดลอกตรงตัว" | `flashq run` ปฏิเสธ (§2) · เขียนเป็นสเปก + เทสต์ที่ต้องผ่าน |
 
 ## 0. ค่าโปรเจกต์
+- **เช็กความสดของคำสั่งที่ติดตั้ง** (อ่านอย่างเดียว เร็ว): `python {{FLASHQ}}/flashq.py install --check` → `INSTALL=STALE` = คำสั่ง `/flash-*` ที่ใช้อยู่เป็นฉบับเก่ากว่าต้นฉบับ → บอก user หนึ่งบรรทัดว่าให้รันบรรทัด `install` ที่ flashq พิมพ์ (ได้ผลใน session ใหม่) แล้วทำงานนี้ต่อได้ตามปกติ · `INSTALL=OK` = เงียบ ไม่ต้องพูดถึง
 - อ่าน `.flash.json` ที่รากโปรเจกต์ (ถ้ามี): `main_branch` (ไม่ตั้ง = ตรวจจาก `git symbolic-ref --short refs/remotes/<remote>/HEAD` หรือ `origin/main`/`origin/master` ที่มีจริง) · `remote` (`origin`) · โปรเจกต์ใหม่ที่ยังไม่มี `.flash.json` → รัน `python {{FLASHQ}}/flashq.py init --install --commit` เองก่อน (ไม่ต้องถาม) หรือเสนอ `/flash-init` · `plan_dir` (`docs/plans`) · `rules`
 - อ่าน `AGENTS.md`/`CLAUDE.md` ของโปรเจกต์ → กติกา build/test/commit/encoding ที่ต้องใส่ใน §0 ของแผน
+- **หา skill ของโปรเจกต์ (ครั้งเดียวตอนเริ่ม · ราคาถูก · ไม่เปิด `SKILL.md`)** เพื่อใส่บรรทัด `skill:` ต่องานใน §3: ① `AGENTS.md`/`CLAUDE.md` มีตาราง routing (งาน → skill เช่น "Skill Routing") → ใช้ตารางนั้นเป็นหลัก ② ไม่มีตาราง แต่มี `.opencode/skills/` หรือ `.claude/skills/` → `ls` ดูแค่ชื่อ (กำกวมค่อย Grep `^description` ของ ≤3 ตัวที่ชื่อน่าจะตรง) ③ ไม่มีทั้งสองอย่าง = ข้ามเรื่อง skill ทั้งหมด · skill ส่วนกลาง (`~/.claude/skills`) ใส่ได้เฉพาะที่ตรงงานชัดเจน
 
 ## 1. สำรวจ + ยืนยัน (ห้ามเดา)
 - **ต้นตอยังไม่ยืนยัน → ส่งผู้สืบ DeepSeek ก่อน** (ประหยัดโควตา Claude): ใช้ `/flash-investigate` หรือ `python {{FLASHQ}}/flashq.py investigate "<บรีฟ 4 ช่อง>" --auto` (background · อ่านอย่างเดียว) · บั๊กกำกวม/เคยแก้แล้วไม่หาย → สืบ 2 session คนละโมเดล ต้องชี้ file:line ตรงกัน · **Claude เปิดเฉพาะ file:line ที่อ้าง 1–2 จุดเพื่อยืนยันก่อนเขียนแผนแก้** · บรรทัด `CITATIONS ... ผิด` = ข้อนั้นห้ามเชื่อ · ผู้สืบกับผู้แก้ต้องคนละ session
@@ -58,6 +60,7 @@ effort: high
 ## 3. เขียนแผน
 - คัดลอก `{{FLASHQ}}/templates/FLASH_PLAN_TEMPLATE.md` → `<plan_dir>/PLAN_FLASH_<เรื่อง>.md` · เติม base commit (`git rev-parse --short HEAD`) + กติกาโปรเจกต์ใน §0
 - **เติม `flashq-files:` ใน §0 ทุกครั้ง** = ทุกไฟล์ที่ทุกงาน T-xx จะแตะ (path จากรากโปรเจกต์ · คั่นด้วย `,` · glob ได้ เช่น `Client/Src/UI/*.cpp`) — คิวกลางโหมด auto ใช้ตัดสินว่ารันพร้อมงานอื่นได้ไหม (ไม่เติม = เดาจาก backtick · ดึงไม่ได้ = ต้องรอ) · แผนแตะไฟล์ที่ทุกโมดูลใช้ร่วม (เช่น CMakeLists.txt ระดับราก, Common/, Util/) หรือ build/สคริปต์ทั้งโปรเจกต์ → `flashq-parallel: no — <เหตุผลสั้น ๆ>` (**ต้องเขียนเหตุผลต่อท้ายทุกครั้ง** หน้าเว็บ/`status` แสดงให้ผู้ใช้เห็นตอนงานรอ) · ห้ามเหลือ placeholder `<...>`
+- **ใส่บรรทัด `skill: <ชื่อ>[, <ชื่อ>]` ในงาน T-xx ที่ตรง skill** (ใต้หัวงาน · ใส่เฉพาะ**ชื่อ**ตรงกับโฟลเดอร์ใน `skills/` · ห้ามคัดเนื้อหา skill ลงแผน · งานไม่ตรง skill ไหน = ไม่ต้องเขียนบรรทัดนี้) — `flash-worker` โหลดด้วย `skill` tool ก่อนลงมือ · `flashq run` เตือนถ้าชื่อไม่ตรง skill ที่มีจริง · **ไม่ผูกกับแม่แบบ**: แม่แบบแผนของโปรเจกต์ไม่มีช่องนี้ก็เขียนบรรทัดนี้เพิ่มได้เลย · โปรเจกต์ที่สั่งผู้วางแผนไม่โหลด skill (เช่น bughunt = หน้าที่ผู้สืบ/Flash) ไม่ขัดกัน — ผู้วางแผนแค่เขียนชื่อ ไม่ต้องโหลด
 - commit เฉพาะไฟล์แผน + push เข้า `<remote>/<main_branch>` (อยู่ worktree/branch อื่น → merge แล้ว `git push <remote> HEAD:<main_branch>` · **ห้าม rebase**) — ทำตามกติกา commit ของโปรเจกต์ถ้ามี
 - **ยืนยัน**: `git fetch <remote> <main_branch>; git merge-base --is-ancestor <hash แผน> <remote>/<main_branch>` ต้อง exit 0
 

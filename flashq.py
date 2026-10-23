@@ -60,7 +60,7 @@ INBOX = HOME / "inbox"  # ผลงานจบรอส่งถึง Claude (
 REVIEWS = HOME / "reviews"   # ป้าย "Claude กำลังตรวจ" ที่ /flash-check ตั้ง (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — ไม่ใช่งานในคิว
 REVIEW_TTL_MIN = 90          # ป้ายที่ค้างเกินนี้ถือว่าถูกทิ้ง (session ตาย/ลืม done)
 CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
-CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO)
+CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120, "dead_clear_hours": 24}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO) · dead_clear_hours = ป้าย "process ตาย" หายเองเมื่อพ้นกี่ชั่วโมง (0 = ไม่หายเอง)
 SCHEDULES = ("auto", "fifo")
 MAX_SLOTS = 8          # เพดานของ max_parallel
 QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
@@ -764,7 +764,17 @@ def set_config(key: str, value) -> tuple[str, str]:
         cfg["starve_min"] = v
         write_json(CONFIG, cfg)
         return "", f"ตั้งกันอดตาย = {v:g} นาที แล้ว"
-    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min", ""
+    if key == "dead_clear_hours":
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return "dead_clear_hours ต้องเป็นตัวเลข (ชั่วโมง)", ""
+        if not 0 <= v <= 24 * 365:
+            return "dead_clear_hours ต้องอยู่ระหว่าง 0-8760 ชั่วโมง (0 = ไม่หายเอง)", ""
+        cfg["dead_clear_hours"] = v
+        write_json(CONFIG, cfg)
+        return "", (f"ตั้งป้ายงานตายหายเองเมื่อพ้น {v:g} ชั่วโมง แล้ว" if v else "ปิดการล้างป้ายงานตายอัตโนมัติแล้ว")
+    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min, dead_clear_hours", ""
 
 
 def slot_path(n: int) -> Path:
@@ -1924,10 +1934,31 @@ class PlanSource:
         return self.cache[p]
 
 
+SKILL_LINE_RE = re.compile(r"\s*[-*]?\s*\**(?:skills?|สกิล)\**\s*[:：]\s*(.*)", re.I)
+
+
+def plan_skill_names(line: str) -> list[str]:
+    """บรรทัด `skill: a, b` ในบล็อกงาน (ระดับงาน · ใส่เฉพาะชื่อ) → ['a', 'b'] · `-`/ไม่มี/<placeholder> = ว่าง"""
+    m = SKILL_LINE_RE.match(line)
+    if not m:
+        return []
+    val = re.sub(r"<[^>\n]*>", " ", m.group(1)).replace("`", " ")
+    return [n for n in re.findall(r"[A-Za-z0-9][\w.-]*", val) if n.lower() not in ("none", "no")]
+
+
+def skill_exists(name: str, src: "PlanSource") -> bool:
+    """skill ที่ชื่อตรงโฟลเดอร์ใน skills/ ของโปรเจกต์ (git ของ rev ที่ตรวจ หรือบนดิสก์ เผื่อ junction ที่ไม่ได้ track) หรือส่วนกลางของผู้ใช้"""
+    rels = [f"{d}/skills/{name}/SKILL.md" for d in (".opencode", ".claude")]
+    if any(src.find(r) or (src.root / r).is_file() for r in rels):
+        return True
+    home = Path.home()
+    return any((home / d / "skills" / name / "SKILL.md").is_file() for d in (".claude", ".config/opencode", ".agents"))
+
+
 def plan_precheck(text: str, tasks: str, src: PlanSource) -> tuple[list[str], list[str]]:
     """ตรวจงาน T-xx ที่สั่ง (ยังไม่ติ๊ก) → (ข้อผิด, คำเตือน)
     ผิด: path ในหัวงาน/บรรทัด "ไฟล์" ไม่มีจริง (ยกเว้นไฟล์ที่แผนบอกว่าสร้างใหม่) · ข้อความ "ก่อน:" เจอในไฟล์ 0 ครั้ง/หลายครั้ง
-    เตือน: คำสั่งใน ยืนยัน/แดง/เขียว ขึ้นต้นด้วย alias ในตัวของ PowerShell · function ในโค้ดของแผนตั้งชื่อชน alias"""
+    เตือน: คำสั่งใน ยืนยัน/แดง/เขียว ขึ้นต้นด้วย alias ในตัวของ PowerShell · function ในโค้ดของแผนตั้งชื่อชน alias · บรรทัด `skill:` ชื่อไม่ตรง skill ที่มีจริง"""
     match = task_matcher(tasks)
     errs, warns = [], []
     if not match:
@@ -2019,6 +2050,11 @@ def plan_precheck(text: str, tasks: str, src: PlanSource) -> tuple[list[str], li
                     if w in PS_ALIASES:
                         warns.append(f"บรรทัด {no} ({tid}): คำสั่ง `{seg.strip()[:60]}` ขึ้นต้นด้วย `{w}` = alias ในตัวของ PowerShell "
                                      f"({PS_ALIASES[w]}) — ใช้ชื่อเต็ม/ชื่อ .exe")
+        for no, line in lines:
+            for name in plan_skill_names(line):
+                if not skill_exists(name, src):
+                    warns.append(f"บรรทัด {no} ({tid}): ไม่พบ skill `{name}` (.opencode/skills · .claude/skills ของโปรเจกต์ · skill ส่วนกลาง) "
+                                 f"— Flash โหลดไม่ได้ ตรวจชื่อให้ตรงโฟลเดอร์ใน skills/")
     for no, line in enumerate(text.splitlines(), 1):
         fm = re.match(r"\s*function\s+([\w-]+)", line, re.I)
         if fm and fm.group(1).lower() in PS_ALIASES:
@@ -3734,6 +3770,43 @@ def notify_job(job: dict, status: str, mins: float = 0.0) -> None:
         pass
 
 
+def dismiss_dead(j: dict) -> str:
+    """รับทราบงานที่ process ตายค้างสถานะ queued/running → เก็บกวาดลูกที่รอด + บันทึกสถานะ dead · คืนข้อความหมายเหตุ ("" = ไม่มี)"""
+    note = reap_orphan(j, abort=j.get("status") == "running")  # ลูกที่ยังรอดอยู่ต้องถูกเก็บกวาดด้วย ไม่งั้นแก้ไฟล์ต่อโดยไม่มีใครเห็น
+    j.update(status="dead", dismissed=now())  # ไม่ใส่ finished: ไม่รู้ว่าตายเมื่อไร
+    save_job(j)
+    release(j)
+    return note
+
+
+def dead_clear_hours() -> float:
+    try:
+        return max(0.0, float(read_config().get("dead_clear_hours", 24)))
+    except (TypeError, ValueError):
+        return 24.0
+
+
+def auto_clear_dead() -> int:
+    """ป้ายงานตายที่ค้างเกิน dead_clear_hours (นับจากครั้งสุดท้ายที่ไฟล์งานถูกเขียน) → รับทราบให้เอง · ข้ามงานที่ opencode ลูกยังทำงานอยู่ (ต้องให้คนตรวจ) · คืนจำนวนที่ล้าง"""
+    hours = dead_clear_hours()
+    if not hours:
+        return 0
+    n = 0
+    for j in jobs():
+        if live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
+            continue
+        try:
+            if time.time() - (JOBS / f"{j['id']}.json").stat().st_mtime < hours * 3600:
+                continue
+            if pid_alive(j.get("child_pid") or 0, j.get("child_pid_start") or 0):
+                continue
+            dismiss_dead(j)
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
 def sweep_dead() -> int:
     """งานที่ process หลักตายกลางคัน (เครื่อง/terminal ปิด) ไม่มีใครเขียน inbox ให้ → ตรวจแล้วแจ้งแทน (ครั้งเดียวต่องาน · ติดธง dead_notified)
     เรียกจาก hook inbox_notify.py ก่อนอ่าน inbox · คืนจำนวนงานที่แจ้ง"""
@@ -3749,6 +3822,7 @@ def sweep_dead() -> int:
             n += 1
         except Exception:
             pass
+    auto_clear_dead()  # แจ้งครบแล้ว ค่อยล้างป้ายที่ค้างเกินเวลาที่ตั้ง
     return n
 
 
@@ -4062,8 +4136,8 @@ def cmd_config(a) -> int:
         for k, v in read_config().items():
             print(f"{k} = {v}")
         return 0
-    if a.key not in ("max_parallel", "schedule", "starve_min"):
-        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min")
+    if a.key not in ("max_parallel", "schedule", "starve_min", "dead_clear_hours"):
+        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min, dead_clear_hours")
         return 1
     if a.value is None:
         print(f"{a.key} = {read_config().get(a.key)}")
@@ -4580,40 +4654,76 @@ def register_hook(settings: Path, event: str, matcher: str, command: str, key: s
     return f"ลงทะเบียน  hook {event}:{matcher} → {command} ใน {settings}"
 
 
-def cmd_install(a) -> int:
-    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ · claude/{commands,agents}/*.md + hooks/*.py ไป ~/.claude/
-    (แทน {{FLASHQ}} ด้วย path repo นี้) · ไฟล์ที่ flashq ติดตั้งเองทับได้เลย (ต้นฉบับอยู่ใน git ของ flashq ไม่ต้องสำรอง)
-    · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) = ข้าม เว้นแต่ --force (สำรอง .bak-flashq-<เวลา> ก่อนทับ) · --hooks = ลงทะเบียน image_guard ใน settings.json"""
-    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+def install_items(claude_home: Path):
+    """(ปลายทาง, เนื้อหาที่ต้องติดตั้ง) ของทุกไฟล์ที่ install คัดลอก — install กับ install --check ใช้ชุดเดียวกัน"""
     pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command", "*.md"),
              (REPO / "opencode" / "agent", OC_CONFIG.parent / "agent", "*.md"),
              (REPO / "claude" / "commands", claude_home / "commands", "*.md"),
              (REPO / "claude" / "agents", claude_home / "agents", "*.md"),
              (REPO / "hooks", claude_home / "hooks", "*.py")]
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    rc = 0
     for src_dir, dst_dir, pat in pairs:
         if not src_dir.is_dir():
             continue
-        dst_dir.mkdir(parents=True, exist_ok=True)
         for src in sorted(src_dir.glob(pat)):
             text = src.read_text(encoding="utf-8").replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
             if src_dir == REPO / "opencode" / "agent":  # โมเดลที่ผู้ใช้เลือกไว้ (flashq models) ไม่ถูกต้นฉบับทับกลับเป็นค่าตั้งต้น
                 text = with_header_model(text, json_agent_model(src.stem))
-            dst = dst_dir / src.name
-            if dst.exists():
-                old = dst.read_text(encoding="utf-8")
-                if old == text:
-                    print(f"เหมือนเดิม  {dst}")
+            yield dst_dir / src.name, text
+
+
+def check_installed(claude_home: Path) -> int:
+    """install --check: เทียบไฟล์ที่ติดตั้งไว้กับต้นฉบับ (อ่านอย่างเดียว) · 0 = ตรงครบ · 1 = มีไฟล์ล้าหลัง/ยังไม่ได้ติดตั้ง
+    · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) ไม่นับว่าล้าหลัง"""
+    ok = 0
+    stale: list[Path] = []
+    missing: list[Path] = []
+    foreign: list[Path] = []
+    for dst, text in install_items(claude_home):
+        if not dst.exists():
+            missing.append(dst)
+            continue
+        old = dst.read_text(encoding="utf-8", errors="replace")
+        if old == text:
+            ok += 1
+        elif "flashq:managed" not in old:
+            foreign.append(dst)
+        else:
+            stale.append(dst)
+    for label, items in (("ล้าหลัง", stale), ("ยังไม่ได้ติดตั้ง", missing), ("ข้าม (ไม่ได้มาจาก flashq)", foreign)):
+        for p in items:
+            print(f"{label}  {p}")
+    if stale or missing:
+        print(f"INSTALL=STALE  ตรง {ok} · ล้าหลัง {len(stale)} · ยังไม่ได้ติดตั้ง {len(missing)} → python {REPO / 'flashq.py'} install (รันจาก checkout หลัก · ได้ผลใน session ใหม่)")
+        return 1
+    print(f"INSTALL=OK  ตรงต้นฉบับครบ {ok} ไฟล์" + (f" (ข้าม {len(foreign)} ไฟล์ของผู้ใช้เอง)" if foreign else ""))
+    return 0
+
+
+def cmd_install(a) -> int:
+    """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ · claude/{commands,agents}/*.md + hooks/*.py ไป ~/.claude/
+    (แทน {{FLASHQ}} ด้วย path repo นี้) · ไฟล์ที่ flashq ติดตั้งเองทับได้เลย (ต้นฉบับอยู่ใน git ของ flashq ไม่ต้องสำรอง)
+    · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) = ข้าม เว้นแต่ --force (สำรอง .bak-flashq-<เวลา> ก่อนทับ) · --hooks = ลงทะเบียน image_guard ใน settings.json
+    · --check = แค่เทียบว่าที่ติดตั้งไว้ล้าหลังต้นฉบับไหม ไม่เขียนอะไร"""
+    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+    if getattr(a, "check", False):
+        return check_installed(claude_home)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    rc = 0
+    for dst, text in install_items(claude_home):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            old = dst.read_text(encoding="utf-8")
+            if old == text:
+                print(f"เหมือนเดิม  {dst}")
+                continue
+            if "flashq:managed" not in old:
+                if not a.force:
+                    print(f"ข้าม       {dst} (มีไฟล์ที่ไม่ได้มาจาก flashq — ใช้ --force เพื่อสำรองแล้วทับ)")
+                    rc = 1
                     continue
-                if "flashq:managed" not in old:
-                    if not a.force:
-                        print(f"ข้าม       {dst} (มีไฟล์ที่ไม่ได้มาจาก flashq — ใช้ --force เพื่อสำรองแล้วทับ)")
-                        rc = 1
-                        continue
-                    shutil.copy2(dst, dst.with_name(dst.name + f".bak-flashq-{ts}"))
-            dst.write_text(text, encoding="utf-8")
-            print(f"ติดตั้ง     {dst}")
+                shutil.copy2(dst, dst.with_name(dst.name + f".bak-flashq-{ts}"))
+        dst.write_text(text, encoding="utf-8")
+        print(f"ติดตั้ง     {dst}")
     guard = claude_home / "hooks" / "image_guard.py"
     if getattr(a, "hooks", False):
         if guard.exists():
@@ -4633,12 +4743,21 @@ def cmd_install(a) -> int:
         else:
             print(f"ข้าม       ไม่พบ {run_hook} → ลงทะเบียน hook ไม่ได้")
             rc = 1
+        deleg_hook = claude_home / "hooks" / "delegate_guard.py"
+        if deleg_hook.exists():
+            print(register_hook(claude_home / "settings.json", "UserPromptSubmit", "", f'python "{deleg_hook.as_posix()}" prompt', "delegate_guard.py"))
+            print(register_hook(claude_home / "settings.json", "PreToolUse", "Read|Grep|Glob|Bash|PowerShell", f'python "{deleg_hook.as_posix()}" pretool', "delegate_guard.py"))
+        else:
+            print(f"ข้าม       ไม่พบ {deleg_hook} → ลงทะเบียน hook ไม่ได้")
+            rc = 1
     elif guard.exists():
         st = claude_home / "settings.json"
         if "image_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน image_guard (กันอ่านรูปใหญ่/อ่านรูปรัวใน session หลัก) → install --hooks")
         if "run_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน run_guard (กันสั่งงานผิดวิธีจนไม่มีใครเฝ้า: & · sleep · ไม่ใส่ run_in_background) → install --hooks")
+        if "delegate_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
+            print("หมายเหตุ   ยังไม่ได้ลงทะเบียน delegate_guard (กัน Claude แย่งไล่โค้ดเองเมื่อผู้ใช้สั่งส่งสืบให้ Flash) → install --hooks")
     if getattr(a, "models", "ask") != "skip":
         ensure_models(getattr(a, "models", "ask"))
     return rc
@@ -4905,6 +5024,7 @@ def plan_trail(row: dict, rows: list[dict], reviews: list[dict]) -> dict:
 
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
+    auto_clear_dead()  # ป้ายงานตายที่ค้างเกินเวลาที่ตั้ง → รับทราบให้เอง ก่อนสร้างรายการ
     held = held_slots()
     sch = schedule(held)
     slot_of = {h.get("id"): h for h in held}
@@ -4972,7 +5092,7 @@ def ui_state() -> dict:
         row["claude_title"] = claude_session_title(row["claude_session"])
     goals = ui_goals(running, history, queued)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
-            "schedule": sch["mode"], "starve_min": starve_min(),
+            "schedule": sch["mode"], "starve_min": starve_min(), "dead_clear_hours": dead_clear_hours(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history,
             "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows, "accounts_source": accounts_source(),
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
@@ -5465,9 +5585,9 @@ def make_ui_server(port: int = 4097):
                 ok, msg = request_run_now(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/config":
-                keys = [k for k in ("schedule", "max_parallel", "starve_min") if k in body]
+                keys = [k for k in ("schedule", "max_parallel", "starve_min", "dead_clear_hours") if k in body]
                 if not keys:
-                    return self._send(400, {"ok": False, "message": "ต้องมี max_parallel / schedule / starve_min"})
+                    return self._send(400, {"ok": False, "message": "ต้องมี max_parallel / schedule / starve_min / dead_clear_hours"})
                 msgs = []
                 for k in keys:
                     err, msg = set_config(k, body[k])
@@ -5482,14 +5602,23 @@ def make_ui_server(port: int = 4097):
                     return self._send(400, {"ok": False, "message": "ชื่อไม่ถูกต้อง"})
                 (LOGS / f"{name}.out.pending").unlink(missing_ok=True)
                 return self._send(200, {"ok": True, "message": "รับทราบแล้ว"})
+            if path == "/api/dismiss" and body.get("all"):  # รับทราบงานที่ process ตายทั้งหมดในครั้งเดียว (ข้ามงานที่ opencode ลูกยังทำงานอยู่)
+                done, skipped = 0, 0
+                for x in jobs():
+                    if live_state(x) != "dead" or x.get("status") not in ("queued", "running"):
+                        continue
+                    if pid_alive(x.get("child_pid") or 0, x.get("child_pid_start") or 0):
+                        skipped += 1
+                        continue
+                    dismiss_dead(x)
+                    done += 1
+                return self._send(200, {"ok": True, "cleared": done, "skipped": skipped,
+                                        "message": f"รับทราบแล้ว {done} งาน" + (f" · ข้าม {skipped} งานที่ opencode ยังทำงานอยู่ (ตรวจเองก่อน)" if skipped else "")})
             if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
                 if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
                     return self._send(409, {"ok": False, "message": "ไม่ใช่งานที่ process ตายค้างสถานะ"})
-                note = reap_orphan(j, abort=j.get("status") == "running")  # ลูกที่ยังรอดอยู่ต้องถูกเก็บกวาดด้วย ไม่งั้นแก้ไฟล์ต่อโดยไม่มีใครเห็น
-                j.update(status="dead", dismissed=now())  # ไม่ใส่ finished: ไม่รู้ว่าตายเมื่อไร
-                save_job(j)
-                release(j)
+                note = dismiss_dead(j)
                 return self._send(200, {"ok": True, "message": f"บันทึก {j['id']} เป็น 'ตาย' แล้ว" + (f" · {note}" if note else "")})
             if path == "/api/submit":
                 argv, err = build_run_argv(body)
@@ -7402,6 +7531,7 @@ def main() -> int:
     ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) · inbox_notify (UserPromptSubmit) · run_guard (PreToolUse Bash|PowerShell) ใน ~/.claude/settings.json")
     ins.add_argument("--models", choices=["ask", "auto", "skip"], default="ask",
                      help="ตรวจโมเดลของทุกบทบาทบนเครื่องนี้: ask = ถามเลือกเมื่อขาด (ต้องมี TTY · ไม่มี = แค่บอกวิธีแก้) · auto = ใช้ตัวแนะนำ · skip = ไม่ตรวจ")
+    ins.add_argument("--check", action="store_true", help="แค่เทียบว่าไฟล์ที่ติดตั้งไว้ล้าหลังต้นฉบับไหม (ไม่เขียนอะไร · exit 1 = ล้าหลัง/ยังไม่ติดตั้ง)")
     ins.set_defaults(fn=cmd_install)
     mo = sp.add_parser("models", help="แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วเลือกว่าบทบาทไหน (ผู้ทำ/ผู้ตรวจ/ผู้สืบ/นักทดสอบ/ช่างเอกสาร) ใช้โมเดลอะไร")
     mo.add_argument("--list", action="store_true", help="แสดงรายการโมเดล + สถานะ ไม่เปลี่ยนอะไร")
@@ -7419,7 +7549,7 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
-    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min)")
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours)")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)

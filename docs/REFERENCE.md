@@ -11,6 +11,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
   - **ชน** (อนุรักษ์ · ไม่แน่ใจ = ชน): โปรเจกต์ต่างกัน = ไม่ชน · โปรเจกต์เดียวกัน → ไฟล์ที่แผนจะแตะซ้อนกัน (glob/โฟลเดอร์ครอบ) · ดึงรายการไฟล์ไม่ได้ (เช่น `--message`) · แตะไฟล์ที่ทุกโมดูลใช้ร่วม (ไฟล์ระดับรากที่มีจริง เช่น `CMakeLists.txt` · โฟลเดอร์ `Common/` `Util/` `Shared/` `cmake/` · เพิ่มเองด้วย `"parallel_shared": ["Proto/"]` ใน `.flash.json`) · แผนประกาศ `flashq-parallel: no`
   - แผนประกาศชุดไฟล์เองใน §0: `flashq-files: Client/Src/A.cpp, Client/Src/UI/*.h` (ใช้แทนการเดาจาก backtick · แม่แบบมีให้แล้ว)
   - **กันอดตาย**: งานที่ชนแล้วรอเกิน `starve_min` นาที (ค่าเริ่มต้น 120 · `config starve_min 60`) = ล็อกเป็นหัวคิว งานหลังจากนั้นห้ามแซง
+  - **ป้ายงานที่ process ตาย** (แผง "⚠ ต้องรับทราบ" / ป้ายเก้าอี้ในออฟฟิศ): ไม่หายเองจนกว่าจะกด "รับทราบ" (รายงาน) หรือ "รับทราบทั้งหมด" (มี ≥2 งาน · `POST /api/dismiss {all:true}` · ข้ามงานที่ opencode ลูกยังทำงานอยู่) · หรือหายเองเมื่อไฟล์งานไม่ถูกเขียนเกิน `dead_clear_hours` ชั่วโมง (ค่าเริ่มต้น 24 · `config dead_clear_hours 48` · 0 = ไม่หายเอง) — ทุกทางบันทึกเป็นสถานะ `dead` ย้ายไปประวัติ
   - `status` / หน้าเว็บบอกเหตุผลที่แต่ละงานยังไม่เริ่ม ("รอช่องว่าง" · "ชนกับ <job>: ไฟล์ X" · "แผนสั่งให้รอ" · "กันอดตาย") · ปุ่มรันเลยยังใช้บังคับเริ่มได้
 - ระหว่างรันหลายงาน `--switch-on-quota` จะ **ไม่สลับบัญชีซ้ำ** ถ้างานอื่นเพิ่งสลับไปแล้ว (ใช้บัญชีใหม่นั้นสั่งซ้ำแทน)
 - ของเดิม (ล็อกรายโปรเจกต์) เจองานซ้อนแล้วตอบ `BUSY` ทิ้ง · ตัวนี้ **รอคิวให้เอง** (`--no-wait` = พฤติกรรมเดิม)
@@ -34,7 +35,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 | ส่วน | ที่ |
 |---|---|
 | โค้ด (repo นี้) | `D:\MyCode\flashq\` |
-| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min` `image_max_px` `image_max_reads` `notify` `variants` `prices` `flash_compare` ฯลฯ) · สัญญาณรันเลย `run_now/` · สำเนาสถานะเป้าหมาย `goals/<id>.json` · ป้ายผู้ตรวจ `reviews/rv_*.json` · ผลงานจบรอแจ้ง Claude `inbox/` (ส่งแล้ว `inbox/done/`) · ผล `flashq usage <แผน>` `usage/` · ที่สำรองไฟล์ของช่างเอกสาร `docbak/<job>/` · log ของหน้าเว็บ `ui.log` · server opencode `live_server.pid/.log` · ย้ายที่ได้ด้วย env `FLASHQ_HOME` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
+| ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min` `dead_clear_hours` `image_max_px` `image_max_reads` `notify` `variants` `prices` `flash_compare` ฯลฯ) · สัญญาณรันเลย `run_now/` · สำเนาสถานะเป้าหมาย `goals/<id>.json` · ป้ายผู้ตรวจ `reviews/rv_*.json` · ผลงานจบรอแจ้ง Claude `inbox/` (ส่งแล้ว `inbox/done/`) · ผล `flashq usage <แผน>` `usage/` · ที่สำรองไฟล์ของช่างเอกสาร `docbak/<job>/` · log ของหน้าเว็บ `ui.log` · server opencode `live_server.pid/.log` · ย้ายที่ได้ด้วย env `FLASHQ_HOME` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` `flash-verifier` `flash-investigator` `flash-tester` `flash-writer` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
 | คำสั่ง Claude Code แบบ global: `/flash-plan` (วางแผน+ส่งเข้าคิว แล้วรอระบบแจ้งผล) · `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) · `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) · `/flash-investigate` (ส่งผู้สืบ) · `/flash-qa` (สั่งนักทดสอบ) · `/flash-doc` (สั่งช่างเอกสาร) · `/flash-init` (ตั้งค่าโปรเจกต์ใหม่) | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
 | subagent Claude Code `flash-checker` (ผู้ตรวจรุ่น Sonnet — session Opus/Fable ส่งงานตรวจให้ตัวนี้) | `~/.claude/agents/` (ติดตั้งด้วย `install`) |
@@ -183,7 +184,7 @@ python flashq.py review list
 - `/flash-check` ให้ Claude เป็นผู้ตรวจเอง (ไม่ใช่ `flashq verify` ที่รัน agent ของ opencode) จึงทำเป็นป้ายเบา ๆ: เริ่มตรวจ = `review start` · ตรวจเสร็จ = `review done` — หน้าออฟฟิศแสดง "Claude กำลังตรวจ" ที่ผู้ตรวจประจำ
 - ผ่านชูมือ · ไม่ผ่านหน้าเสีย 10 นาที + แจ้งเตือน/เสียง (ปุ่ม 🔊) · ป้ายบอกเวลาที่ตรวจมาแล้ว + เวลาเริ่ม · ตรวจนานเกิน 30 นาที = เตือนว่า session อาจปิดไปแล้ว · ป้ายค้างเกิน 90 นาทีถือว่าหมดอายุ (ไม่แสดง)
 - คำเตือน "log เงียบ" ใช้เวลาแก้ไขไฟล์ log จากเซิร์ฟเวอร์ (ไม่ต้องเปิดหน้าไว้ก่อน) · มือถือ: ฉากออฟฟิศเลื่อนแนวนอนได้
-- เปลี่ยน `flashq.py` ต้องรีสตาร์ท `flashq ui` · เปลี่ยน `claude/commands/*.md` `claude/agents/*.md` `hooks/*.py` ต้องรัน `flashq install` ใหม่
+- เปลี่ยน `flashq.py` ต้องรีสตาร์ท `flashq ui` · เปลี่ยน `claude/commands/*.md` `claude/agents/*.md` `hooks/*.py` ต้องรัน `flashq install` ใหม่ · **ยามมอบงานสืบ** (`hooks/delegate_guard.py` · ลงทะเบียนด้วย `install --hooks`): ผู้ใช้พิมพ์ "ส่งสืบ / ให้ flash·deepseek สืบ·ตามหา" → แทรกคำสั่งให้เรียก `/flash-investigate` + ตั้งงบอ่านโค้ดเอง 3 ครั้ง (Read · Grep · Glob · grep/rg/cat… ใน Bash · ไฟล์ AGENTS.md/CLAUDE.md/.flash.json/docs/plans/.tmp ไม่นับ) เกินงบ = บล็อก · เห็นคำสั่ง `flashq investigate` = ส่งแล้ว เหลืองบยืนยันต้นตอ 2 ครั้ง · ข้อความผู้ใช้ถัดไปที่ไม่ได้สั่งส่งสืบ = ปลดงบ · หมดอายุ 60 นาที · ปิด `~/.flashq/config.json` `{"delegate_guard": false}` · งบ `{"delegate_reads": N}` · ปิดชั่วคราวสร้าง `~/.flashq/delegate_guard_off` · log `~/.flashq/delegate_guard.log` · ลืมรัน = `flashq install --check` เทียบที่ติดตั้งไว้กับต้นฉบับ (อ่านอย่างเดียว · `INSTALL=STALE` exit 1 = ล้าหลัง/ยังไม่ติดตั้ง · ไฟล์ของผู้ใช้เองไม่นับ) — `/flash-plan` `/flash-goal` `/flash-investigate` รันเช็กนี้ตอนเริ่มแล้วเตือนผู้ใช้เอง
 
 ### หน้าเว็บ dashboard
 ```
@@ -251,6 +252,11 @@ python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
 
 ## แผนงาน
 แม่แบบ → [templates/FLASH_PLAN_TEMPLATE.md](../templates/FLASH_PLAN_TEMPLATE.md)
+
+**skill ของโปรเจกต์ในแผน** — ใต้หัวงาน T-xx เขียน `skill: <ชื่อ>[, <ชื่อ>]` (เฉพาะชื่อตรงโฟลเดอร์ใน `skills/`) ได้ทุกโปรเจกต์ ไม่ผูกกับแม่แบบ:
+- ผู้วางแผน (`/flash-plan`) หาชื่อจากตาราง routing ใน `AGENTS.md`/`CLAUDE.md` ก่อน ไม่มีตารางค่อย `ls` `.opencode/skills/` · `.claude/skills/` (ไม่เปิด `SKILL.md`) · ไม่มี skill เลย = ข้าม
+- `flash-worker` โหลดด้วย `skill` tool ก่อนลงมือ แล้วรายงานบรรทัด "skill ที่โหลด" · หาไม่เจอ = `FAIL: ไม่พบ skill` · `flash-investigator` โหลดเมื่อบรีฟระบุหรือตาราง routing ชี้ skill สืบบั๊ก · `flash-checker` ตรวจว่ารายงานมี skill ตรงชื่อ
+- `flashq run` เตือน (`WARN`) ถ้าชื่อไม่ตรง skill ที่มีใน `.opencode/skills` · `.claude/skills` ของโปรเจกต์ หรือ `~/.claude/skills` · `~/.config/opencode/skills` · `~/.agents/skills` (ไม่บล็อกการส่งงาน)
 
 ## เทสต์ (ใช้ opencode ปลอม ไม่เรียกโมเดลจริง)
 ```
