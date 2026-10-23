@@ -30,6 +30,13 @@ python {{FLASHQ}}/flashq.py qa [ชุด...] [--commit <sha>] [--project "<path
 - ไม่อยากให้ Flash อธิบายตอนล้ม: `--no-analyze` (ไม่เรียกโมเดลเลย) · ล้มแล้วหยุด: `--fail-fast` · รันซ้ำแยกไม่นิ่ง: `--retry 1`
 - รอผล: `python {{FLASHQ}}/flashq.py wait <job>` (ไม่ต้อง sleep/poll)
 
+### ทดสอบหน้าเว็บแบบเงียบ (Chrome headless · Playwright)
+- เขียนสคริปต์ `tests/ui_*.py` (ใช้ `playwright.sync_api` + `chromium.launch(headless=True)`) แล้วตั้งเป็นชุด `ui`: `{"cmds": ["python tests/ui_smoke.py"], "env_exit": 3}` — `flashq qa` เดาให้เองเมื่อเจอไฟล์ที่ import playwright
+- headless สั่งผ่าน CDP: **ไม่มีหน้าต่าง ไม่ขยับเมาส์/คีย์บอร์ดจริง** ห้ามใช้ headed หรือ computer-use ในชุดทดสอบ · สคริปต์ต้องรัน server ของตัวเองบนพอร์ตแยก + ข้อมูลชั่วคราว ไม่แตะของจริง
+- ต้องมี `pip install playwright` + `playwright install chromium-headless-shell` · ไม่มี = สคริปต์ออก exit 3 → ผล `ENV` (ยังไม่ได้ทดสอบ ไม่ใช่โค้ดผิด)
+- หลายเรื่องในครั้งเดียว: ตั้งหลายชุด (`unit` `ui` `lint`) แล้วสั่ง `qa unit ui` หรือใส่หลายไฟล์ใน `cmds` ของชุดเดียว (แยกผลทีละไฟล์)
+- อยากให้โมเดลสำรวจหน้าเว็บเอง (ไม่ใช่ชุดตายตัว) → ใช้ Playwright MCP แบบ `--headless --isolated` ใน opencode แยกต่างหาก · คำตัดสินของนักทดสอบยังมาจาก exit code เท่านั้น
+
 ## 4. รายงานผู้ใช้ (ภาษาไทย ครบทุกข้อ)
 1. **ทดสอบอะไร** — โปรเจกต์ · ชุดไหน · commit ไหน (+ ไฟล์ที่แก้แต่ยังไม่ commit / ไฟล์ใหม่ที่ไม่ติดตาม ตามที่หัวสรุปบอก · แยกให้ผู้ใช้เห็นว่าไฟล์ใหม่ส่วนใหญ่อาจไม่เกี่ยวกับโค้ดที่ทดสอบ)
 2. **ผล** ✅/❌/⏱/⚠️ ต่อชุด จากบรรทัดสรุป `QA=` (ห้ามเปลี่ยนคำตัดสินเอง)

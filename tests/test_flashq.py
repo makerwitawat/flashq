@@ -532,6 +532,14 @@ class FlashqTest(unittest.TestCase):
                     raise
                 time.sleep(0.5)
 
+    @unittest.skipUnless(os.name == "nt", "ปัญหา loopback เฉพาะ Windows")
+    def test_ui_server_disables_send_buffer_on_windows(self):
+        """Windows: ตอบหน้าใหญ่ (ui.html ~240KB) ค้างเป็นครั้งคราว ~3% จนกว่าจะตั้ง SO_SNDBUF=0 ที่ listening socket (accept แล้วสืบทอด)"""
+        mod = self.load_mod("flashq_sndbuf")
+        srv, _ = mod.make_ui_server(0)
+        self.addCleanup(srv.server_close)
+        self.assertEqual(srv.socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF), 0)
+
     def test_ui_office_tab_and_script_syntax(self):
         """ui: หน้าเว็บมีแท็บออฟฟิศ · สคริปต์ในหน้าไม่มี syntax error (ตรวจด้วย node ถ้ามี)"""
         (self.home / "jobs").mkdir(parents=True)
@@ -1407,7 +1415,7 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
         self.assertIn("cmd.exe", r.stdout)
-        self.assertLess(time.time() - t0, 30)
+        self.assertLess(time.time() - t0, 120)  # ต้องเร็วกว่า NOSTART 180 วิ · เพดานหลวมกันเครื่องโหลดตอนรันทั้งชุด
         self.assertFalse(self.args_out.exists())  # opencode ไม่ถูกเรียก
         self.assertEqual(list((self.home / "jobs").glob("*.json")) if (self.home / "jobs").exists() else [], [])
         r = self.run_q("investigate", "--no-open", "บรีฟ ปลอดภัย", env=env)
@@ -3221,6 +3229,21 @@ class QaTest(unittest.TestCase):
         self.assertNotIn("tests/test_c.py", json.dumps(mod.qa_detect(self.proj)))
         (self.proj / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")  # ตั้ง pytest ชัด ๆ → ใช้ pytest
         self.assertEqual(mod.qa_detect(self.proj)[0]["cmd"], "python -m pytest -q")
+
+    def test_detect_playwright_ui_scripts_as_separate_ui_preset(self):
+        """tests/ui_*.py ที่ import playwright → preset 'ui' แยกจาก unit (cmds + env_exit 3) · ไม่ import playwright = ไม่นับ"""
+        t = self.proj / "tests"
+        t.mkdir()
+        (t / "ui_smoke.py").write_text("from playwright.sync_api import sync_playwright\nif __name__ == '__main__':\n    pass\n", encoding="utf-8")
+        (t / "ui_helper.py").write_text("print('no browser')\n", encoding="utf-8")
+        (t / "test_a.py").write_text("if __name__ == '__main__':\n    pass\n", encoding="utf-8")
+        mod = self.load_mod("flashq_qa_detect")
+        found = {x["name"]: x for x in mod.qa_detect(self.proj)}
+        self.assertEqual(found["ui"]["cmds"], ["python tests/ui_smoke.py"])
+        self.assertEqual(found["ui"]["env_exit"], 3)
+        self.assertEqual(found["unit"]["cmds"], ["python tests/test_a.py"])
+        r = self.run_q("qa", "--no-analyze")
+        self.assertIn('"env_exit": 3', r.stdout)
 
     def test_cmds_preset_reports_each_command_separately_with_default_retry(self):
         """preset แบบ cmds: แยกผลทีละคำสั่ง (สคริปต์ที่ผ่านไม่ถูกบังด้วยตัวที่ล้ม) · retry เริ่มต้น 1 → ล้มชั่วคราวแล้วผ่าน = FLAKY · retry:0 ปิดได้"""

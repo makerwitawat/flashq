@@ -2294,6 +2294,19 @@ def qa_standalone_tests(root: Path) -> list[str]:
     return out
 
 
+def qa_browser_scripts(root: Path) -> list[str]:
+    """tests/ui_*.py ที่ใช้ Playwright (สคริปต์ทดสอบหน้าเว็บแบบ headless รันตรงด้วย python) → เส้นทางเทียบรากโปรเจกต์ · ไม่มี = []"""
+    out = []
+    for p in sorted((root / "tests").glob("ui_*.py"))[:20]:
+        try:
+            src = p.read_text(encoding="utf-8-sig", errors="replace")[:200_000]
+        except OSError:
+            continue
+        if re.search(r"^\s*(?:import|from)\s+playwright\b", src, re.M) or "from playwright" in src:
+            out.append(p.relative_to(root).as_posix())
+    return out
+
+
 def qa_pytest_missing() -> bool:
     """python ที่อยู่ใน PATH ไม่มี pytest? (ใช้เตือนตอนแนะนำเท่านั้น · ตรวจไม่ได้ = False)"""
     exe = shutil.which("python")
@@ -2321,6 +2334,10 @@ def qa_detect(root: Path) -> list[dict]:
     elif standalone:
         out.append({"name": "unit", "cmds": [f"python {p}" for p in standalone],
                     "why": f"tests/ มีสคริปต์ standalone {len(standalone)} ไฟล์ (ไม่ใช้ pytest · สำเร็จ/ล้มด้วย exit code) → แยกผลทีละไฟล์ · ถ้าต้องใช้ python ของโปรเจกต์อื่น (เช่น venv) ให้แก้ path ของ python เอง"})
+    ui_scripts = qa_browser_scripts(root)
+    if ui_scripts:
+        out.append({"name": "ui", "cmds": [f"python {p}" for p in ui_scripts], "env_exit": 3,
+                    "why": f"tests/ui_*.py ใช้ Playwright {len(ui_scripts)} ไฟล์ → ทดสอบหน้าเว็บด้วย Chrome headless (ไม่มีหน้าต่าง ไม่แย่งเมาส์) · env_exit 3 = ยังไม่ได้ลง playwright/เบราว์เซอร์ (ผล ENV ไม่ใช่โค้ดผิด) · ต้อง pip install playwright"})
     scripts = read_json(root / "package.json").get("scripts")
     if isinstance(scripts, dict) and scripts.get("test") and "no test specified" not in str(scripts["test"]):
         out.append({"name": "unit", "cmd": "npm test", "why": "package.json มี scripts.test"})
@@ -2347,7 +2364,7 @@ def qa_suggest_lines(root: Path) -> list[str]:
     found = qa_detect(root)
     if not found:
         return ["ยังเดาไม่ได้ว่าโปรเจกต์นี้ทดสอบด้วยอะไร → ใส่ qa.presets ใน .flash.json เอง หรือสั่งครั้งเดียวด้วย --cmd \"<คำสั่ง>\""]
-    presets = {x["name"]: {k: v for k, v in x.items() if k in ("cmd", "cmds", "expect")} for x in found}
+    presets = {x["name"]: {k: v for k, v in x.items() if k in ("cmd", "cmds", "expect", "env_exit")} for x in found}
     lines = ["ที่เดาได้จากไฟล์ในโปรเจกต์ (ตรวจแล้วค่อยวางใน .flash.json — flashq ไม่รันคำสั่งที่เดาเอง):",
              "  " + json.dumps({"qa": {"presets": presets}}, ensure_ascii=False)] + [f"  - {x['name']}: {x['why']}" for x in found]
     if any("pytest" in str(x.get("cmd")) for x in found) and qa_pytest_missing():
@@ -4878,6 +4895,9 @@ def make_ui_server(port: int = 4097):
             if os.name == "nt":
                 import socket
                 self.socket.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+                # Windows loopback: ตอบคำขอที่ใหญ่กว่า ~100KB (ui.html ~240KB) ค้างจน client หมดเวลาเป็นครั้งคราว ~3% (http.server เปล่าก็เป็น · วัดแล้ว
+                # 1,200 คำขอ SO_SNDBUF=0 ไม่ค้างเลย · ตั้งที่ listening socket แล้ว socket ที่ accept สืบทอดค่า · ค่า 1MB ไม่ช่วย)
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 0)
             super().server_bind()
 
     return S(("127.0.0.1", port), H), token
