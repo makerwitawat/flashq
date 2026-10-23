@@ -1,4 +1,4 @@
-"""ทดสอบหน้าเว็บ flashq แบบเงียบ: Chrome headless (Playwright) กับ server แยกพอร์ต 4197 + FLASHQ_HOME ชั่วคราว
+"""ทดสอบหน้าเว็บ flashq แบบเงียบ: Chrome headless (Playwright) กับ server แยกพอร์ตว่างที่ระบบเลือกเอง (ตั้ง FLASHQ_SMOKE_PORT เพื่อกำหนดเอง) + FLASHQ_HOME ชั่วคราว
 
 - ไม่มีหน้าต่าง ไม่ขยับเมาส์/คีย์บอร์ดจริง (Playwright สั่งผ่าน CDP) · ไม่แตะข้อมูลจริงใน ~/.flashq และไม่ใช้พอร์ต 4097
 - ต้องมี: pip install playwright  (+ playwright install chromium-headless-shell ถ้ายังไม่มีเบราว์เซอร์)
@@ -16,8 +16,23 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-PORT = int(os.environ.get("FLASHQ_SMOKE_PORT") or 4197)
 ENV_EXIT = 3
+
+
+def pick_port() -> int:
+    """FLASHQ_SMOKE_PORT ถ้าตั้งไว้ · ไม่ตั้ง = ให้ระบบเลือกพอร์ตว่าง (รันซ้อนสองรอบก็ไม่ชนกัน · ไม่แตะ 4097 ของจริง)"""
+    if os.environ.get("FLASHQ_SMOKE_PORT"):
+        return int(os.environ["FLASHQ_SMOKE_PORT"])
+    for _ in range(20):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        if port != 4097:
+            return port
+    return 4197
+
+
+PORT = pick_port()
 WIDTHS = (1280, 700, 390)  # กว้าง · กลาง · มือถือ — ต้องไม่มี JS error และไม่มีแถบเลื่อนแนวนอนของทั้งหน้า
 
 

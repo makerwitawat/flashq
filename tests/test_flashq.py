@@ -271,6 +271,35 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("WARN: บรรทัด 5 (T-01): คำสั่ง `sc out.txt 1`", r.stdout)
 
+    def test_plan_precheck_new_file_wording_and_multi_task_tokens(self):
+        """ไฟล์ใหม่: บรรทัดที่พูดว่า "สร้าง ..." ไม่ต้องต่อท้าย (ใหม่) ก็ผ่าน แต่ path ที่ไม่มีและไม่ได้บอกว่าสร้าง = ยังผิด · tasks หลาย token ต่อเป็นก้อนเดียว"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        self.write_precheck_proj()
+        plan = ("# แผน\n\n## §2 งาน\n"
+                "- [ ] **T-01** สร้าง `src/brand_new.cpp` แล้วเรียกจาก `src/a.cpp`\n"
+                "  - ไฟล์: `src/a.cpp`\n"
+                "- [ ] **T-02** แก้ `src/typo_name.cpp`\n"
+                "  - ไฟล์: `src/typo_name.cpp`\n")
+        src = flashq.PlanSource(self.proj)
+        self.assertEqual(flashq.plan_precheck(plan, "T-01", src)[0], [])
+        errs = flashq.plan_precheck(plan, "T-02", src)[0]
+        self.assertTrue(any("ไม่พบไฟล์ `src/typo_name.cpp`" in e for e in errs), errs)
+        r = self.run_q("run", "PRE.md", "T-03", "T-04", "--attach", "none", "--no-open", "--skip-precheck")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.run_q("run", "PRE.md", "T-03, T-04", "--attach", "none", "--no-open", "--skip-precheck").returncode, 0)
+        tasks = [json.loads(f.read_text(encoding="utf-8"))["tasks"] for f in (self.home / "jobs").glob("*.json")]
+        self.assertEqual(tasks, ["T-03,T-04", "T-03,T-04"], tasks)  # เว้นวรรค และ "T-03, T-04" ได้ผลเหมือนกัน
+
+    def test_ui_smoke_picks_free_port(self):
+        """ui_smoke ไม่ใช้พอร์ตตายตัว: ไม่ตั้งค่า = ระบบเลือกพอร์ตว่าง (ไม่ใช่ 4097) · ตั้ง FLASHQ_SMOKE_PORT = ใช้ค่านั้น"""
+        code = "import sys; sys.path.insert(0, 'tests'); import ui_smoke; print(ui_smoke.PORT)"
+        env = {k: v for k, v in self.env.items() if k != "FLASHQ_SMOKE_PORT"}
+        ports = {int(subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env=env, capture_output=True, text=True, timeout=30).stdout) for _ in range(2)}
+        self.assertTrue(all(1024 < p < 65536 and p != 4097 for p in ports), ports)
+        r = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env={**env, "FLASHQ_SMOKE_PORT": "4555"}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stdout.strip(), "4555")
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)
@@ -551,8 +580,14 @@ class FlashqTest(unittest.TestCase):
         run = dict(base, id="jobrun01", status="running", pid=os.getpid(), pid_start=mod.proc_start(os.getpid()))
         for j in (ok, bad, run):
             mod.save_job(j)
+        rows = [json.loads(x) for x in (self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()]  # ทุกครั้งที่บล็อกถูกจดไว้ไล่ย้อนหลัง
+        self.assertTrue(rows and all({"at", "reason", "command"} <= set(x) for x in rows), rows)
+        self.assertTrue(any("run_in_background" in x["reason"] for x in rows), rows)
+        self.assertIn("run_guard.log", hook(run, bg=False).stderr)  # ข้อความบล็อกบอกที่ดู log
         self.assertEqual(mod.claude_check_action(run)[0], 409)  # ยังรันอยู่
+        n_rows = len(rows)
         code, r = mod.claude_check_action(ok)
+        self.assertEqual(len((self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()), n_rows + 1)  # ปิดยาม = ไม่บล็อก ไม่จดเพิ่ม (+1 มาจากบรรทัด assertIn ด้านบน)
         self.assertEqual(code, 200, r)
         self.assertTrue(opened[-1].startswith("claude://code/new?q=%2Fflash-check%20PLAN.md"), opened)
         self.assertIn("&folder=", opened[-1])

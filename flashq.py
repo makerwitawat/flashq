@@ -1773,6 +1773,7 @@ MULTI_N_RE = re.compile(r"(\d+|สอง|สาม)\s*ที่")  # "มี 2 �
 NEW_AFTER_RE = re.compile(r"^[^`]*?(สร้างใหม่|ไฟล์ใหม่|\(ใหม่\)|ใหม่\b|\bnew\b|ถ้ามี)", re.I)  # ไฟล์ใหม่ / ไม่บังคับ
 SCOPE_RE = re.compile(r"ตัวหา|เลือกที่อยู่ใน|ถ้าเจอหลายที่|\(\s*ใน[\s`]")  # anchor มีขอบเขตกำกับ (ใน `ฟังก์ชัน` ...) → เจอหลายที่ = เตือน
 NEW_BEFORE_RE = re.compile(r"(สร้างใหม่|ไฟล์ใหม่|ใหม่|new)\s*\**\s*[:：]?\s*\**\s*$", re.I)
+NEW_LINE_RE = re.compile(r"สร้าง|เพิ่มไฟล์|ไฟล์ใหม่|\bcreate[sd]?\b|\bnew file\b|\badd(?:s|ed)? (?:a )?(?:new )?file", re.I)  # บรรทัดที่พูดถึงการสร้างไฟล์ → path ที่ยังไม่มีในบรรทัดนั้นถือเป็นไฟล์ใหม่ (ไม่ต้องเขียน "(ใหม่)" ต่อท้ายทุกตัว)
 
 
 def _plan_path_tok(tok: str, root: Path | None = None) -> str:
@@ -1924,7 +1925,7 @@ def plan_precheck(text: str, tasks: str, src: PlanSource) -> tuple[list[str], li
                 if not path:
                     continue
                 task_files.setdefault(tid, []).append((no, tok, path))
-                if NEW_AFTER_RE.match(parts[p + 1]) or NEW_BEFORE_RE.search(parts[p - 1]):
+                if NEW_AFTER_RE.match(parts[p + 1]) or NEW_BEFORE_RE.search(parts[p - 1]) or (NEW_LINE_RE.search(line) and not src.find(path)):
                     new_files.add(path.lower())
     afters = [(no, _lenient(code)) for _, _, lines in blocks for lab, no, _, code in _snippets(lines) if lab == "หลัง"]
 
@@ -2006,6 +2007,8 @@ def plan_precheck(text: str, tasks: str, src: PlanSource) -> tuple[list[str], li
 def cmd_run(a) -> int:
     if isinstance(a.message, list):  # investigate รับบรีฟเป็นหลายคำ
         a.message = " ".join(a.message).strip()
+    if isinstance(a.tasks, list):  # run/verify รับ tasks ได้หลาย token: "T-00 T-02" · "T-00..T-02, T-05" → "T-00,T-02" / "T-00..T-02,T-05"
+        a.tasks = ",".join(x for x in re.split(r"[,\s]+", " ".join(a.tasks)) if x)
     if not a.message and not (a.plan and a.tasks):
         print("ต้องมี <plan> <tasks> หรือ --message")
         return 1
@@ -6565,13 +6568,13 @@ def main() -> int:
     sp = ap.add_subparsers(dest="cmd")
     r = sp.add_parser("run", help="ส่งงานเข้าคิว")
     r.add_argument("plan", nargs="?")
-    r.add_argument("tasks", nargs="?")
+    r.add_argument("tasks", nargs="*", help="งาน เช่น T-00..T-02 · หลายก้อนเว้นวรรคหรือคั่น , ได้ (T-00 T-02 = T-00,T-02)")
     r.add_argument("--message", help="ส่งข้อความตรง (ทดสอบ) แทนคำสั่ง /flash")
     r.add_argument("--skip-precheck", action="store_true", help="ข้ามด่านตรวจแผนพิการ (path ไม่มีจริง · ข้อความ ก่อน: ไม่เจอ/เจอหลายที่)")
     r.set_defaults(kind="", prompt="")
     vf = sp.add_parser("verify", help="ส่งผู้ตรวจ (agent อ่านอย่างเดียว) เข้าคิว · ไม่ชนงานอื่นในตัวจัดคิว")
     vf.add_argument("plan")
-    vf.add_argument("tasks")
+    vf.add_argument("tasks", nargs="+", help="งานที่ตรวจ เช่น T-02 · หลายก้อนเว้นวรรคหรือคั่น , ได้")
     vf.add_argument("--prompt", help="ข้อความสั่งผู้ตรวจ (ค่าเริ่มต้น = ตรวจแผน/งานนี้ตามหน้าที่)")
     vf.set_defaults(kind="verify", message="")
     inv = sp.add_parser("investigate", help="ส่งผู้สืบ (agent อ่านอย่างเดียว) ไปไล่หาต้นตอบั๊กตามบรีฟ · ไม่ชนงานอื่น")

@@ -12,6 +12,7 @@
 ผ่านแล้วแทรกคำเตือนสั้น ๆ ให้ Claude "หยุดนิ่งรอแจ้งเตือน ห้าม poll"
 ตั้งค่า: ~/.flashq/config.json  {"run_guard": false} ปิดถาวร · {"run_guard_wrappers": ["flash_run.py", "..."]} ชื่อสคริปต์ wrapper ของโปรเจกต์ (นับเป็น `run`)
 ปิดชั่วคราว (60 นาที): สร้างไฟล์ ~/.flashq/run_guard_off
+ทุกครั้งที่บล็อกจดลง ~/.flashq/run_guard.log (jsonl: เวลา · เหตุ · คำสั่ง) ไว้ไล่ดูว่าบล็อกผิดไหม
 พังเองไม่ว่ากรณีใด = ปล่อยผ่าน (exit 0) ห้ามขวางงานผู้ใช้ · ทดสอบ: python run_guard.py test "<คำสั่ง>" [--bg]
 """
 import json
@@ -220,7 +221,23 @@ def block_text(reason: str) -> str:
             "  python " + FLASHQ + "/flashq.py run <แผน> T-01..T-NN --switch-on-quota 4\n"
             "แล้วหยุดนิ่งรอแจ้งเตือนจากระบบ (ไม่ต้องใส่ & ไม่ต้อง sleep ไม่ต้องต่อ head) · อยากรู้ว่าติดคิวไหม = อ่านไฟล์ output ของ background task\n"
             "งานที่ส่งไปแล้วและยังรออยู่: รัน `python " + FLASHQ + "/flashq.py wait <job>` ด้วย run_in_background: true\n"
+            "ถ้าคำสั่งนี้ไม่ใช่การส่งงานจริง (บล็อกผิด): บอกผู้ใช้ — ประวัติการบล็อกอยู่ที่ " + str(HOME / "run_guard.log") + " · ลองตัดสินคำสั่งเองได้ด้วย python <hooks>/run_guard.py test \"<คำสั่ง>\" [--bg]\n"
             "ปิดยามชั่วคราว 60 นาที (เฉพาะผู้ใช้สั่ง): สร้างไฟล์ " + str(HOME / "run_guard_off"))
+
+
+def log_block(command: str, reason: str) -> None:
+    """จดทุกครั้งที่บล็อกลง ~/.flashq/run_guard.log (jsonl) — บล็อกผิดจะได้ไล่ดูย้อนหลังได้ · เกิน 100 KB เหลือ 200 บรรทัดท้าย · พังเงียบ ๆ"""
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        path = HOME / "run_guard.log"
+        row = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason.splitlines()[0][:200] if reason else "", "command": command[:500]}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if path.stat().st_size > 100_000:
+            lines = path.read_text(encoding="utf-8").splitlines()[-200:]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def disabled(cfg: dict) -> bool:
@@ -249,6 +266,7 @@ def main() -> int:
         ti = data.get("tool_input") or {}
         verdict, text = judge(str(ti.get("command") or ""), ti.get("run_in_background") is True, cfg)
         if verdict == "block":
+            log_block(str(ti.get("command") or ""), text)
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
             print(block_text(text), file=sys.stderr)
             return 2
