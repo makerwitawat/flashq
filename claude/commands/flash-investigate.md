@@ -19,7 +19,7 @@ description: >-
 ```
 python {{FLASHQ}}/flashq.py investigate "<บรีฟ 4 ช่อง>" --project "<path โปรเจกต์>" --auto
 ```
-- ใช้ `--project` ถ้าไม่ได้อยู่ในโปรเจกต์นั้น · บรีฟหลายบรรทัดใส่ในเครื่องหมายคำพูดได้ · รันใน background
+- ใช้ `--project` ถ้าไม่ได้อยู่ในโปรเจกต์นั้น · บรีฟหลายบรรทัดใส่ในเครื่องหมายคำพูดได้ · รันใน background (`run_in_background: true` คำสั่งเดียวตรง ๆ — ห้าม `&` · sleep · head/tail · ยาม `run_guard.py` บล็อก)
 - ต้องมี agent `flash-investigator` (มาจาก `flashq.py install`) ไม่มี/เป็น subagent → flashq จะรายงาน `FAIL` พร้อมคำแนะนำ
 - โควตาหมด → flashq ย้าย provider เป็นโมเดลเดิมให้เอง (ค่าเริ่มต้น 2 ครั้ง)
 - **บั๊กกำกวม / เคยแก้แล้วไม่หาย → สืบ 2 session** (อีกตัวใส่ `--model` คนละโมเดล/คนละตระกูล) แล้วเทียบ `file:line` ต้องตรงกัน

@@ -17,6 +17,7 @@ description: >-
 | "รันเทสต์ดูก่อนว่าล้มจริงไหม" | ข้อความ FAIL ที่คาดมาจากการอ่านโค้ด · Flash เป็นคนรันแดง |
 | "เขียนโค้ดเต็มลงแผนเลย Flash จะได้ไม่พลาด" | เกิน ~20 บรรทัด = สเปก (+ เทสต์ก่อน) ตาม §2 |
 | "ค้นเองอีกนิดก็เจอ" | เกินงบ ~20 นาที / ไม่รู้ว่าอยู่ไหน → ผู้สืบ Flash |
+| "ต่อ `&` / `sleep 30; head` ท้ายคำสั่งส่งงาน จะได้เห็นบรรทัด QUEUED ทันที" | **ห้ามเด็ดขาด** — ระบบเฝ้าแค่ `sleep` ที่จบใน 30 วิ แล้วแจ้ง "จบ" ผิดตัว งาน Flash ไม่มีใครเฝ้า (เคยพลาดจริง) · ยามส่งงาน (`hooks/run_guard.py`) บล็อกให้ · อยากเห็นผล = อ่านไฟล์ output ของ background task |
 | "วน sleep · poll · `flashq status` เช็กว่า Flash เสร็จหรือยัง" | ห้ามวน — ทุกข้อความที่วน = จ่าย context เต็ม · ส่งใน background แล้ว**หยุดนิ่ง**รอแจ้งเตือนจากระบบ (§4) ได้ผลแล้วค่อย `/flash-check` |
 | "ใส่ภาคผนวกโค้ดเต็มไว้ท้ายแผน Flash จะได้คัดลอกตรงตัว" | `flashq run` ปฏิเสธ (§2) · เขียนเป็นสเปก + เทสต์ที่ต้องผ่าน |
 
@@ -59,10 +60,11 @@ description: >-
 - **ยืนยัน**: `git fetch <remote> <main_branch>; git merge-base --is-ancestor <hash แผน> <remote>/<main_branch>` ต้อง exit 0
 
 ## 4. ส่งเข้าคิวกลาง แล้วรอแจ้งผลจากระบบ (ไม่วน)
-- รัน **ใน background** ที่โฟลเดอร์โปรเจกต์ (Bash `run_in_background: true`):
+- รัน **ใน background** ที่โฟลเดอร์โปรเจกต์ (Bash/PowerShell `run_in_background: true` — **คำสั่งเดียวตรง ๆ เท่านั้น**: ห้ามต่อ `&` · `nohup` · `Start-Process` · `sleep` · `| head/tail` · ห้ามรันแบบ foreground — ยาม `run_guard.py` จะบล็อก):
   `python {{FLASHQ}}/flashq.py run <path แผน> T-01..T-NN --switch-on-quota 4`
   (worktree → ใช้ checkout หลักเอง · ตรวจแผนใน remote + ขนาดแผน §2 · มีงานอื่นทั้งเครื่อง = รอคิว · โควตาหมด = สลับบัญชีแล้วสั่งซ้ำ) · ขึ้น `FLASH_RUN=FAIL แผนใหญ่เกิน` = แก้แผนตาม §2 แล้วส่งใหม่ (ห้ามหาทางเลี่ยง)
 - บอก user สั้น ๆ: จำนวนงาน · งานที่รอ user ตัดสิน · "DeepSeek กำลังทำ — ดูใน opencode desktop session `flash <ชื่อแผน> <งาน>` · คิว `python {{FLASHQ}}/flashq.py` · จบแล้วผมตรวจต่อแล้วแจ้ง"
+- **ติดคิว (`QUEUED`) = ปกติ ไม่ต้องส่งซ้ำ** — process เดิมรอคิวแล้วเริ่มเอง และคำสั่ง background นี้จบเมื่องานจบ · ถ้าเผลอส่งผิดวิธีไปแล้ว: `python {{FLASHQ}}/flashq.py wait <job>` ด้วย `run_in_background: true` เพื่อให้มีตัวเฝ้า
 - **แล้ว หยุดนิ่งรอแจ้งเตือนจากระบบ** (คำสั่ง background จบ = ระบบแจ้งเข้า session นี้เอง · ไม่เสียอะไรระหว่างรอ) · **ห้าม** sleep / poll / `flashq status` วน / เปิดงานเรื่องอื่นต่อ
 - **ได้แจ้งว่าจบ (ทุกสถานะ: OK · FAIL · DENIED · QUOTA · TIMEOUT · NOSTART · BUSY) → เรียก `/flash-check <path แผน>` ทันที** พร้อมบรรทัด `FLASH_RUN=...` (ไม่ OK = `/flash-check` §0 วินิจฉัยและแจ้ง user — ห้ามเงียบ) · session เป็น Opus/Fable → `/flash-check` ส่ง subagent `flash-checker` ตรวจแทน (ถูกกว่าตรวจเอง)
 - **ถ้า session นี้ปิดไปก่อน / user พิมพ์ข้อความมาก่อนงานจบ**: `flashq` เขียนผลลง `~/.flashq/inbox/` + toast Windows ให้เอง · hook `inbox_notify.py` (ลงด้วย `install --hooks`) แทรกผลตอน user พิมพ์ข้อความถัดไป (ทุก session ในโปรเจกต์นี้) → เห็นแล้ว `/flash-check <path แผน>` ต่อ · ไม่มีใครรอแล้วงานจบเงียบ ๆ ไม่ได้

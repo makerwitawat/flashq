@@ -28,6 +28,7 @@ python {{FLASHQ}}/flashq.py qa [ชุด...] [--commit <sha>] [--project "<path
 ```
 - รันใน background (นานเท่าชุดทดสอบ) · ไม่ระบุชุด = ทุกชุด · ครั้งเดียวไม่ต้องตั้งชุด: `--cmd "<คำสั่ง>"` (ใช้ได้เฉพาะจาก CLI)
 - ไม่อยากให้ Flash อธิบายตอนล้ม: `--no-analyze` (ไม่เรียกโมเดลเลย) · ล้มแล้วหยุด: `--fail-fast` · รันซ้ำแยกไม่นิ่ง: `--retry 1`
+- รันด้วย `run_in_background: true` คำสั่งเดียวตรง ๆ (ห้าม `&` · sleep · head/tail · ยาม `run_guard.py` บล็อก)
 - รอผล: `python {{FLASHQ}}/flashq.py wait <job>` (ไม่ต้อง sleep/poll)
 
 ### ทดสอบหน้าเว็บแบบเงียบ (Chrome headless · Playwright)

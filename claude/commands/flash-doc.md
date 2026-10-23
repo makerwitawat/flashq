@@ -28,7 +28,7 @@ description: >-
 python {{FLASHQ}}/flashq.py doc [ชุด] [--since <commit/tag>] [--project "<path>"]
 ```
 - ไม่ระบุ `--since` = เทียบโค้ดตั้งแต่ครั้งล่าสุดที่คุณ "รับ" ร่างของชุดนี้ · ไม่เคย = ให้ Flash ดูประวัติล่าสุดเอง
-- รันใน background · รอผล: `python {{FLASHQ}}/flashq.py wait <job>` (ไม่ต้อง sleep/poll)
+- รันใน background (`run_in_background: true` คำสั่งเดียวตรง ๆ — ห้าม `&` · sleep · head/tail · ยาม `run_guard.py` บล็อก) · รอผล: `python {{FLASHQ}}/flashq.py wait <job>` (ไม่ต้อง sleep/poll)
 
 ## 4. ตรวจก่อนรายงานผู้ใช้ (ห้ามเชื่อสรุปของ Flash ตรง ๆ)
 1. `python {{FLASHQ}}/flashq.py log <job>` — คำตัดสินของ flashq + ไฟล์ที่เปลี่ยน

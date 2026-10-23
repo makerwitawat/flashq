@@ -45,7 +45,7 @@ description: >-
 
 ## 4. บันทึก + ปิด
 - เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (จุดเล็ก = ก่อน/หลังตรงตัว · ใหญ่ = สเปก ตาม `/flash-plan` §2 · ยืนยัน) · **ห้าม revert/reset เอง**
-- **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background → `python {{FLASHQ}}/flashq.py wait <แผน>` ใน background (ไม่ poll) → แจ้งแล้ว `/flash-check` ซ้ำ (session Sonnet ทำต่อใน session เดิมได้ · Opus/Fable → subagent `flash-checker` อีกรอบ) · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
+- **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background (`run_in_background: true` ตรง ๆ ห้าม `&`/sleep) → `python {{FLASHQ}}/flashq.py wait <แผน>` ใน background (ไม่ poll) → แจ้งแล้ว `/flash-check` ซ้ำ (session Sonnet ทำต่อใน session เดิมได้ · Opus/Fable → subagent `flash-checker` อีกรอบ) · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
 - ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user · **merge ขัดแย้ง (conflict) → `git merge --abort` ทันที แล้วหยุดรายงาน user** (ไฟล์ที่ขัดแย้ง + commit ทั้งสองฝั่ง) · ห้ามแก้ conflict ในไฟล์โค้ดเอง
 - **รายงาน user (ภาษาไทยง่าย ๆ ไม่ใช้ศัพท์ภายใน — ห้ามตอบแค่ "ผ่านกี่งาน")** ตามหัวข้อนี้ทุกครั้ง ทุกสถานะ:
   1. **งานนี้คืออะไร** — 1 บรรทัด (ชื่อแผน + เป้าหมายเป็นภาษาคน)

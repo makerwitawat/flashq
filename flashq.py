@@ -22,7 +22,7 @@
   python flashq.py wait <job|แผน> [--timeout-min 480]                  รอจนงานจบแล้วพิมพ์ FLASH_RUN=... (รันใน background ของ Claude · ไม่ต้อง sleep/poll)
   python flashq.py shrink <รูป...> [--max 800]                           ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (รูปใหญ่กิน token ทุก turn)
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
-  python flashq.py install [--force] [--hooks]                          ติดตั้ง /flash + agent (opencode) · /flash-* + flash-checker + hooks (Claude) แบบ global · --hooks = ลงทะเบียน image_guard ใน ~/.claude/settings.json
+  python flashq.py install [--force] [--hooks]                          ติดตั้ง /flash + agent (opencode) · /flash-* + flash-checker + hooks (Claude) แบบ global · --hooks = ลงทะเบียน image_guard · inbox_notify · run_guard ใน ~/.claude/settings.json
   python flashq.py init [--project <dir>] [--force] [--install] [--commit]       ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
   python flashq.py config [max_parallel [<n>]]                          ดู/ตั้งค่า (จำนวนงานที่รันพร้อมกันได้)
@@ -826,7 +826,7 @@ def take_slot(job: dict, extra: bool) -> int:
 def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
     """คืน "ok" | "busy" | "timeout" · FIFO ตาม created ของงานที่ยังมีชีวิต
     ได้ช่องเมื่อ ไม่มีงานรอก่อนหน้า + ช่องที่ใช้ < max_parallel · หรือมีสัญญาณ run_now (ช่องพิเศษ เกิน max_parallel ได้)"""
-    t0, last = time.time(), None
+    t0, last, queued_hint = time.time(), None, False
     key = (job["created"], job["id"])
     flag = RUN_NOW / job["id"]
     while True:
@@ -860,6 +860,10 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
             print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids} · ช่อง {len(held)}/{limit})"
                   + (f" · {reason}" if reason else "") + " — รอคิว…", flush=True)
             last = (pos, len(held), limit, reason)
+            if not queued_hint:
+                queued_hint = True
+                print("หมายเหตุ: คำสั่งนี้เฝ้างานจนจบ — ต้องรันด้วย run_in_background: true ตรง ๆ แล้วรอแจ้งเตือน (ห้ามต่อ & · sleep · head) "
+                      "ถ้าเผลอทำไปแล้ว รัน `flashq wait <job>` ใน background ต่อได้", flush=True)
         if time.time() - t0 > wait_min * 60:
             print(f"FLASH_RUN=QUEUE_TIMEOUT รอคิวเกิน {wait_min:g} นาที", flush=True)
             return "timeout"
@@ -4016,10 +4020,18 @@ def cmd_install(a) -> int:
         else:
             print(f"ข้าม       ไม่พบ {inbox_hook} → ลงทะเบียน hook ไม่ได้")
             rc = 1
+        run_hook = claude_home / "hooks" / "run_guard.py"
+        if run_hook.exists():
+            print(register_hook(claude_home / "settings.json", "PreToolUse", "Bash|PowerShell", f'python "{run_hook.as_posix()}"', "run_guard.py"))
+        else:
+            print(f"ข้าม       ไม่พบ {run_hook} → ลงทะเบียน hook ไม่ได้")
+            rc = 1
     elif guard.exists():
         st = claude_home / "settings.json"
         if "image_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน image_guard (กันอ่านรูปใหญ่/อ่านรูปรัวใน session หลัก) → install --hooks")
+        if "run_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
+            print("หมายเหตุ   ยังไม่ได้ลงทะเบียน run_guard (กันสั่งงานผิดวิธีจนไม่มีใครเฝ้า: & · sleep · ไม่ใส่ run_in_background) → install --hooks")
     return rc
 
 
@@ -6646,7 +6658,7 @@ def main() -> int:
     sw.set_defaults(fn=cmd_switch)
     ins = sp.add_parser("install", help="ติดตั้ง /flash + agent (opencode) และ /flash-* + flash-checker + hooks (Claude) แบบ global")
     ins.add_argument("--force", action="store_true", help="ทับไฟล์ของผู้ใช้ที่ชื่อซ้ำ (สำรอง .bak-flashq ก่อน)")
-    ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) ใน ~/.claude/settings.json")
+    ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) · inbox_notify (UserPromptSubmit) · run_guard (PreToolUse Bash|PowerShell) ใน ~/.claude/settings.json")
     ins.set_defaults(fn=cmd_install)
     ini = sp.add_parser("init", help="ตั้งค่าโปรเจกต์ใหม่ (.flash.json ตรวจ branch หลักเอง · .gitignore · แม่แบบแผน)")
     ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")

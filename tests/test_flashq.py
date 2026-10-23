@@ -394,15 +394,74 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(st["model"], "claude-sonnet-5")
         self.assertEqual(len(st["hooks"]["Stop"]), 1)
         pre = st["hooks"]["PreToolUse"]
-        self.assertEqual(len(pre), 1)
+        self.assertEqual(len(pre), 2)
         self.assertEqual(pre[0]["matcher"], "Read")
         self.assertIn("image_guard.py", pre[0]["hooks"][0]["command"])
+        self.assertEqual(pre[1]["matcher"], "Bash|PowerShell")
+        self.assertIn("run_guard.py", pre[1]["hooks"][0]["command"])
         r = self.run_q("install", "--hooks", env=env)
         self.assertIn("เหมือนเดิม  hook", r.stdout)
-        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 1)
+        self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 2)
         ups = json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["UserPromptSubmit"]
         self.assertEqual(len(ups), 1)
         self.assertIn("inbox_notify.py", ups[0]["hooks"][0]["command"])
+
+    def test_run_guard_hook(self):
+        """ยามส่งงาน: คำสั่งส่งงานต้อง run_in_background จริง · `&` · sleep · nohup · Start-Process · ต่อท่อ head/tail = บล็อก (exit 2) · ถูกวิธี = ผ่านพร้อมคำเตือน · คำสั่งอื่น/--help/ปิดยาม = เงียบ"""
+        guard = REPO / "hooks" / "run_guard.py"
+
+        def hook(cmd, bg=True, tool="Bash"):
+            ti = {"command": cmd}
+            if bg is not None:
+                ti["run_in_background"] = bg
+            data = json.dumps({"tool_name": tool, "session_id": "s1", "tool_input": ti})
+            return subprocess.run([sys.executable, str(guard)], input=data, capture_output=True, text=True, encoding="utf-8",
+                                  env=self.env, timeout=30)
+        run = "python D:/MyCode/flashq/flashq.py run docs/p.md T-01..T-02 --switch-on-quota 4"
+        r = hook(run)  # ถูกวิธี: ผ่าน + แทรกคำเตือนให้หยุดนิ่งรอแจ้งเตือน
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("หยุดนิ่งรอแจ้งเตือน", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+        r = hook(run, bg=False)  # foreground = ไม่มีใครเฝ้า
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("run_in_background", r.stderr)
+        r = hook(run, bg=None)
+        self.assertEqual(r.returncode, 2)
+        # ท่าที่เคยพลาดจริง: ต่อ & แล้ว sleep + head
+        r = hook("cd /d/x; python tools/plans/flash_run.py docs/p.md T-00..T-02 --skip-precheck > Temp/o.txt 2>&1 &\nsleep 30; head -6 Temp/o.txt")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("`&`", r.stderr)
+        self.assertIn("sleep", r.stderr)
+        for bad in (run + " &", "nohup " + run, run + " | tail -5", run + "; sleep 5", "Start-Process python -ArgumentList 'flashq.py run p.md T-01'",
+                    "python flashq.py wait 2026_1 ; Start-Sleep 20"):
+            self.assertEqual(hook(bad, tool="PowerShell" if "Start-" in bad else "Bash").returncode, 2, bad)
+        # wrapper ของโปรเจกต์ (flash_run.py) นับเป็น run · ชื่ออื่นตั้งใน config
+        self.assertEqual(hook("python tools/plans/flash_run.py docs/p.md T-01", bg=False).returncode, 2)
+        self.assertEqual(hook("python tools/x/my_wrap.py docs/p.md T-01", bg=False).returncode, 0)
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"run_guard_wrappers": ["my_wrap.py"]}), encoding="utf-8")
+        self.assertEqual(hook("python tools/x/my_wrap.py docs/p.md T-01", bg=False).returncode, 2)
+        (self.home / "config.json").unlink()
+        # ผ่าน: อยู่ในเครื่องหมายคำพูด (บรีฟมี & sleep) · redirect 2>&1 · wait สั้น · --help · คำสั่งอื่น · call operator ของ PowerShell
+        self.assertEqual(hook('python flashq.py investigate "หา bug & sleep | head" --auto').returncode, 0)
+        self.assertEqual(hook(run + " 2>&1").returncode, 0)
+        self.assertEqual(hook("python flashq.py wait 2026_1 --timeout-min 1", bg=False).returncode, 0)
+        self.assertEqual(hook("python flashq.py wait 2026_1", bg=True).returncode, 0)
+        self.assertEqual(hook("python flashq.py wait 2026_1", bg=False).returncode, 2)
+        self.assertEqual(hook("python flashq.py run --help", bg=False).returncode, 0)
+        self.assertEqual(hook("python flashq.py status", bg=False).returncode, 0)
+        self.assertEqual(hook("git status && sleep 1 &", bg=False).returncode, 0)
+        # เนื้อหา heredoc (เช่นข้อความ commit ที่เล่าเหตุการณ์ flash_run.py … & sleep) เป็นข้อความ ไม่ใช่คำสั่ง
+        msg = "git commit -F - <<'EOF'\nflashq: เคยพลาด flash_run.py x.md T-01 & sleep 30; head -6 o.txt\nEOF\ngit log -1"
+        self.assertEqual(hook(msg, bg=False).returncode, 0)
+        self.assertEqual(hook(msg + "\npython flashq.py run p.md T-01", bg=False).returncode, 2)  # คำสั่งหลัง heredoc ยังถูกตรวจ
+        r = hook("& python tools/plans/flash_run.py docs/p.md T-01", tool="PowerShell")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(hook("ls", tool="Read").returncode, 0)
+        (self.home / "run_guard_off").write_text("", encoding="utf-8")  # ปิดยามชั่วคราว
+        self.assertEqual(hook(run, bg=False).returncode, 0)
+        (self.home / "run_guard_off").unlink()
+        (self.home / "config.json").write_text(json.dumps({"run_guard": False}), encoding="utf-8")
+        self.assertEqual(hook(run, bg=False).returncode, 0)
 
     def test_notify_inbox_and_hook(self):
         """งานจบ → inbox · hook UserPromptSubmit แทรกผลให้ session ที่สั่ง (หรือโปรเจกต์เดียวกัน) ครั้งเดียวแล้วย้ายเข้า done · session อื่นไม่ได้ · notify=false = เงียบ"""
