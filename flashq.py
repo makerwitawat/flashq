@@ -1530,7 +1530,8 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     t0, status = time.time(), "OK"
     head0 = _git(root, "rev-parse", "HEAD")  # มี commit ใหม่หลังรัน = งานสำเร็จบางส่วน (ใช้ตัดสิน DENIED กับ OK)
     with open(log, "wb") as fo, open(err, "wb") as fe:
-        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe, env=env)
+        # stdin=DEVNULL: opencode run อ่าน stdin จนจบก่อนสร้าง session — ถ้าสืบทอดท่อที่ไม่ปิดจากตัวสั่ง จะค้างหลัง log `init` ตลอดไป (NOSTART)
+        p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe, stdin=subprocess.DEVNULL, env=env)
         job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
         sid = wait_session(p, log, START_LIMIT_FIRST_SEC if attempt == 1 else START_LIMIT_SEC)
