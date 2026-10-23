@@ -56,7 +56,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 
 ## API ของหน้าเว็บ (127.0.0.1 เท่านั้น)
 - GET: `/` (ui.html + token) · `/api/state` · `/api/log` · `/api/why` · `/api/overlap` · `/api/plans` (คืน `qa_presets`/`doc_presets` ด้วย) · `/api/flash_usage?days=` (สรุป token/USD ของ Flash + ประมาณการประหยัด · `flash_usage_summary`) · `/api/doc_diff?id=` (diff ของร่างเอกสาร)
-- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/claude_check` (เปิด session Claude ตรวจงาน) · `/api/goal` · `/api/switch` · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
+- POST (ต้องผ่าน Host/Origin + token): `/api/cancel` · `/api/stop` · `/api/runnow` · `/api/config` · `/api/dismiss` · `/api/submit` · `/api/retry` · `/api/prune` · `/api/open` · `/api/claude_check` (เปิด session Claude ตรวจงาน) · `/api/goal` · `/api/switch` · `/api/accounts` (เพิ่ม/แก้/ลบ/ย้าย/reset บัญชีที่ `~/.flashq/accounts.json`) · `/api/role_model` (ตั้งโมเดลบทบาท) · `/api/doc_review` (รับ/ทิ้งร่างเอกสาร · ทิ้งต้อง `confirm`=id · `force` ทับไฟล์ที่แก้ต่อ)
 - คำสั่งที่หน้าเว็บสั่งรัน (`submit`/`retry`) สร้าง argv เป็น list (`build_run_argv`) แล้ว `spawn_run` แบบ detached ไม่ผ่าน shell
 
 ## `ui.html`
