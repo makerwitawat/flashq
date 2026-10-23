@@ -250,6 +250,8 @@ body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: 
 .of-t { fill: var(--text); font-size: 12px; }
 .of-tb { fill: var(--text); font-size: 13px; font-weight: 700; }
 .of-tm { fill: var(--muted); font-size: 11px; }
+.of-tm.mq { animation: of-mq var(--mqd, 8s) ease-in-out infinite alternate; }  /* ข้อความในแถบที่ยาวเกินกรอบ = วิ่งไปมา (ตัววิ่ง) · ชี้เพื่ออ่านเต็ม */
+@keyframes of-mq { 0%, 18% { transform: translateX(0); } 82%, 100% { transform: translateX(var(--mq, 0px)); } }
 .of-badge { fill: var(--accent); }
 .of-badget { fill: var(--accent-text); font-size: 10px; font-weight: 700; }
 .of-pb-bg { fill: var(--line); }
@@ -1778,11 +1780,28 @@ const stripHead = (ico, name, n) => `${ico} ${name}` + (n ? ` · ${n} งาน`
 const STRIP_FULL = 86, STRIP_SLIM = 40;
 const standX = (x) => Math.max(DESK_X0 + 70, Math.min(x, SCENE_W - 500));  // ตัวละครในแถบยืนตรงคอลัมน์โต๊ะของงาน แต่ไม่ล้ำเข้าพื้นที่ข้อความ (ชิดขวา ยาวสุด ~450 หน่วย)
 const stripLabels = (id, head, rows, sy, slim) => slim
-  ? `<text class="of-tb" id="${id}H" x="${DESK_X0 + 18}" y="${sy + 25}">${head}</text><text class="of-tm" id="${id}T0" x="${SCENE_W - 26}" y="${sy + 25}" text-anchor="end">${esc(rows[0] || "")}</text>`
+  ? `<text class="of-tb" id="${id}H" x="${DESK_X0 + 18}" y="${sy + 25}">${head}</text>${stripRow(id, 0, sy + 25, rows[0])}`
   : `<text class="of-tb" id="${id}H" x="${SCENE_W - 26}" y="${sy + 20}" text-anchor="end">${head}</text>${stripTexts(id, rows, sy)}`;
-const stripTexts = (id, rows, sy) => Array.from({ length: STRIP_ROWS }, (_, i) =>
-  `<text class="of-tm" id="${id}T${i}" x="${SCENE_W - 26}" y="${sy + 39 + i * 16}" text-anchor="end">${esc(rows[i] || "")}</text>`).join("");
-function setStrip(id, head, rows) { setText(id + "H", head); for (let i = 0; i < STRIP_ROWS; i++) setText(id + "T" + i, rows[i] || ""); }
+const stripTexts = (id, rows, sy) => Array.from({ length: STRIP_ROWS }, (_, i) => stripRow(id, i, sy + 39 + i * 16, rows[i])).join("");
+// บรรทัดข้อความของแถบ: ยาวเกินกรอบ MQ_W = ตัววิ่ง (fitMq) · ชี้ที่บรรทัด = tooltip แสดงข้อความเต็ม (data-tip บน <g> · กรอบใส ๆ ให้ชี้ง่าย)
+const MQ_W = 440, MQ_R = () => SCENE_W - 26;
+const stripRow = (id, i, y, t = "") => `<g clip-path="url(#ofMq)" data-tip="${esc(t)}"><rect x="${MQ_R() - MQ_W}" y="${y - 13}" width="${MQ_W + 4}" height="17" fill="transparent"/><text class="of-tm" id="${id}T${i}" x="${MQ_R()}" y="${y}" text-anchor="end">${esc(t)}</text></g>`;
+function fitMq(e) {
+  let over = 0;
+  try { over = Math.ceil(e.getComputedTextLength()) - MQ_W; } catch (_) {}
+  if (over > 2) {
+    if (!e.classList.contains("mq")) { e.setAttribute("text-anchor", "start"); e.setAttribute("x", MQ_R() - MQ_W); e.classList.add("mq"); }
+    if (e._mq == null || Math.abs(e._mq - over) > 8) { e._mq = over; e.style.setProperty("--mq", -(over + 8) + "px"); e.style.setProperty("--mqd", Math.max(4, over / 22 + 3).toFixed(1) + "s"); }  // เวลาเดินทุกวิ ความยาวขยับนิดเดียว = ไม่รีเซ็ตความเร็ว
+  } else if (e.classList.contains("mq")) { e.classList.remove("mq"); e.setAttribute("text-anchor", "end"); e.setAttribute("x", MQ_R()); e._mq = null; }
+}
+function setRow(id, i, t) {
+  const e = $(id + "T" + i); if (!e) return;
+  const g = e.parentNode;
+  if (e.textContent !== t) e.textContent = t;
+  if (g.dataset.tip !== t) { g.dataset.tip = t; if (tipFor === g) tipShow(g); }  // กำลังชี้อยู่ = ข้อความในกล่องเดินตาม
+  fitMq(e);
+}
+function setStrip(id, head, rows) { setText(id + "H", head); for (let i = 0; i < STRIP_ROWS; i++) setRow(id, i, rows[i] || ""); }
 const elapsedTxt = (r) => (r.elapsed_sec == null ? "" : ` · ⏱ ${mmss(r.elapsed_sec + (Date.now() - stateAt) / 1000)}`);
 const deskRows = (m, role, ico, what) => m.desks.map((r, i) => (r && roleOf(r) === role ? `${ico} ช่อง ${i + 1} ${trunc(r.project_name, 12)} · ${what(r)}${elapsedTxt(r)}${thinkShort(r) ? ` · 🧠 ${thinkShort(r)}` : ""}` : null)).filter(Boolean);
 function inspRows(m) {
@@ -1835,6 +1854,7 @@ function sceneSVG(m) {
   };
   const label = `ออฟฟิศ flashq: กำลังทำ ${total} งาน · รอคิว ${m.queue.length} งาน`;
   let g = `<svg viewBox="0 0 ${SCENE_W} ${H}" role="img" aria-label="${esc(label)}" xmlns="http://www.w3.org/2000/svg">
+    <defs><clipPath id="ofMq"><rect x="${MQ_R() - MQ_W}" y="0" width="${MQ_W + 4}" height="${H}"/></clipPath></defs>
     <rect class="of-floor" width="${SCENE_W}" height="${H}"/><rect class="of-wall" width="${SCENE_W}" height="58"/>
     ${decorSVG(H)}
     <rect class="of-door" x="112" y="6" width="76" height="52" rx="6"/><path class="of-frame" style="stroke-width:1.2" d="M120 14h28v38h-28zM152 14h28v38h-28z"/><circle cx="178" cy="34" r="3" fill="#f6d365"/>
