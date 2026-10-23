@@ -1740,6 +1740,61 @@ class FlashqTest(unittest.TestCase):
         for needle in ("thinkText", "thinkShort", "thinkChip", "ความคิด"):
             self.assertIn(needle, html)
 
+    def test_ui_state_shows_claude_session_title(self):
+        """ui: งานรอคิว/รันอยู่ใส่ claude_session + claude_title (ชื่อที่ผู้ใช้เห็นใน sidebar ของ Claude Code จาก transcript) ให้การ์ดบอกว่างานมาจาก session ไหน ·
+        ไม่เจอ transcript = ชื่อว่าง (รหัสยังมี) · งานที่จบแล้ว: ใส่ชื่อเฉพาะ 8 แถวที่ตาราง "เพิ่งจบ" โชว์ · งานที่ไม่มี session = ว่างทั้งคู่"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        claude = self.tmp / "claude_home"
+        proj = claude / "projects" / "D--x"
+        proj.mkdir(parents=True)
+        (proj / "sess-a.jsonl").write_text("\n".join([
+            json.dumps({"type": "agent-name", "agentName": "ชื่อเก่า"}, ensure_ascii=False),
+            json.dumps({"type": "custom-title", "customTitle": "ปัญหา terrain build"}, ensure_ascii=False)]) + "\n", encoding="utf-8")
+        (self.home / "jobs").mkdir(parents=True)
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait(timeout=30)))
+        base_job = {"status": "queued", "pid": sleeper.pid, "pid_start": flashq.proc_start(sleeper.pid), "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"}
+        for n, sess in enumerate(["sess-a", "sess-zzz", ""]):
+            jid = f"20990101_00000{n}_1"
+            (self.home / "jobs" / f"{jid}.json").write_text(json.dumps({**base_job, "id": jid, "created": f"2099-01-01 00:00:0{n}", "claude_session": sess}), encoding="utf-8")
+        (self.home / "jobs" / "20200101_000000_1.json").write_text(json.dumps(
+            {"id": "20200101_000000_1", "status": "ok", "claude_session": "sess-a", "project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01",
+             "created": "2020-01-01 00:00:00", "started": "2020-01-01 00:00:00", "finished": "2020-01-01 00:01:00"}), encoding="utf-8")
+        self.env["FLASHQ_CLAUDE_HOME"] = str(claude)
+        self.env["FLASHQ_CLAUDE_APP_HOME"] = str(self.tmp / "no_app")  # ไม่ให้ชื่อจากแอป Claude จริงของเครื่องนี้ปนเข้ามา
+        base = self.start_ui()
+        st = json.loads(self.http(base + "/api/state")[1])
+        got = {j["claude_session"]: j.get("claude_title") for j in st["queued"]}
+        self.assertEqual(got, {"sess-a": "ปัญหา terrain build", "sess-zzz": "", "": ""})
+        self.assertEqual(st["history"][0]["claude_session"], "sess-a")
+        self.assertEqual(st["history"][0]["claude_title"], "ปัญหา terrain build")  # ตาราง "เพิ่งจบ" (8 แถวแรก) โชว์ชื่อด้วย
+        self.assertIn("fromClaudeHTML", self.http(base + "/")[1])
+
+    def test_open_claude_session_button(self):
+        """ปุ่ม "↩ เปิด session": host id มาจากงาน (claude_host) หรือหาจาก cliSessionId ในโฟลเดอร์ของแอป desktop · ผ่านรูปแบบ local_… เท่านั้น ·
+        ไม่มี session/ไม่พบในแอป = 404 ไม่เปิดอะไร · ชื่อ session ใช้ชื่อจากแอปเมื่อ transcript ไม่มี"""
+        mod = self.load_mod("flashq_open_claude")
+        app = self.tmp / "app_sessions" / "u1" / "u2"
+        app.mkdir(parents=True)
+        (app / "local_aaa-111.json").write_text(json.dumps({"sessionId": "local_aaa-111", "cliSessionId": "cli-1", "title": "ชื่อในแอป"}, ensure_ascii=False), encoding="utf-8")
+        mod.CLAUDE_APP_SESSIONS = self.tmp / "app_sessions"
+        mod.CLAUDE_PROJECTS = self.tmp / "no_transcripts"
+        opened = []
+        mod.open_link = opened.append
+        mod.claude_app_link = lambda path, params: f"claude://code/{path}?session={params['session']}"
+        self.assertEqual(mod.claude_session_title("cli-1"), "ชื่อในแอป")
+        code, d = mod.claude_open_session_action({"claude_session": "cli-1"})  # งานเก่า: หาจากแอป
+        self.assertEqual((code, d["ok"], opened), (200, True, ["claude://code/continue?session=local_aaa-111"]))
+        opened.clear()
+        code, d = mod.claude_open_session_action({"claude_session": "cli-1", "claude_host": "local_bbb"})  # งานใหม่: ใช้ที่บันทึกไว้
+        self.assertEqual((code, opened), (200, ["claude://code/continue?session=local_bbb"]))
+        opened.clear()
+        for bad in ({}, {"claude_session": "cli-zzz"}, {"claude_session": "cli-1", "claude_host": "x;calc"}):
+            code, d = mod.claude_open_session_action(bad)
+            self.assertEqual((code, d["ok"]), (404, False), bad)
+        self.assertEqual(opened, [])
+
     def test_opencode_npm_shim_resolves_to_real_exe(self):
         """opencode.CMD (ตัวห่อ npm) → เรียก opencode.exe ใต้ node_modules ตรง ๆ ไม่ผ่าน cmd.exe · ไม่มี exe ให้ชี้ = คืนตัวห่อเดิม"""
         import importlib.util

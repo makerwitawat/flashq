@@ -2134,7 +2134,7 @@ def cmd_run(a) -> int:
            "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind in AGENT_KINDS),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION,
-           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", "")}
+           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "claude_host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", "")}
     save_job(job)
 
     got = acquire(job, a.wait_min, a.no_wait)
@@ -2837,7 +2837,7 @@ def cmd_qa(a) -> int:
     job = {"id": jid, "project": str(root), "plan": "", "tasks": " ".join(names), "message": "", "kind": "qa", "agent": "flash-tester",
            "prompt": "", "readonly": True, "title": title, "model": "", "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION,
-           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "qa": q}
+           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "claude_host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", ""), "qa": q}
     save_job(job)
     got = acquire(job, a.wait_min, a.no_wait)
     if got != "ok":
@@ -3479,7 +3479,7 @@ def cmd_doc(a) -> int:
     d = {"name": name, "job": jid, "paths": spec["paths"], "since": since, "head0": "", "phase": "queued", "state": "", "verdict": "", "why": [], "changed": []}
     job = {"id": jid, "project": str(root), "plan": "", "tasks": name, "message": "", "kind": "doc", "agent": agent, "prompt": prompt, "readonly": False,
            "title": title, "model": a.model or agent_model(agent), "status": "queued", "pid": os.getpid(), "pid_start": proc_start(os.getpid()),
-           "created": now(), "qv": QUEUE_VERSION, "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "doc": d}
+           "created": now(), "qv": QUEUE_VERSION, "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "claude_host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", ""), "doc": d}
     save_job(job)
     got = acquire(job, a.wait_min, a.no_wait)
     if got != "ok":
@@ -4884,6 +4884,9 @@ def ui_state() -> dict:
                        rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
                               if j.get("plan") else ""))
             dead.append(row)
+        row["claude_session"] = j.get("claude_session") or ""  # session Claude Code ที่สั่งงานนี้ (ผู้ใช้ตามปัญหากลับไปถูก session)
+        if st in ("running", "queued", "dead"):  #งานที่จบแล้วไม่ต้องไล่อ่าน transcript ทุกรอบที่หน้าเว็บถาม
+            row["claude_title"] = claude_session_title(row["claude_session"])
         row["variant"] = j.get("variant") or ""  # ระดับความคิดที่ส่งให้ opencode จริง (ว่าง = ไม่ส่ง ใช้ค่าปกติของ provider)
         if st == "queued":  # ยังไม่เริ่ม = ยังไม่มีค่าบันทึก → บอกค่าที่จะใช้ (ชนิดเดียวกับที่ cmd_run จะคำนวณ)
             row["variant"] = variant_for(j.get("kind") or ("test" if j.get("message") else "work"), None, Path(j.get("project") or "."))
@@ -4923,6 +4926,8 @@ def ui_state() -> dict:
     rv_act, rv_done = ui_reviews()
     history = history[::-1][:300]
     flash_brief_rows(history[:8], raw)
+    for row in history[:8]:  # ตาราง "เพิ่งจบ" โชว์ 8 แถวแรก — ใส่ชื่อ session เฉพาะที่โชว์ (ไม่ไล่อ่าน transcript ของ 300 แถว)
+        row["claude_title"] = claude_session_title(row["claude_session"])
     goals = ui_goals(running, history, queued)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
@@ -5495,6 +5500,12 @@ def make_ui_server(port: int = 4097):
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 code, d = claude_check_action(j, bool(body.get("cli")))
                 return self._send(code, d)
+            if path == "/api/open_claude":  # ปุ่ม "เปิด session" — เปิด session Claude ที่สั่งงานนี้ในแอป desktop
+                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                if not j:
+                    return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
+                code, d = claude_open_session_action(j)
+                return self._send(code, d)
             if path == "/api/goal":  # ปุ่มบนการ์ดเป้าหมาย
                 code, d = goal_ui_action(str(body.get("id") or ""), str(body.get("action") or ""), body)
                 return self._send(code, d)
@@ -5684,8 +5695,64 @@ _TITLE_CACHE: dict[str, tuple[float, str]] = {}
 CLAUDE_PROJECTS = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude") / "projects"  # transcript ของ Claude Code (<โปรเจกต์>/<session>.jsonl · <session>/subagents/agent-*.jsonl)
 
 
+CLAUDE_APP_SESSIONS = Path(os.environ.get("FLASHQ_CLAUDE_APP_HOME") or (Path(os.environ.get("APPDATA") or Path.home() / "Library" / "Application Support") / "Claude")) / "claude-code-sessions"
+_APP_CACHE: dict[str, dict] = {}  # cli session id → {"host": local_…, "title": ชื่อใน sidebar}
+_APP_FILES: dict[str, float] = {}  # ไฟล์ที่อ่านแล้ว → mtime (ไฟล์ไม่เปลี่ยน = ไม่อ่านซ้ำ)
+_APP_SCAN = [0.0]
+
+
+def _scan_app_sessions() -> None:
+    """ทำดัชนี cliSessionId → local_… จากทุกไฟล์ <แอป>/claude-code-sessions/*/*/local_*.json (อ่านเฉพาะไฟล์ใหม่/ที่เปลี่ยน)"""
+    _APP_SCAN[0] = time.time()
+    try:
+        files = list(CLAUDE_APP_SESSIONS.glob("*/*/local_*.json"))
+    except OSError:
+        return
+    for f in files:
+        try:
+            mt = f.stat().st_mtime
+            if _APP_FILES.get(str(f)) == mt:
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            _APP_FILES[str(f)] = mt
+            if d.get("cliSessionId"):
+                _APP_CACHE[str(d["cliSessionId"])] = {"host": str(d.get("sessionId") or f.stem), "title": str(d.get("title") or "")}
+        except (OSError, ValueError):
+            continue
+
+
+def claude_app_session(sid: str) -> dict:
+    """session ของแอป Claude desktop ที่ตรงกับ session id ของ Claude Code (CLAUDE_CODE_SESSION_ID) → {"host": "local_…", "title": ชื่อใน sidebar}
+    หาไม่เจอ (สั่งจาก CLI/ไม่มีแอป/session ใหม่ยังไม่มีไฟล์) = {} · ไล่ไฟล์ใหม่ไม่ถี่กว่า 5 วิ (ชื่อในแอปเปลี่ยนได้ จึงอ่านไฟล์ที่ mtime เปลี่ยนซ้ำ)"""
+    if not sid or not re.fullmatch(r"[\w-]+", sid):
+        return {}
+    if time.time() - _APP_SCAN[0] > 5:
+        _scan_app_sessions()
+    return _APP_CACHE.get(sid, {})
+
+
 def claude_session_title(sid: str) -> str:
-    """ชื่อ session ใน Claude Code (ชื่อที่เห็นใน sidebar) จาก transcript ~/.claude/projects/*/<sid>.jsonl · หาไม่เจอ = ''"""
+    """ชื่อ session ใน Claude Code (ชื่อที่เห็นใน sidebar) จากแอป desktop (ไฟล์ claude-code-sessions · ตรงกับที่เห็นจริง) ไม่เจอ = จาก transcript ~/.claude/projects/*/<sid>.jsonl · หาไม่เจอ = ''"""
+    return claude_app_session(sid).get("title", "") or _claude_transcript_title(sid)
+
+
+def claude_open_session_action(j: dict) -> tuple[int, dict]:
+    """ปุ่ม "เปิด session" บนการ์ดงาน: เปิด session Claude ที่สั่งงานนี้ในแอป Claude desktop (claude://code/continue?session=local_…)
+    host id มาจากงาน (claude_host · งานใหม่) หรือหาจาก session id ของ Claude Code ในโฟลเดอร์ของแอป (งานเก่า) · รับเฉพาะ id ที่ผ่านรูปแบบ local_…"""
+    sid = j.get("claude_session") or ""
+    if not sid:
+        return 404, {"ok": False, "message": "งานนี้ไม่ได้สั่งจาก Claude Code — ไม่มี session ให้เปิด"}
+    host = j.get("claude_host") or claude_app_session(sid).get("host", "")
+    if not re.fullmatch(r"local_[A-Za-z0-9-]{1,64}", host or ""):
+        return 404, {"ok": False, "message": "ไม่พบ session นี้ในแอป Claude desktop (สั่งจาก CLI/session ถูกลบ/เครื่องอื่น) — ค้นชื่อ session ในแอปเอง"}
+    url = claude_app_link("continue", {"session": host})
+    if not url:
+        return 404, {"ok": False, "message": "เครื่องนี้ไม่มีแอป Claude desktop"}
+    open_link(url)
+    return 200, {"ok": True, "message": "เปิด session นี้ในแอป Claude แล้ว (ถ้า session ถูกเก็บถาวร แอปจะไปหน้ารวม)"}
+
+
+def _claude_transcript_title(sid: str) -> str:
     if not sid or not re.fullmatch(r"[\w-]+", sid):
         return ""
     try:

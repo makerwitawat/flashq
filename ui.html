@@ -244,6 +244,12 @@ body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: 
 .goals-compact .goal-phase li:not(.gwarn), .goals-compact .goal-phase > .muted { display: none; }
 .of-card .goal-steps { margin: 0; }
 .of-ch { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.of-from { padding: 0.25rem 0.55rem; border-left: 4px solid var(--accent); border-radius: 0.3rem; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }  /* ชื่อ session Claude ที่สั่งงาน = แถบสีเด่น (ตามปัญหากลับไปถูก session) */
+.of-from b { font-size: 1.02em; }
+.of-from { display: flex; align-items: center; gap: 0.4rem; }
+.of-from > b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.of-from-btn { margin-left: auto; flex: none; white-space: nowrap; font-size: 0.82rem; padding: 0.05rem 0.5rem; }
+.of-from-sm { display: inline-block; max-width: 100%; margin-top: 0.15rem; padding: 0 0.45rem; border-left: 3px solid var(--accent); border-radius: 0.25rem; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .of-proj { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-weight: 600; font-size: 0.88rem; color: #fff; background: hsl(var(--h) 55% 42%); }
 .of-bar { height: 0.7rem; background: var(--line); border-radius: 1rem; overflow: hidden; position: relative; }
 .of-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 1rem; transition: width .8s ease; }
@@ -2251,11 +2257,26 @@ function planTrailHTML(r) {
   if (!parts.length) parts.push("รอบแรกของแผนนี้ — ยังไม่เคยรัน/ตรวจ และไม่มีผู้สืบก่อนหน้า");
   return `<div class="goal-steps">${steps}</div>${parts.map((x) => `<div class="of-line muted of-full">${esc(x)}</div>`).join("")}${usageLineHTML(t.usage)}`;
 }
+/* บอกว่างานมาจาก session Claude Code ไหน (ชื่อที่เห็นใน sidebar) — ไว้ตามปัญหากลับไปถูก session · ไม่มีชื่อ = โชว์รหัสสั้น · ไม่มี session เลย = ไม่โชว์ */
+function fromClaudeHTML(j) {
+  const sid = j.claude_session;
+  if (!sid) return "";
+  const name = j.claude_title || "(ไม่พบชื่อ session)";
+  return `<div class="of-line of-clip of-from" title="${esc("สั่งงานนี้จาก session Claude Code: " + name + "\nรหัส " + sid)}">💬 จาก Claude session: <b>${esc(trunc(name, 60))}</b> <span class="mono muted">${esc(sid.slice(0, 8))}</span>${openClaudeBtn(j)}</div>`;
+}
+function openClaudeBtn(j) {
+  return `<button class="of-from-btn" data-openclaude="${esc(j.id)}" title="เปิด session Claude นี้ในแอป Claude (แท็บ Code) — ไปดู/ตามปัญหาที่ต้นทางได้เลย">↩ session ต้นทาง</button>`;
+}
+function fromClaudeChip(j) {  // แบบเล็กสำหรับแถวตาราง (คิว/เพิ่งจบ)
+  if (!j.claude_session) return "";
+  return `<div><span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(trunc(j.claude_title || "(ไม่พบชื่อ session)", 50))}</span> ${openClaudeBtn(j)}</div>`;
+}
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (isQa(r) ? "" : r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card${compactRuns()[r.id] ? ' compact' : ''}" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact-run="${esc(r.id)}" title="ย่อ/ขยายการ์ดนี้: ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว">${compactRuns()[r.id] ? '▦ ขยาย' : '▤ ย่อ'}</button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
+    ${fromClaudeHTML(r)}
     ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     ${r.goal ? "" : planTrailHTML(r)}
@@ -2274,7 +2295,7 @@ function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
   return `<div class="table-wrap"><table><tr><th>#</th><th>โปรเจกต์ · งาน</th><th>คาดการณ์</th></tr>
     ${m.queue.map((j, k) => `<tr class="click" data-oflog="${esc(j.id)}"><td><b>${j.position}</b></td>
-      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span><div class="muted">รอมาแล้ว <span id="ofQW${k}"></span>${modelText(j) ? " · 🤖 " + esc(modelText(j)) : ""}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
+      <td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${fromClaudeChip(j)}<div class="muted">รอมาแล้ว <span id="ofQW${k}"></span>${modelText(j) ? " · 🤖 " + esc(modelText(j)) : ""}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>${j.wait_reason ? `<div class="wait-why${/^ชนกับ|^แผนสั่ง|ล็อกหัวคิว/.test(j.wait_reason) ? " clash" : ""}">↳ ${esc(j.wait_reason)}</div>` : ""}</td>
       <td class="nw">เริ่ม <b id="ofQS${k}"></b><br>เสร็จ <b id="ofQE${k}"></b><div class="row" style="margin-top:0.3rem">${j.run_now ? `<span class="muted">กำลังขอช่อง…</span>` : `<button class="primary" data-runnow="${esc(j.id)}" title="บังคับให้เริ่มทันทีในช่องพิเศษ (ตรวจไฟล์ซ้อนก่อน)">รันเลย</button>`}<button class="danger" data-cancel="${esc(j.id)}">ยกเลิก</button></div></td></tr>`).join("")}</table></div>
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
@@ -2290,7 +2311,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
@@ -2329,7 +2350,7 @@ function officeUpdate() {
   const fit = fitScene();  // กรอบ/ซูมเปลี่ยน = วาดเฉพาะฉากใหม่ตามความกว้างใหม่
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now, j.claude_title]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model, r.claude_title]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -2446,7 +2467,11 @@ $("officeView").addEventListener("click", async (e) => {
   catch { out.textContent = "ถามไม่ได้ (เซิร์ฟเวอร์ UI ไม่ตอบ)"; }
   w.disabled = false;
 });
-$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel],button[data-ofwhy]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel],button[data-ofwhy],button[data-openclaude]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+document.addEventListener("click", async (e) => {  // ปุ่ม "↩ เปิด session": เปิด session Claude ที่สั่งงานนี้ในแอป desktop
+  const b = e.target.closest("button[data-openclaude]"); if (!b) return;
+  const d = await post("/api/open_claude", { id: b.dataset.openclaude }); toast(d.message || d.error || "ผิดพลาด");
+});
 $("goals").addEventListener("click", (e) => { const t = e.target.closest("button[data-oflog]"); if (t) openLog(t.dataset.oflog); });
 /* ปุ่มบนการ์ดเป้าหมาย (ทั้งแดชบอร์ดและออฟฟิศ) */
 document.addEventListener("click", async (e) => {
