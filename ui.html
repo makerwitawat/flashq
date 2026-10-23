@@ -645,7 +645,7 @@ const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], denied: ["DENIED"
   nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
   dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
 const FINAL = ["ok", "fail", "denied", "quota", "timeout", "nostart"];
-const badge = (st) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}">${esc(t)}</span>`; };
+const badge = (st, why) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}"${why ? ` title="${esc(why)}"` : ""}>${esc(t)}</span>`; };
 /* opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ) → บอก path ที่ถูกปฏิเสธบนแถวงาน · ทางแก้เต็มอยู่ในกล่อง log (denied_help) */
 const denyNote = (j) => (j.perm_denied || []).length ? `<div class="deny" title="opencode ปฏิเสธสิทธิ์ · ทางแก้: external_dirs ใน .flash.json หรือ permission.external_directory ใน opencode.json (ดูกล่อง log)">🚫 ปฏิเสธสิทธิ์: ${esc(j.perm_denied.join(" · "))}</div>` : "";
 const dur = (s) => {
@@ -849,7 +849,7 @@ function render() {
   setHTML("history", hist.length ? `<table>
     <tr><th>สถานะ</th><th>โปรเจกต์</th><th>แผน · งาน</th><th>บัญชี</th><th>เริ่ม</th><th>ระยะเวลา</th><th></th></tr>
     ${hist.map((j) => `<tr class="click${logJob === j.id ? " sel" : ""}" data-log="${esc(j.id)}">
-      <td>${badge(j.state)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td>
+      <td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)}</td><td class="mono">${esc(what(j))}${roundTag(j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td>
       <td class="muted mono nw">${esc((j.model || "").split("/")[0] || "-")}${thinkLine(j)}</td>
       <td class="muted nw">${esc(j.started || j.created)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
@@ -2279,8 +2279,9 @@ function queueHTML(m) {
     <p class="of-note">เวลาที่คาดคำนวณจากลำดับคิว + ช่องว่าง + ประวัติ (ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้)</p>`;
 }
 /* บรรทัดราคาของงานที่จบ: ที่ opencode คิดจริง (Flash) เทียบกับถ้า Claude ทำ token เท่ากัน (ประมาณ · ต่อรุ่นใน flash_compare) */
-function recentCostHTML(f) {
-  if (!f) return "";
+function recentCostHTML(f, j) {
+  if (!f) return j && j.state !== "ok" && j.state !== "cancelled" && j.finished
+    ? `<div class="muted" title="log ของงานนี้ไม่มีรอบที่โมเดลตอบจบเลย (มักค้างตั้งแต่ส่งคำขอ) จึงไม่มี token ให้นับ">🪙 ยังไม่มี token — โมเดลยังไม่ตอบรอบไหนเลย</div>` : "";
   const cl = (f.compare || []).map((c) => `${esc(c.model.replace(/^claude-/, ""))} ${usd(c.usd)}`).join(" · ");
   const tip = "จ่ายจริง = ที่ opencode คิดจาก log ของงานนี้ (รวม subagent" + (f.sub_tokens ? ` ${fmtTok(f.sub_tokens)} token` : "") + ") · Claude = ประมาณการสมมติใช้ token เท่ากัน ตามตารางราคาในตัว (จริง ๆ Claude มักใช้น้อยกว่า)";
   return `<div class="muted" title="${esc(tip)}">🪙 ${fmtTok(f.tokens)} token · opencode <b>${usd(f.usd)}</b>${cl ? ` · ถ้าเป็น Claude ≈ ${cl}` : ""}</div>`;
@@ -2289,7 +2290,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */

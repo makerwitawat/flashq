@@ -4754,6 +4754,7 @@ def ui_state() -> dict:
         else:
             row["duration_sec"] = (_secs(j.get("started") or j.get("created", ""), j["finished"])
                                    if j.get("finished") else None)  # งานตายไม่มีเวลาจบ = ไม่รู้ระยะเวลา
+            row["reason"] = job_reason(j, st)
             history.append(row)
     for i, row in enumerate(queued, 1):
         row["position"] = i
@@ -4787,6 +4788,23 @@ def ui_state() -> dict:
             "review_ttl_min": REVIEW_TTL_MIN,
             "guard": {"idle_min": DEFAULTS["shell_idle_min"], "kills": sorted(kills, key=lambda k: k["at"])[-20:][::-1]},
             "goals": goals}
+
+
+def job_reason(j: dict, state: str) -> str:
+    """สาเหตุสั้น ๆ ของงานที่จบไม่ OK สำหรับ tooltip บนป้ายสถานะ (หน้าเว็บ) · ว่าง = ไม่มีข้อมูลสาเหตุ"""
+    last = one_line(j.get("last") or "", 400)
+    if state == "timeout":
+        return one_line(j.get("timeout_reason") or "หมดเวลา (ไม่มีบันทึกสาเหตุ)", 500)
+    if state == "nostart":
+        diag = j.get("nostart_diag") or []
+        return one_line(f"opencode ไม่เริ่มทำงานภายใน {START_LIMIT_SEC} วิ" + (f" · รอบสุดท้าย: {diag[-1]}" if diag else ""), 500)
+    if state == "denied":
+        return one_line("opencode ปฏิเสธสิทธิ์: " + " · ".join(f"{x.get('kind', '')}: {x.get('path', '')}" for x in (j.get("perm_denied") or [])[:5]), 500)
+    if state == "quota":
+        return last or "โควตาของโมเดลหมด"
+    if state == "fail":
+        return (f"exit {j.get('rc')} · " if j.get("rc") not in (None, "") else "") + (last or "ไม่มีข้อความท้าย — เปิด log ดู")
+    return ""
 
 
 def flash_brief_rows(rows: list, raw: dict) -> None:
