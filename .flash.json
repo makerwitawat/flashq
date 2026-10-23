@@ -1,0 +1,8 @@
+{
+  "qa": {
+    "presets": {
+      "ui": {"cmds": ["python tests/ui_smoke.py"], "expect": "UI_SMOKE OK", "env_exit": 3, "timeout_min": 5, "retry": 1},
+      "unit": {"cmd": "python -m pytest tests/test_flashq.py -q -x", "expect": "\\d+ passed", "timeout_min": 20, "idle_min": 8}
+    }
+  }
+}
