@@ -300,6 +300,52 @@ class FlashqTest(unittest.TestCase):
         r = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env={**env, "FLASHQ_SMOKE_PORT": "4555"}, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.stdout.strip(), "4555")
 
+    def test_scope_command_checks_commit_files_against_plan(self):
+        """flashq scope: commit แตะเฉพาะไฟล์ในแผน = PASS · แตะเกิน = EXTRA · ไม่มี hash = NOCOMMIT · ไฟล์แผนเองผ่านเสมอ · always_ok ใน .flash.json ยกเว้นเพิ่มได้"""
+        import tempfile
+        plan_rel = "docs/x/PLAN_X.md"
+        plan = "- [x] **T-01** `src/a.cpp`\n  - ไฟล์: `src/a.cpp`\n- [ ] **T-02** `src/b.cpp`\n- [x] **T-03** `src/a.cpp`\n\n## §4 ผล\n| งาน | ผล | commit |\n|---|---|---|\n| T-01 | OK | {h1} |\n| T-03 | OK | {h3} |\n"
+        with tempfile.TemporaryDirectory(prefix="scope_") as d:
+            def git(*args):
+                r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", d, *args], capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                return r.stdout.strip()
+
+            def put(rel, text):
+                p = Path(d, *rel.split("/"))
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text, encoding="utf-8", newline="\n")
+
+            def scope(*tasks):
+                r = subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", plan_rel, *tasks, "--project", d],
+                                   capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=60)
+                return r.returncode, r.stdout
+            git("init", "-q", "-b", "main")
+            put("src/a.cpp", "a\n"); put("src/b.cpp", "b\n"); put(plan_rel, plan.format(h1="0000000", h3="0000000"))
+            git("add", "-A"); git("commit", "-qm", "base")
+            put("src/a.cpp", "a2\n"); put(plan_rel, plan.format(h1="0000000", h3="0000000") + "\nติ๊ก\n")
+            git("add", "-A"); git("commit", "-qm", "T-01")
+            h1 = git("rev-parse", "--short", "HEAD")
+            put("src/a.cpp", "a3\n"); put("docs/other.md", "x\n")
+            git("add", "-A"); git("commit", "-qm", "T-03 เกิน")
+            h3 = git("rev-parse", "--short", "HEAD")
+            put(plan_rel, plan.format(h1=h1, h3=h3))
+            git("add", "-A"); git("commit", "-qm", "plan")
+            code, out = scope("T-01")
+            self.assertEqual(code, 0, out)
+            self.assertIn("SCOPE T-01 OK", out)  # แตะ src/a.cpp + ไฟล์แผนเอง (นอก docs/plans/) ไม่นับเกิน
+            code, out = scope("T-02")
+            self.assertEqual(code, 1, out)
+            self.assertIn("NOCOMMIT", out)
+            code, out = scope("T-03")
+            self.assertEqual(code, 1, out)
+            self.assertIn("EXTRA 1 ไฟล์: docs/other.md", out)
+            Path(d, ".flash.json").write_text(json.dumps({"scope": {"always_ok": ["docs/*.md"]}}), encoding="utf-8")
+            code, out = scope("T-01", "T-03")  # หลายงานเว้นวรรคได้ · always_ok ยกเว้น docs/other.md
+            self.assertEqual(code, 0, out)
+            self.assertIn("SCOPE_RESULT=PASS", out)
+            self.assertEqual(subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", "nope.md", "--project", d], capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=60).returncode, 2)
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)

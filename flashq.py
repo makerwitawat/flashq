@@ -3278,6 +3278,96 @@ def doc_since(root: Path, name: str, given: str) -> tuple[str, str]:
     return (commit(done[-1]["doc"].get("head0", "")) if done else ""), ""
 
 
+# ---------- ตรวจขอบเขตไฟล์ของ commit กับแผน (กลไกล้วน ไม่กินโควตาโมเดล) ----------
+SCOPE_HEAD_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s*\*\*(T-\d+[A-Za-z]*\d*)\b([^*]*)\*\*(.*)$")  # หัวงาน: **T-01** · **T-01 (RED)** · **T-12 + DoD**
+SCOPE_ROW_RE = re.compile(r"^\|\s*(T-\d+[A-Za-z]*\d*)\b[^|]*\|([^|]*)\|([^|]*)\|")  # แถว §4: | T-01 | ผล | hash |
+SCOPE_HASH_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+SCOPE_PATH_RE = re.compile(r"`([^`\s]+[/\\.][^`\s]*)`")
+
+
+def scope_norm(p: str) -> str:
+    p = p.replace("\\", "/")
+    return p[2:] if p.startswith("./") else p
+
+
+def scope_parse(text: str) -> tuple[dict[str, set[str]], dict[str, list[str]]]:
+    """อ่านแผน → (path ที่แต่ละงานแก้ได้, hash ใน §4) · path = ทุกตัวใน ` บนบรรทัดหัวงาน + บรรทัด "ไฟล์:"/"แก้ไฟล์:" ใต้หัวงาน"""
+    allow: dict[str, set[str]] = {}
+    hashes: dict[str, list[str]] = {}
+    cur = None
+    for line in text.splitlines():
+        m = SCOPE_HEAD_RE.match(line)
+        if m:
+            cur = m.group(1)
+            allow.setdefault(cur, set()).update(scope_norm(p) for p in SCOPE_PATH_RE.findall(m.group(2) + " " + m.group(3)))
+            continue
+        if cur and re.match(r"^\s+-\s*(ไฟล์|แก้ไฟล์)\s*[:：]", line):
+            allow[cur].update(scope_norm(p) for p in SCOPE_PATH_RE.findall(line))
+        if line.startswith("## "):
+            cur = None
+        r = SCOPE_ROW_RE.match(line)
+        if r:
+            hs = SCOPE_HASH_RE.findall(r.group(3))
+            if hs:
+                hashes[r.group(1)] = hs
+    return allow, hashes
+
+
+def cmd_scope(a) -> int:
+    """flashq scope <แผน> [T-xx...] — ไฟล์ที่ commit ของแต่ละงานแตะ ต้องอยู่ในรายการที่แผนอนุญาต
+    ไฟล์แผนเอง (ติ๊ก [x] + เติม §4) ผ่านเสมอ · ไฟล์ที่โปรเจกต์ยกเว้นเพิ่ม → .flash.json scope.always_ok (glob)
+    exit 0 = PASS · 1 = มีงานแตะเกิน/ไม่มี commit/ไม่ระบุ path · 2 = อ่านแผนไม่ได้"""
+    start = Path(a.project or os.getcwd())
+    root, is_git = project_root(start)
+    plan = Path(a.plan)
+    if not plan.is_absolute() and not plan.is_file() and (root / plan).is_file():
+        plan = root / plan
+    try:
+        text = plan.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        print(f"SCOPE_RESULT=ERROR อ่านแผนไม่ได้: {e}")
+        return 2
+    if not is_git:
+        print("SCOPE_RESULT=ERROR ใช้ได้เฉพาะโปรเจกต์ git")
+        return 2
+    cfg = project_cfg(root)
+    block = cfg.get("scope") if isinstance(cfg.get("scope"), dict) else {}
+    always = [scope_norm(str(g)) for g in (block.get("always_ok") or []) if isinstance(g, str)]
+    try:
+        self_plan = scope_norm(os.path.relpath(os.path.abspath(plan), str(root)))
+    except ValueError:  # คนละไดรฟ์
+        self_plan = ""
+    allow, hashes = scope_parse(text)
+    wanted = [t for t in re.split(r"[,\s]+", " ".join(a.tasks)) if t] or sorted(set(allow) | set(hashes))
+    bad = 0
+    for t in wanted:
+        if t not in hashes:
+            print(f"SCOPE {t} NOCOMMIT ไม่มี hash ใน §4")
+            bad += 1
+            continue
+        if not allow.get(t):
+            print(f"SCOPE {t} NOFILES แผนไม่ระบุ path บนหัวงาน — ตรวจเองไม่ได้")
+            bad += 1
+            continue
+        extra: list[str] = []
+        for h in hashes[t]:
+            r = run_timeout(["git", "-C", str(root), "show", "--name-only", "--format=", h], 60)
+            if r.returncode != 0:
+                extra.append(f"(hash {h} ไม่พบ)")
+                continue
+            files = [scope_norm(x) for x in r.stdout.splitlines() if x.strip()]
+            extra += [f for f in files if f not in allow[t] and f != self_plan and not (always and _glob_hit(f, always))]
+        if extra:
+            ex = sorted(set(extra))
+            more = f" (+อีก {len(ex) - 8})" if len(ex) > 8 else ""
+            print(f"SCOPE {t} EXTRA {len(ex)} ไฟล์: " + ", ".join(ex[:8]) + more)
+            bad += 1
+        else:
+            print(f"SCOPE {t} OK")
+    print("SCOPE_RESULT=" + ("FAIL" if bad else "PASS"))
+    return 1 if bad else 0
+
+
 def cmd_doc(a) -> int:
     root, is_git = project_root(Path(a.project or os.getcwd()))
     if not is_git:
@@ -7089,6 +7179,11 @@ def main() -> int:
     qa.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
     qa.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
     qa.set_defaults(fn=cmd_qa)
+    sc = sp.add_parser("scope", help="ตรวจขอบเขตไฟล์ (กลไกล้วน): ไฟล์ที่ commit ของงาน T-xx แตะ ต้องอยู่ในรายการที่แผนอนุญาต · ยกเว้นเพิ่มที่ .flash.json scope.always_ok")
+    sc.add_argument("plan")
+    sc.add_argument("tasks", nargs="*", help="งานที่ตรวจ (ไม่ระบุ = ทุกงานในแผน)")
+    sc.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+    sc.set_defaults(fn=cmd_scope)
     dc = sp.add_parser("doc", help="ช่างเอกสาร: Flash อัปเดตเอกสารให้ตรงกับโค้ดที่เปลี่ยน (แก้ไฟล์จริงเฉพาะ doc.presets.<ชื่อ>.paths · ตัดสินด้วยกลไก · ไม่ commit ให้ · รอคุณรับ/ทิ้ง)")
     dc.add_argument("doc_name", nargs="?", default="", metavar="ชุด", help="ชื่อชุดจาก .flash.json doc.presets (มีชุดเดียว = ไม่ต้องระบุ)")
     dc.add_argument("--since", default="", help="เทียบโค้ดที่เปลี่ยนตั้งแต่ commit/tag นี้ (ไม่ระบุ = ตั้งแต่ครั้งล่าสุดที่รับร่างของชุดนี้ · ไม่เคย = ให้ Flash ดูประวัติล่าสุดเอง)")

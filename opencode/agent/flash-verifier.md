@@ -32,8 +32,7 @@ permission:
     "git -C * grep*": allow
     "git diff*--output*": deny
     "git diff*--ext-diff*": deny
-    "python tools/plans/flash_scope_check.py*": allow
-    "python tools\\plans\\flash_scope_check.py*": allow
+    "python {{FLASHQ}}/flashq.py scope*": allow
     "sed*--in-place*": deny
     "sed* -i*": deny
     "git -C * diff*--output*": deny
@@ -53,7 +52,7 @@ permission:
 ## ได้รับ: path แผน + เลขงาน (หรือทั้งชุด)
 ทำตามลำดับ ล้ม/ผิดข้อใด → บันทึกเป็นข้อค้นพบ แล้วตรวจข้อถัดไปต่อ (ไม่หยุดกลางทาง)
 
-1. **ขอบเขต (กลไก)**: ถ้าโปรเจกต์มี `tools/plans/flash_scope_check.py` → รัน `python tools/plans/flash_scope_check.py <แผน> <T-xx...>` → `SCOPE_RESULT=FAIL` หรือบรรทัด EXTRA/NOCOMMIT/NOFILES = ข้อค้นพบ 🔴 (คัดลอกบรรทัดนั้นตรงตัว) · ไม่มีสคริปต์ → ใช้ `git show --stat <hash>` เทียบไฟล์ที่แตะกับ `flashq-files:`/ไฟล์ของงานในแผน ไฟล์นอกแผน = 🔴
+1. **ขอบเขต (กลไก)**: รัน `python {{FLASHQ}}/flashq.py scope <แผน> <T-xx...> --project <โฟลเดอร์โปรเจกต์>` → `SCOPE_RESULT=FAIL` หรือบรรทัด EXTRA/NOCOMMIT/NOFILES = ข้อค้นพบ 🔴 (คัดลอกบรรทัดนั้นตรงตัว) · ไฟล์ที่โปรเจกต์ยกเว้นเอง (เช่น แผนอยู่นอกโฟลเดอร์ปกติ) ตั้งที่ `.flash.json` → `scope.always_ok` ไม่ต้องตัดสินเอง · รันคำสั่งนี้ไม่ได้ (บล็อก/ไม่พบ) → ใช้ `git show --stat <hash>` เทียบไฟล์ที่แตะกับ `flashq-files:`/ไฟล์ของงานในแผน ไฟล์นอกแผน = 🔴
 2. **diff ตรง "หลัง" ในแผน**: `git show <hash>` ของแต่ละงาน เทียบกับบล็อก "ก่อน/หลัง" — มีบรรทัดนอกแผน, ขาดบรรทัด, encoding/BOM/ท้ายบรรทัดเปลี่ยน, comment/format ที่ไม่ได้สั่ง = ข้อค้นพบ
 3. **หลักฐานชี้ขาดมีจริง**: เปิด path log ที่ §4 ระบุ → ต้องเห็น "บรรทัด/ค่า" ที่แผนกำหนดตรงตัว · เป็นค่า **หลังแก้** · ไฟล์ log ใหม่กว่า commit (`git log -1 --format=%ci <hash>` เทียบเวลาไฟล์) · exit code ที่ผู้ทำรายงานต้องตรงกับ log จริง · **ผู้ทำเขียน "ผ่าน" แต่ log ไม่มีบรรทัดนั้น = 🔴 PASS ปลอม**
 4. **flow รอบจุดแก้**: ดู caller/ข้อมูลรอบบรรทัดที่แก้ (±30 บรรทัด) ว่าลำดับ/ค่าที่ส่งต่อไม่เพี้ยน — ระบุ file:line ทุกข้อ · ไม่แน่ใจ = 🟡 พร้อมวิธีพิสูจน์ (ห้ามฟันธงไร้หลักฐาน)

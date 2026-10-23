@@ -144,6 +144,14 @@ python D:\MyCode\flashq\flashq.py qa [ชุด...] [--commit <sha>] [--project 
 - ยกเลิกงานแล้วฆ่า process ทดสอบที่กำลังรันด้วย · `retry` ในหน้าเว็บคงชุดเดิม · หน้าเว็บมีโหมด "ทดสอบ" (🧪) เลือกชุด + ช่องปิดตัวอธิบาย
 - Claude Code: `/flash-qa [ชุด...]` (ติดตั้งด้วย `flashq.py install`) — รายงานตาม `QA=` ห้ามบอกว่าผ่านเมื่อไม่ใช่ PASS
 
+### ตรวจขอบเขตไฟล์ (scope) — กลไกล้วน ไม่เรียกโมเดล
+```
+python D:\MyCode\flashq\flashq.py scope <แผน> [T-xx ...] [--project P]
+```
+- ไฟล์ที่ commit ของแต่ละงาน (hash ใน §4 ของแผน) แตะ ต้องอยู่ในรายการที่แผนอนุญาต (path ใน ` บนบรรทัดหัวงาน `- [x] **T-xx** …` + บรรทัด `ไฟล์:`/`แก้ไฟล์:` ใต้หัวงาน) · ไฟล์แผนเอง (ติ๊ก [x] + เติม §4) ผ่านเสมอ
+- ผลต่องาน: `SCOPE T-xx OK|EXTRA|NOCOMMIT|NOFILES` · สุดท้าย `SCOPE_RESULT=PASS|FAIL` · exit 0 = PASS · 1 = ไม่ผ่าน · 2 = อ่านแผนไม่ได้/ไม่ใช่ git
+- กฎเฉพาะโปรเจกต์เป็นตัวเสริมใน `.flash.json`: `{"scope": {"always_ok": ["docs/plans/*.md"]}}` (glob ของไฟล์ที่แตะได้เสมอ) · ผู้ตรวจ (`flash-verifier`) รันคำสั่งนี้เป็นข้อแรก
+
 ### งานเอกสาร (doc) — ช่างเอกสารอัปเดตเอกสารให้ตรงกับโค้ด
 ```
 python D:\MyCode\flashq\flashq.py doc [ชุด] [--since <commit/tag>] [--project P] [--timeout-min N]
