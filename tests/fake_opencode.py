@@ -5,12 +5,17 @@
   FAKE_MODE=ok|quota|nostart|fail|denied (denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน)
   FAKE_ARGS_OUT=<path>  เขียน argv ลงไฟล์ (ต่อท้าย)
   FAKE_ENV_OUT=<path>   เขียนค่า OPENCODE_CONFIG_CONTENT ที่ได้รับลงไฟล์ (ว่าง = ไม่ได้รับ)
+  FAKE_MODELS=a/b|c/d    รายชื่อที่ `opencode models` ตอบ (คั่นด้วย |)
   FAKE_SET_MODEL=<model> (คู่ FAKE_MODE=quota) เขียนโมเดลนี้ลง FLASHQ_OPENCODE_CONFIG ก่อนตอบ quota
 """
 import json
 import os
 import sys
 import time
+
+if len(sys.argv) > 1 and sys.argv[1] == "models":  # `opencode models` — รายชื่อ provider/model ของเครื่อง (FAKE_MODELS คั่นด้วย | · ไม่บันทึก argv)
+    print(os.environ.get("FAKE_MODELS", "opencode/deepseek-v4.1-flash|opencode-go/deepseek-v4.1-flash|opencode-go/glm-5.3").replace("|", "\n"))
+    sys.exit(0)
 
 if os.environ.get("FAKE_ARGS_OUT"):
     with open(os.environ["FAKE_ARGS_OUT"], "a", encoding="utf-8") as f:

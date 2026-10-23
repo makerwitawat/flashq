@@ -50,6 +50,20 @@ python D:\MyCode\flashq\flashq.py install
 ```
 แล้วรีโหลด opencode desktop · ไฟล์ที่ flashq ติดตั้งไว้เอง (`flashq:managed`) ทับได้เลยไม่สำรอง (ต้นฉบับอยู่ใน git ของ repo นี้) · ไฟล์ที่มีอยู่แล้วแต่ไม่ได้มาจาก flashq จะถูกข้าม (`--force` = สำรอง `.bak-flashq-*` แล้วทับ) · `--hooks` = ลงทะเบียน `image_guard.py` เป็น PreToolUse(Read) และ `inbox_notify.py` เป็น UserPromptSubmit ใน `~/.claude/settings.json` (ทำซ้ำได้ · ปิดชั่วคราว 60 นาที = สร้างไฟล์ `~/.flashq/image_guard_off` · เพดานตั้งใน `~/.flashq/config.json`: `image_max_px` `image_max_reads`)
 
+### เลือกโมเดลบนเครื่องใหม่ (`flashq models`)
+`install` ท้ายงานตรวจว่าทุกบทบาท (ผู้ทำ `flash-worker` · ผู้ตรวจ `flash-verifier` · ผู้สืบ `flash-investigator` · นักทดสอบ `flash-tester` · ช่างเอกสาร `flash-writer`) มีโมเดลที่ใช้ได้บนเครื่องนี้ — ขาด/ไม่มีในเครื่อง = ถามเลือกเมื่ออยู่ใน terminal (ไม่มี TTY เช่นรันจาก Claude Code = แค่บอกวิธีแก้ ไม่ค้างถาม) · `install --models auto` ตั้งตัวแนะนำให้ · `--models skip` ไม่ตรวจ
+```
+python flashq.py models                      # แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วถามว่าจะใช้แบบไหน
+python flashq.py models --list               # ดูรายการ + สถานะแต่ละบทบาท ไม่เปลี่ยนอะไร
+python flashq.py models --auto               # บทบาทที่ยังไม่ตั้ง/ใช้ไม่ได้ → ตั้งเป็นตัวแนะนำ (ที่ใช้ได้อยู่แล้วไม่แตะ)
+python flashq.py models --set worker=provider/model --set verifier=provider/model
+python flashq.py models --all provider/model # โมเดลเดียวทุกบทบาท
+```
+- รายการ = `opencode models` + โมเดลที่ประกาศใน `opencode.json` (`provider.<p>.models`) จัดกลุ่มตาม provider · ติดป้าย **(แนะนำ)** ที่ชื่อท้ายตรงกับรายการแรกของ `accounts.json` (`deepseek-v4.1-flash`) และ **← ใช้อยู่** ที่บทบาทใช้
+- ตอนถาม: เมนู 1 ตัวแนะนำทุกบทบาท · 2 โมเดลเดียวทุกบทบาท · 3 เลือกแยกรายบทบาท · 0 ไม่เปลี่ยน · เลือกโมเดลด้วยเลขที่ / ชื่อเต็ม / พิมพ์ส่วนของชื่อเพื่อกรอง (เลขอ้างรายการเต็มเสมอ) / `*` ดูทั้งหมด / Enter = ค่าในวงเล็บ / `0` ข้าม
+- เขียนที่ `agent.<ชื่อ>.model` ใน `opencode.json` (สำรองครั้งแรกเป็น `opencode.json.bak-flash-models` · ไฟล์ JSON เสียจะไม่เขียนทับ) และแก้บรรทัด `model:` ในหัวไฟล์ agent ที่ flashq ติดตั้ง · `install` รอบหลังไม่ทับโมเดลที่เลือกไว้กลับเป็นค่าในต้นฉบับ · ชื่อที่ไม่มีในเครื่อง = ปฏิเสธทั้งชุดไม่เขียนครึ่งเดียว
+- ลำดับสลับบัญชีตอนโควตาหมด: `accounts.json` ใน repo ใช้ชื่อ provider ของเครื่องหลัก → ถ้ามีรายการที่เครื่องนี้ไม่มี `models` (ตอนตั้งค่า/`--auto`/ถาม) สร้าง `~/.flashq/accounts.json` ของเครื่องนี้ให้ = โมเดลที่ชื่อท้ายเดียวกับผู้ทำ เรียงผู้ทำก่อน · ไฟล์นี้มาก่อนของ repo เสมอ (`flashq switch` · สลับตอนโควตาหมด · หน้าเว็บใช้ตามนี้) · ลบไฟล์ = กลับไปใช้ของ repo · `--list` / ไม่ใส่ flag ในที่ไม่มี TTY ไม่เขียนอะไร แค่เตือน
+
 ## ประหยัด token ของ Claude (เหตุผลที่เครื่องมือนี้มีอยู่)
 - **แผน = สเปก ไม่ใช่โค้ดสำเร็จรูป**: `flashq run` ตรวจขนาดแผนเอง — เตือนเมื่อ >300 บรรทัด / โค้ดใน ``` รวม >100 / บล็อกเดียว >30 · **ปฏิเสธ** เมื่อ >600 / >200 / >60 หรือมีหัวข้อ "ภาคผนวก · คัดลอกตรงตัว · โค้ดเต็ม · appendix · verbatim" ที่มีโค้ด >20 บรรทัด (ไม่มีตัวเลือกเลี่ยง · ยกเว้นส่งเฉพาะรอบแก้ `T-xxR` ของแผนที่เคยรันแล้ว = เตือนผ่าน) — แผนที่ Claude เขียนโค้ดเต็มให้ Flash คัดลอก = Claude ทำงานเองในราคาแพงกว่า
 - **วางแผน → ส่ง → รู้ผล → ตรวจ → แจ้ง ใน flow เดียว (คืนแล้ว 2026-10-22)**: `/flash-plan` ส่งเข้าคิวด้วย `flashq run` ใน background แล้ว**หยุดนิ่งรอ** — จบแล้วระบบแจ้งเข้า session เดิมเอง (ห้าม sleep/poll วน = ไม่เสีย token ระหว่างรอ) → `/flash-check` ทันทีทุกสถานะ · session Opus/Fable → subagent `flash-checker` ตรวจแทน · ปิด session ไปก่อน → inbox + toast + hook (ด้านล่าง) · เปิด session Sonnet ใหม่รัน `flashq wait <แผน>` ก็ยังทำได้ถ้าอยากแยก · ตั้งค่า `"model": "claude-sonnet-5"` ใน `.claude/settings.json` ของโปรเจกต์ให้ session ใหม่เริ่มที่ Sonnet

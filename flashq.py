@@ -3905,9 +3905,31 @@ def cmd_runnow(a) -> int:
 
 
 def accounts() -> tuple[str, list[list[str]]]:
-    d = read_json(REPO / "accounts.json")
+    d = read_json(HOME / "accounts.json") or read_json(REPO / "accounts.json")  # ของเครื่องนี้ (flashq models สร้างให้) มาก่อนค่าตั้งต้นใน repo
     return d.get("agent", "flash-worker"), d.get("accounts", [])
 
+
+def write_machine_accounts(models: list[str]) -> str:
+    """สร้าง ~/.flashq/accounts.json ของเครื่องนี้: โมเดลที่ชื่อท้ายตรงกับของผู้ทำ (ผู้ทำเองก่อน · ที่ accounts.json เดิมรู้จักตามมา) · คืนข้อความสรุป ("" = ทำไม่ได้)"""
+    worker = agent_model("flash-worker")
+    if not worker or (models and worker not in models):
+        return ""
+    tail = worker.rsplit("/", 1)[-1]
+    order = [worker] + [m for _, m in accounts()[1]]
+    cand = sorted((m for m in models if m.rsplit("/", 1)[-1] == tail), key=lambda m: order.index(m) if m in order else len(order))
+    rows, seen = [], set()
+    for m in cand:
+        short = m.partition("/")[0]
+        n = 2
+        while short in seen:
+            short, n = f"{m.partition('/')[0]}{n}", n + 1
+        seen.add(short)
+        rows.append([short, m])
+    if not rows:
+        return ""
+    HOME.mkdir(parents=True, exist_ok=True)
+    write_json(HOME / "accounts.json", {"agent": "flash-worker", "_note": "สร้างโดย flashq models — ลำดับสลับบัญชีของเครื่องนี้ (ลบไฟล์นี้ = กลับไปใช้ accounts.json ใน repo)", "accounts": rows})
+    return f"{len(rows)} รายการ: " + ", ".join(s for s, _ in rows)
 
 def switch_account(arg: str) -> str:
     """สลับบัญชี · คืนโมเดลใหม่ ("" = ล้มเหลว)"""
@@ -3959,6 +3981,274 @@ def cmd_switch(a) -> int:
     return 0
 
 
+MODEL_ROLES = [("worker", "flash-worker", "ผู้ทำ (แก้โค้ดตามแผน)"),
+               ("verifier", "flash-verifier", "ผู้ตรวจ (อ่านอย่างเดียว)"),
+               ("investigator", "flash-investigator", "ผู้สืบ (ไล่หาต้นตอ)"),
+               ("tester", "flash-tester", "นักทดสอบ (อธิบายเทสต์ที่ล้ม)"),
+               ("writer", "flash-writer", "ช่างเอกสาร")]
+
+
+def machine_models() -> tuple[list[str], str]:
+    """โมเดล provider/model ที่เครื่องนี้มี = `opencode models` + ที่ประกาศใน opencode.json (provider.<p>.models) · คืน (รายการเรียงชื่อ, หมายเหตุเมื่ออ่านจาก opencode ไม่ได้)"""
+    found, note = set(), ""
+    cmd = opencode_cmd()
+    if cmd:
+        r = run_timeout(cmd + ["models"], timeout=90)
+        if r.returncode == 0:
+            found.update(l.strip() for l in r.stdout.splitlines() if re.fullmatch(r"[\w.\-]+/\S+", l.strip()))
+        else:
+            note = f"`opencode models` ล้มเหลว (exit {r.returncode})"
+    else:
+        note = "ไม่พบ opencode ใน PATH"
+    providers = read_json(OC_CONFIG).get("provider")
+    for pv, pd in (providers.items() if isinstance(providers, dict) else []):
+        for name in ((pd or {}).get("models") or {}):
+            found.add(f"{pv}/{name}")
+    return sorted(found), note
+
+
+def json_agent_model(agent: str) -> str:
+    try:
+        m = read_json(OC_CONFIG)["agent"][agent]["model"]
+    except (KeyError, TypeError):
+        return ""
+    return m if isinstance(m, str) else ""
+
+
+def recommended_tail() -> str:
+    """ชื่อโมเดลที่แนะนำ (ส่วนท้ายหลัง provider) = รายการแรกของ accounts.json"""
+    accs = accounts()[1]
+    return accs[0][1].rsplit("/", 1)[-1] if accs else "deepseek-v4.1-flash"
+
+
+def recommend_model(models: list[str], tail: str) -> str:
+    """โมเดลที่ชื่อท้ายตรง tail — provider ที่อยู่ใน accounts.json มาก่อน"""
+    order = [m for _, m in accounts()[1]]
+    cand = sorted((m for m in models if m.rsplit("/", 1)[-1] == tail), key=lambda m: order.index(m) if m in order else len(order))
+    return cand[0] if cand else ""
+
+
+def with_header_model(text: str, model: str) -> str:
+    """แทนบรรทัด model: ในหัวไฟล์ agent (front matter) · ไม่มีบรรทัดนั้น/ไม่มีโมเดล = คืนเดิม"""
+    m = re.match(r"(---\s*\n)(.*?)(\n---)", text, re.S)
+    if not model or not m or not re.search(r"^model:", m.group(2), re.M):
+        return text
+    head = re.sub(r"^model:.*$", lambda _: f"model: {model}", m.group(2), count=1, flags=re.M)
+    return m.group(1) + head + text[m.end(2):]
+
+
+def set_agent_model(agent: str, model: str) -> bool:
+    """ตั้ง agent.<ชื่อ>.model ใน opencode.json (สำรองครั้งแรก .bak-flash-models · เขียนแล้วสลับไฟล์) + หัวไฟล์ agent ที่ flashq ติดตั้ง"""
+    cfg = read_json(OC_CONFIG)
+    if OC_CONFIG.exists() and not cfg:
+        print(f"FAIL: อ่าน {OC_CONFIG} เป็น JSON ไม่ได้ — ไม่เขียนทับ")
+        return False
+    OC_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    bak = OC_CONFIG.with_name(OC_CONFIG.name + ".bak-flash-models")
+    if OC_CONFIG.exists() and not bak.exists():
+        shutil.copy2(OC_CONFIG, bak)
+    agents = cfg.setdefault("agent", {})
+    if not isinstance(agents.get(agent), dict):
+        agents[agent] = {}
+    agents[agent]["model"] = model
+    tmp = OC_CONFIG.with_name(OC_CONFIG.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    replace_file(tmp, OC_CONFIG)
+    md = OC_CONFIG.parent / "agent" / f"{agent}.md"
+    try:
+        old = md.read_text(encoding="utf-8")
+        new = with_header_model(old, model) if "flashq:managed" in old else old
+        if new != old:
+            md.write_text(new, encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def print_model_list(models: list[str], shown: list[str], tail: str, used: dict) -> None:
+    """รายการโมเดลจัดกลุ่มตาม provider · เลขลำดับอ้างอิงรายการเต็มเสมอ (กรองแล้วเลขไม่เปลี่ยน)"""
+    idx = {m: i for i, m in enumerate(models, 1)}
+    last = None
+    for m in shown:
+        pv, _, name = m.partition("/")
+        if pv != last:
+            print(f"  [{pv}] {sum(1 for x in models if x.startswith(pv + '/'))} รุ่น")
+            last = pv
+        tags = ("  (แนะนำ)" if m.rsplit("/", 1)[-1] == tail else "") + (f"  ← ใช้อยู่: {', '.join(used[m])}" if m in used else "")
+        print(f"   {idx[m]:>3}. {name}{tags}")
+
+
+def pick_model(models: list[str], tail: str, used: dict, label: str, default: str = "") -> str:
+    """เลือกโมเดล: เลขที่ · ชื่อเต็ม · พิมพ์ส่วนของชื่อเพื่อกรอง · * ทั้งหมด · Enter = ค่าในวงเล็บ · 0 = ข้าม (คืน "")"""
+    while True:
+        try:
+            ans = input(f"{label}{f' [Enter={default}]' if default else ''} — เลขที่/ชื่อ/คำกรอง · * ทั้งหมด · 0 ข้าม: ").strip()
+        except EOFError:
+            return ""
+        if not ans:
+            if default:
+                return default
+            continue
+        if ans in ("0", "q"):
+            return ""
+        if ans == "*":
+            print_model_list(models, models, tail, used)
+        elif ans.isdigit():
+            if 1 <= int(ans) <= len(models):
+                return models[int(ans) - 1]
+            print(f"เลขต้องอยู่ระหว่าง 1–{len(models)}")
+        elif ans in models:
+            return ans
+        else:
+            sub = [m for m in models if ans.lower() in m.lower()]
+            if sub:
+                print_model_list(models, sub, tail, used)
+            else:
+                print(f"ไม่พบโมเดลที่มี '{ans}'")
+
+
+def models_problems(models: list[str]) -> list[str]:
+    """agent ที่ยังไม่ตั้งโมเดล หรือตั้งไว้แต่เครื่องนี้ไม่มี"""
+    return [ag for _, ag, _ in MODEL_ROLES if not agent_model(ag) or (models and agent_model(ag) not in models)]
+
+
+def print_role_table(models: list[str]) -> None:
+    for key, ag, label in MODEL_ROLES:
+        m = agent_model(ag)
+        state = "ยังไม่ตั้ง" if not m else ("" if not models else ("ใช้ได้" if m in models else "ไม่มีในเครื่องนี้!"))
+        print(f"  {key:12} {ag:19} {m or '-':48} {state}")
+
+
+def ask_model_changes(models: list[str], tail: str, rec: str, used: dict) -> dict:
+    """ถามว่าจะใช้โมเดลอะไรแบบไหน → {agent: โมเดล} (ว่าง = ไม่เปลี่ยน)"""
+    bad = models_problems(models)
+    default = ("1" if rec else "3") if bad else "0"
+    star = lambda k: "  (แนะนำ)" if k == default else ""  # noqa: E731
+    print("\nจะให้ใช้โมเดลอะไรแบบไหน?")
+    if rec:
+        print(f"  1) ใช้ {rec} ทุกบทบาท{star('1')}")
+    print(f"  2) เลือกโมเดลเดียวใช้ทุกบทบาท{star('2')}")
+    print(f"  3) เลือกแยกรายบทบาท (ผู้ทำ / ผู้ตรวจ / ผู้สืบ / นักทดสอบ / ช่างเอกสาร){star('3')}")
+    print(f"  0) ไม่เปลี่ยน{star('0')}")
+    try:
+        ans = input(f"เลือก [Enter={default}]: ").strip() or default
+    except EOFError:
+        return {}
+    if ans == "1" and rec:
+        return {ag: rec for _, ag, _ in MODEL_ROLES}
+    if ans == "2":
+        m = pick_model(models, tail, used, "โมเดลสำหรับทุกบทบาท")
+        return {ag: m for _, ag, _ in MODEL_ROLES} if m else {}
+    if ans == "3":
+        out = {}
+        for key, ag, label in MODEL_ROLES:
+            cur = agent_model(ag)
+            m = pick_model(models, tail, used, f"{key} {label}", cur if cur in models else rec)
+            if m:
+                out[ag] = m
+        return out
+    return {}
+
+
+def run_models(models: list[str], note: str, *, list_only=False, auto=False, sets=None, all_model="", interactive=False) -> int:
+    """แกนของ `flashq models` (install เรียกซ้ำได้) · 0 = เรียบร้อย · 1 = ยังมีบทบาทที่ใช้ไม่ได้ · 2 = ใช้ผิด · 3 = เขียนไม่ได้/โมเดลไม่มีในเครื่อง"""
+    tail = recommended_tail()
+    rec = recommend_model(models, tail)
+    used: dict = {}
+    for _, ag, _ in MODEL_ROLES:
+        if agent_model(ag):
+            used.setdefault(agent_model(ag), []).append(ag)
+    print(f"โมเดลที่เครื่องนี้มี: {len(models)} รุ่น" + (f"  (หมายเหตุ: {note})" if note else ""))
+    if models and (list_only or interactive):
+        print_model_list(models, models, tail, used)
+    print("\nโมเดลที่แต่ละบทบาทใช้อยู่:")
+    print_role_table(models)
+    by_key = {k: ag for k, ag, _ in MODEL_ROLES}
+    changes: dict = {}
+    if all_model:
+        changes.update({ag: all_model for ag in by_key.values()})
+    for item in sets or []:
+        role, _, m = item.partition("=")
+        ag = by_key.get(role.strip()) or (role.strip() if role.strip() in by_key.values() else "")
+        if not ag or not m.strip():
+            print(f"FAIL: --set ต้องเป็น <บทบาท>=<provider/model> (บทบาท: {', '.join(by_key)}) — ได้ '{item}'")
+            return 2
+        changes[ag] = m.strip()
+    unresolved: list[str] = []
+    if auto:
+        for _, ag, _ in MODEL_ROLES:
+            cur = agent_model(ag)
+            if ag in changes or (cur and (cur in models or not models)):
+                continue
+            if rec:
+                changes[ag] = rec
+            else:
+                unresolved.append(ag)
+    if not changes and not unresolved and not list_only and interactive:
+        changes = ask_model_changes(models, tail, rec, used)
+    if models:
+        missing = sorted({m for m in changes.values() if m not in models})
+        if missing:
+            print("FAIL: ไม่มีในเครื่องนี้ (ดูรายการด้วย flashq models --list): " + ", ".join(missing))
+            return 3
+    elif changes:
+        print(f"เตือน: อ่านรายชื่อโมเดลไม่ได้ ({note}) → ตรวจชื่อที่ตั้งไม่ได้")
+    rc = 0
+    for ag, m in changes.items():
+        old = agent_model(ag)
+        if old == m and json_agent_model(ag) == m:
+            print(f"เหมือนเดิม  {ag}: {m}")
+        elif set_agent_model(ag, m):
+            print(f"{ag}: {old or '(ยังไม่ตั้ง)'} → {m}")
+        else:
+            rc = 3
+    if changes:
+        print("\nหลังตั้งค่า:")
+        print_role_table(models)
+        print("flashq run ใช้โมเดลใหม่ทันที · opencode desktop ต้องรีโหลด/เริ่ม session ใหม่")
+    if unresolved:
+        print(f"หา '{tail}' ในเครื่องนี้ไม่เจอ → ตั้งให้ {', '.join(unresolved)} ไม่ได้ — เลือกเองด้วย flashq models หรือ --set <บทบาท>=<provider/model>")
+    acc_missing = [m for _, m in accounts()[1] if models and m not in models]
+    if acc_missing and not list_only and (changes or auto or interactive):
+        made = write_machine_accounts(models)  # ลำดับสลับบัญชี (โควตาหมด) ที่เครื่องนี้ไม่มีรายการตามนั้น → สร้างของเครื่องนี้แทน
+        if made:
+            print(f"สลับบัญชีอัตโนมัติ: accounts.json เดิมมี {len(acc_missing)} รายการที่เครื่องนี้ไม่มี → สร้าง {HOME / 'accounts.json'} ใหม่ {made}")
+        else:
+            print(f"หมายเหตุ: accounts.json (สลับบัญชีอัตโนมัติ) มี {len(acc_missing)} รายการที่เครื่องนี้ไม่มี: {', '.join(acc_missing)} — ตั้งโมเดลผู้ทำให้ใช้ได้ก่อน แล้วรัน flashq models อีกครั้ง")
+    elif acc_missing:
+        print(f"หมายเหตุ: accounts.json (สลับบัญชีอัตโนมัติ) มี {len(acc_missing)} รายการที่เครื่องนี้ไม่มี: {', '.join(acc_missing)} — รัน flashq models เพื่อสร้างของเครื่องนี้")
+    if rc == 0 and not changes and not list_only and models_problems(models):
+        print("ยังมีบทบาทที่ใช้ไม่ได้ → flashq models (เลือกเอง) · flashq models --auto (ใช้ตัวแนะนำ) · flashq models --set worker=<provider/model>")
+        return 1
+    return rc if not unresolved else 1
+
+
+def cmd_models(a) -> int:
+    """แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วให้เลือกว่าบทบาทไหนใช้โมเดลอะไร (ไม่มี TTY = แสดงสถานะ/ใช้ flag)"""
+    models, note = machine_models()
+    given = bool(a.auto or a.set or a.all or a.list)
+    return run_models(models, note, list_only=a.list, auto=a.auto, sets=a.set, all_model=a.all or "",
+                      interactive=not given and sys.stdin.isatty())
+
+
+def ensure_models(mode: str) -> None:
+    """ท้าย install: ตรวจว่าทุกบทบาทมีโมเดลที่ใช้ได้บนเครื่องนี้ · ขาด → ask ถามเลือก (ต้องมี TTY) · auto ใช้ตัวแนะนำ · ไม่มี TTY บอกวิธีแก้"""
+    models, note = machine_models()
+    if not models:
+        print(f"หมายเหตุ   อ่านรายชื่อโมเดลไม่ได้ ({note}) → ตรวจโมเดลไม่ได้ · พร้อมแล้วรัน flashq models")
+        return
+    bad = models_problems(models)
+    if not bad:
+        print("โมเดล       ทุกบทบาทใช้ได้บนเครื่องนี้ (flashq models = ดู/เปลี่ยน)")
+    elif mode == "auto":
+        run_models(models, note, auto=True)
+    elif mode == "ask" and sys.stdin.isatty():
+        print(f"\nพบ {len(bad)} บทบาทที่ยังไม่มีโมเดลที่ใช้ได้บนเครื่องนี้ ({', '.join(bad)}) → เลือกโมเดลเลย (ข้ามได้ แล้วรัน flashq models ทีหลัง)")
+        run_models(models, note, interactive=True)
+    else:
+        print(f"หมายเหตุ   {len(bad)} บทบาทยังไม่มีโมเดลที่ใช้ได้บนเครื่องนี้ ({', '.join(bad)}) → flashq models (เลือกเอง) หรือ flashq models --auto")
+
+
 def register_hook(settings: Path, event: str, matcher: str, command: str, key: str, timeout: int = 10) -> str:
     """ลงทะเบียน hook ใน settings.json ของ Claude Code แบบทำซ้ำได้ (หา hook ที่ command มี key · มีแล้วเหมือนเดิม = ไม่แตะ · ต่างกัน = อัปเดต)"""
     data = read_json(settings) if settings.exists() else {}
@@ -3996,6 +4286,8 @@ def cmd_install(a) -> int:
         dst_dir.mkdir(parents=True, exist_ok=True)
         for src in sorted(src_dir.glob(pat)):
             text = src.read_text(encoding="utf-8").replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
+            if src_dir == REPO / "opencode" / "agent":  # โมเดลที่ผู้ใช้เลือกไว้ (flashq models) ไม่ถูกต้นฉบับทับกลับเป็นค่าตั้งต้น
+                text = with_header_model(text, json_agent_model(src.stem))
             dst = dst_dir / src.name
             if dst.exists():
                 old = dst.read_text(encoding="utf-8")
@@ -4035,6 +4327,8 @@ def cmd_install(a) -> int:
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน image_guard (กันอ่านรูปใหญ่/อ่านรูปรัวใน session หลัก) → install --hooks")
         if "run_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน run_guard (กันสั่งงานผิดวิธีจนไม่มีใครเฝ้า: & · sleep · ไม่ใส่ run_in_background) → install --hooks")
+    if getattr(a, "models", "ask") != "skip":
+        ensure_models(getattr(a, "models", "ask"))
     return rc
 
 
@@ -4106,7 +4400,7 @@ def cmd_init(a) -> int:
                 if p.exists()]
     if need and a.install:
         print("ติดตั้งคำสั่ง global ที่ขาด ...")
-        cmd_install(argparse.Namespace(force=False, hooks=False))
+        cmd_install(argparse.Namespace(force=False, hooks=False, models="skip"))
     elif need:
         print("ยังไม่ได้ติดตั้งคำสั่ง global: " + ", ".join(p.name for p in need))
         todo.append(f"python {REPO / 'flashq.py'} install  (แล้วรีโหลด opencode desktop)")
@@ -4117,7 +4411,7 @@ def cmd_init(a) -> int:
 
     # 5) บัญชีโมเดล
     if not configured_model():
-        todo.append(f"ตั้ง agent.flash-worker.model ใน {OC_CONFIG} (หรือส่ง --model ตอน run)")
+        todo.append(f"ตั้งโมเดลของ flash-worker: python {REPO / 'flashq.py'} models  (เลือกจากรายการที่เครื่องนี้มี · หรือส่ง --model ตอน run)")
 
     # 6) --commit: commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้างอยู่) · push เมื่ออยู่ branch หลักและมี remote
     if a.commit and is_git:
@@ -6662,7 +6956,15 @@ def main() -> int:
     ins = sp.add_parser("install", help="ติดตั้ง /flash + agent (opencode) และ /flash-* + flash-checker + hooks (Claude) แบบ global")
     ins.add_argument("--force", action="store_true", help="ทับไฟล์ของผู้ใช้ที่ชื่อซ้ำ (สำรอง .bak-flashq ก่อน)")
     ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) · inbox_notify (UserPromptSubmit) · run_guard (PreToolUse Bash|PowerShell) ใน ~/.claude/settings.json")
+    ins.add_argument("--models", choices=["ask", "auto", "skip"], default="ask",
+                     help="ตรวจโมเดลของทุกบทบาทบนเครื่องนี้: ask = ถามเลือกเมื่อขาด (ต้องมี TTY · ไม่มี = แค่บอกวิธีแก้) · auto = ใช้ตัวแนะนำ · skip = ไม่ตรวจ")
     ins.set_defaults(fn=cmd_install)
+    mo = sp.add_parser("models", help="แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วเลือกว่าบทบาทไหน (ผู้ทำ/ผู้ตรวจ/ผู้สืบ/นักทดสอบ/ช่างเอกสาร) ใช้โมเดลอะไร")
+    mo.add_argument("--list", action="store_true", help="แสดงรายการโมเดล + สถานะ ไม่เปลี่ยนอะไร")
+    mo.add_argument("--auto", action="store_true", help="บทบาทที่ยังไม่ตั้ง/ใช้ไม่ได้ → ตั้งเป็นตัวแนะนำ (ที่ใช้ได้อยู่แล้วไม่แตะ)")
+    mo.add_argument("--set", action="append", metavar="บทบาท=provider/model", help="ตั้งรายบทบาท (worker|verifier|investigator|tester|writer) ใส่ซ้ำได้")
+    mo.add_argument("--all", metavar="provider/model", help="ตั้งทุกบทบาทเป็นโมเดลเดียว")
+    mo.set_defaults(fn=cmd_models)
     ini = sp.add_parser("init", help="ตั้งค่าโปรเจกต์ใหม่ (.flash.json ตรวจ branch หลักเอง · .gitignore · แม่แบบแผน)")
     ini.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd)")
     ini.add_argument("--force", action="store_true", help="ทับช่องใน .flash.json ด้วยค่าที่ตรวจเจอ")

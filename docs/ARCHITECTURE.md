@@ -32,7 +32,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | ขนาดแผน | `PLAN_SOFT`/`PLAN_HARD` · `plan_lint` |
 | ยามส่งงาน | `hooks/run_guard.py` (PreToolUse `Bash\|PowerShell` · `scan`/`statements`/`judge` แยกคำสั่งแบบรู้เครื่องหมายคำพูด → บล็อกการส่งงานที่ไม่มีตัวเฝ้า) |
 | แจ้งผลกลับ Claude | `notify_job` (งานจบ → `~/.flashq/inbox/` + toast Windows) · `sweep_dead`/`cmd_sweep` (แจ้งงาน process ตาย ครั้งเดียวต่องาน) · hook `hooks/inbox_notify.py` (อ่าน inbox ตอนผู้ใช้พิมพ์ข้อความ แล้วแทรกผล+คำแนะนำเข้า session) |
-| CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
+| CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_models`/`run_models` (+ `machine_models` · `pick_model` · `set_agent_model` · `ensure_models` ที่ install เรียก) · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
 | server | `make_ui_server` · `cmd_ui` |
 | เป้าหมาย | `goal_parse` · `goal_lint` · `goal_publish` · `goal_phase` (ขั้น/รอบที่กำลังทำ) · `ui_goals` · `goal_changed_files` · `goal_human` · `transcript_state`/`claude_activity` (อ่าน transcript ของ Claude Code) · `cmd_goal` |

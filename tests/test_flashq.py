@@ -46,9 +46,9 @@ class FlashqTest(unittest.TestCase):
         e = {**self.env, **(env or {})}
         if wait:
             return subprocess.run(cmd, cwd=self.proj, env=e, capture_output=True, text=True,
-                                  encoding="utf-8", timeout=120)
+                                  encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL)  # ไม่มี TTY → คำสั่งที่ถามเลือกไม่ค้างรอ input
         return subprocess.Popen(cmd, cwd=self.proj, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8")
+                                text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
 
     def base(self):
         return ["run", "PLAN.md", "T-01", "--attach", "none", "--no-open"]
@@ -387,6 +387,109 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(c.returncode, 0, c.stdout)
         p2.wait(timeout=30)
         self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
+
+    def oc_agent_models(self):
+        return {k: v.get("model") for k, v in json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"].items()}
+
+    def test_models_list_set_auto(self):
+        """flashq models: รายการ = opencode models + provider ใน opencode.json · --set ตรวจชื่อก่อนเขียน · --auto ตั้งเฉพาะบทบาทที่ใช้ไม่ได้"""
+        env = {"FAKE_MODELS": "opencode-go/deepseek-v4.1-flash|x/other-model"}
+        r = self.run_q("models", "--list", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("4 รุ่น", r.stdout)  # fake 2 + provider ใน opencode.json 2
+        self.assertIn("[opencode-go]", r.stdout)
+        self.assertIn("deepseek/deepseek-v4.1-flash  (แนะนำ)", r.stdout)
+        self.assertRegex(r.stdout, r"flash-worker\s+p1/m\s+ไม่มีในเครื่องนี้!")
+        # ไม่มี TTY + ไม่ใส่ flag = แสดงสถานะ บอกวิธีแก้ ไม่เขียนอะไร
+        r = self.run_q("models", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("flashq models --auto", r.stdout)
+        self.assertEqual(self.oc_agent_models(), {"flash-worker": "p1/m"})
+        # ชื่อที่ไม่มีในเครื่อง = ปฏิเสธทั้งชุด ไม่เขียนครึ่งเดียว
+        r = self.run_q("models", "--set", "verifier=x/other-model", "--set", "worker=no/such", env=env)
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("no/such", r.stdout)
+        self.assertEqual(self.oc_agent_models(), {"flash-worker": "p1/m"})
+        r = self.run_q("models", "--set", "boss=x/other-model", env=env)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        r = self.run_q("models", "--set", "verifier=x/other-model", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.oc_agent_models()["flash-verifier"], "x/other-model")
+        self.assertTrue(self.oc_cfg.with_name("opencode.json.bak-flash-models").exists())
+        # --auto: ผู้ตรวจที่ตั้งไว้แล้วและใช้ได้ไม่แตะ · ที่เหลือใช้ตัวแนะนำ (provider ที่ accounts.json รู้จักมาก่อน)
+        r = self.run_q("models", "--auto", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        m = self.oc_agent_models()
+        self.assertEqual(m["flash-verifier"], "x/other-model")
+        for ag in ("flash-worker", "flash-investigator", "flash-tester", "flash-writer"):
+            self.assertEqual(m[ag], "commandcode/deepseek/deepseek-v4.1-flash", ag)
+        r = self.run_q("models", "--all", "opencode-go/deepseek-v4.1-flash", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(set(self.oc_agent_models().values()), {"opencode-go/deepseek-v4.1-flash"})
+        self.assertEqual(self.run_q("models", env=env).returncode, 0)
+
+    def test_models_auto_without_recommended_model(self):
+        """เครื่องที่ไม่มีโมเดลแนะนำเลย: --auto ตั้งให้ไม่ได้ → บอกตรง ๆ exit 1 และไม่แตะ opencode.json"""
+        self.oc_cfg.write_text(json.dumps({"agent": {}, "provider": {}}), encoding="utf-8")
+        r = self.run_q("models", "--auto", env={"FAKE_MODELS": "x/other-model"})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("ไม่เจอ", r.stdout)
+        self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8")), {"agent": {}, "provider": {}})
+
+    def test_models_interactive_and_install_keeps_choice(self):
+        """ถามเลือก: เลขที่ · คำกรอง · Enter=ค่าแนะนำ · 0 ข้าม · install ไม่ทับโมเดลที่เลือกด้วยค่าตั้งต้นในต้นฉบับ"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        models = ["a/deepseek-v4.1-flash", "b/glm-5.3", "c/deepseek-v4.1-flash"]
+        keys = lambda *xs: mock.patch("builtins.input", side_effect=list(xs))  # noqa: E731
+        with mock.patch.object(flashq, "OC_CONFIG", self.oc_cfg), mock.patch("sys.stdout"):
+            with keys("zzz", "glm", "2"):  # ไม่พบ → กรอง → เลือกเลข (เลขอ้างรายการเต็ม)
+                self.assertEqual(flashq.pick_model(models, "deepseek-v4.1-flash", {}, "x"), "b/glm-5.3")
+            with keys("", "0"):  # ไม่มีค่าตั้งต้น Enter ซ้ำถาม · 0 = ข้าม
+                self.assertEqual(flashq.pick_model(models, "deepseek-v4.1-flash", {}, "x"), "")
+            with keys("", "c/deepseek-v4.1-flash"):
+                self.assertEqual(flashq.pick_model(models, "t", {}, "x", default="a/deepseek-v4.1-flash"), "a/deepseek-v4.1-flash")
+            with keys("2", "3"):  # เมนู 2 = โมเดลเดียวทุกบทบาท
+                ch = flashq.ask_model_changes(models, "deepseek-v4.1-flash", "a/deepseek-v4.1-flash", {})
+            self.assertEqual(set(ch), {ag for _, ag, _ in flashq.MODEL_ROLES})
+            self.assertEqual(set(ch.values()), {"c/deepseek-v4.1-flash"})
+            with keys("3", "2", "0", "", "", ""):  # แยกบทบาท: ผู้ทำ=เลข 2 · ผู้ตรวจ=ข้าม · ที่เหลือ Enter=ตัวแนะนำ
+                ch = flashq.ask_model_changes(models, "deepseek-v4.1-flash", "a/deepseek-v4.1-flash", {})
+            self.assertEqual(ch, {"flash-worker": "b/glm-5.3", "flash-investigator": "a/deepseek-v4.1-flash",
+                                  "flash-tester": "a/deepseek-v4.1-flash", "flash-writer": "a/deepseek-v4.1-flash"})
+            with keys(""):  # ทุกบทบาทตั้งแล้วและใช้ได้ → Enter = ไม่เปลี่ยน
+                for _, ag, _ in flashq.MODEL_ROLES:
+                    flashq.set_agent_model(ag, "a/deepseek-v4.1-flash")
+                self.assertEqual(flashq.ask_model_changes(models, "deepseek-v4.1-flash", "a/deepseek-v4.1-flash", {}), {})
+        # install: หัวไฟล์ agent ใช้โมเดลที่เลือก (ไม่ใช่ค่าในต้นฉบับ) และตั้งซ้ำได้
+        self.run_q("models", "--set", "verifier=x/other-model", env={"FAKE_MODELS": "x/other-model"})
+        r = self.run_q("install", "--models", "skip", env={"FLASHQ_CLAUDE_HOME": str(self.tmp / "claude_home")})
+        head = (self.tmp / "agent" / "flash-verifier.md").read_text(encoding="utf-8")
+        self.assertIn("model: x/other-model", head)
+        self.assertNotIn("model: opencode-go/deepseek-v4.1-flash", head)
+        self.assertEqual(self.run_q("install", "--models", "skip", env={"FLASHQ_CLAUDE_HOME": str(self.tmp / "claude_home")}).returncode, 0, r.stdout)
+
+    def test_install_checks_models(self):
+        """install ท้ายงานตรวจโมเดล: ขาด + ไม่มี TTY = บอกวิธีแก้ (ไม่ค้างถาม) · --models auto ตั้งให้ · ครบ = บอกว่าใช้ได้"""
+        env = {"FLASHQ_CLAUDE_HOME": str(self.tmp / "claude_home"), "FAKE_MODELS": "opencode-go/deepseek-v4.1-flash"}
+        r = self.run_q("install", env=env)
+        self.assertIn("ยังไม่มีโมเดลที่ใช้ได้บนเครื่องนี้", r.stdout)
+        self.assertIn("flashq models --auto", r.stdout)
+        self.assertEqual(self.oc_agent_models(), {"flash-worker": "p1/m"})
+        r = self.run_q("install", "--models", "auto", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.oc_agent_models()["flash-worker"], "commandcode/deepseek/deepseek-v4.1-flash")
+        # accounts.json ใน repo มีรายการที่เครื่องนี้ไม่มี (go2/go3/inferx) → สร้างลำดับสลับบัญชีของเครื่องนี้ที่ ~/.flashq/accounts.json
+        acc = json.loads((self.home / "accounts.json").read_text(encoding="utf-8"))["accounts"]
+        self.assertEqual(acc, [["commandcode", "commandcode/deepseek/deepseek-v4.1-flash"],
+                               ["commandcode2", "commandcode2/deepseek/deepseek-v4.1-flash"],
+                               ["opencode-go", "opencode-go/deepseek-v4.1-flash"]])
+        r = self.run_q("switch", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("go3", r.stdout)
+        self.assertIn("commandcode2", r.stdout)
+        r = self.run_q("install", env=env)
+        self.assertIn("ทุกบทบาทใช้ได้บนเครื่องนี้", r.stdout)
 
     def test_install_claude_and_opencode(self):
         claude = self.tmp / "claude_home"

@@ -102,7 +102,8 @@ python flashq.py ui
 | `cancel <id>` · `runnow <id>` · `wait <id\|แผน>` | ยกเลิก · รันทันทีในช่องพิเศษ · บล็อกรอจนจบ |
 | `usage <แผน>` · `usage --flash` | token ของ Claude ต่อแผน · token ของ Flash และยอดประหยัด |
 | `switch [next\|...]` · `config` | สลับบัญชีโมเดล · ดู/ตั้งค่า (`max_parallel`, `schedule`) |
-| `install` · `init` · `prune` · `shrink` | ติดตั้ง · ตั้งค่าโปรเจกต์ · ล้างประวัติเก่า · ย่อรูปก่อนให้ Claude อ่าน |
+| `models` | แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วเลือกว่าบทบาทไหนใช้โมเดลอะไร (`--list` `--auto` `--set`) |
+| `install` · `init` · `prune` · `shrink` | ติดตั้ง (ท้ายงานตรวจโมเดลให้) · ตั้งค่าโปรเจกต์ · ล้างประวัติเก่า · ย่อรูปก่อนให้ Claude อ่าน |
 
 ผลลัพธ์ของ `run` ลงท้ายด้วยบรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` และ `job=<id>` (exit 0 = OK)
 
