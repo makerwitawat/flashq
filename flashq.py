@@ -5190,6 +5190,9 @@ def make_ui_server(port: int = 4097):
                 if not j:
                     return self._send(404, {"error": "ไม่พบงานช่างเอกสาร"})
                 return self._send(200, doc_diff(j))
+            if u.path == "/api/models":  # โมเดลที่เครื่องนี้มี (เหมือน flashq models) + โมเดลของแต่ละบทบาท · ให้ตัวแก้บัญชีเลือก
+                models, note = ui_models(q.get("refresh", ["0"])[0] == "1")
+                return self._send(200, {"models": models, "providers": provider_rows(models), "note": note, "tail": recommended_tail(), "roles": role_rows()})
             if u.path == "/api/flash_usage":  # สรุป token/USD ของ Flash + ประมาณการประหยัดเทียบ Claude (อ่านอย่างเดียว · แคช 30 วินาที)
                 try:
                     days = min(max(float(q.get("days", ["30"])[0]), 1), 3650)
@@ -5209,9 +5212,6 @@ def make_ui_server(port: int = 4097):
                 body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
             except ValueError:
                 return self._send(400, {"error": "body ต้องเป็น JSON"})
-            if u.path == "/api/models":  # โมเดลที่เครื่องนี้มี (เหมือน flashq models) + โมเดลของแต่ละบทบาท · ให้ตัวแก้บัญชีเลือก
-                models, note = ui_models(q.get("refresh", ["0"])[0] == "1")
-                return self._send(200, {"models": models, "providers": provider_rows(models), "note": note, "tail": recommended_tail(), "roles": role_rows()})
             path = urlparse(self.path).path
             if path == "/api/cancel":
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
@@ -5338,6 +5338,22 @@ def make_ui_server(port: int = 4097):
                 with contextlib.redirect_stdout(buf):
                     new = switch_account(str(body.get("target") or "next"))
                 return self._send(200 if new else 400, {"ok": bool(new), "model": new, "message": buf.getvalue().strip()})
+            if path == "/api/accounts":  # แก้รายการบัญชีสลับโมเดล (เพิ่ม/แก้/ลบ/ย้าย/คืนค่า repo)
+                ok, msg = edit_accounts(str(body.get("action") or ""), body)
+                return self._send(200 if ok else 400, {"ok": ok, "message": msg})
+            if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
+                role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
+                model = str(body.get("model") or "").strip()
+                models = ui_models()[0]
+                if not role or not model:
+                    return self._send(400, {"ok": False, "message": "ต้องระบุบทบาทและโมเดล"})
+                if models and model not in models:
+                    return self._send(400, {"ok": False, "message": f"เครื่องนี้ไม่มีโมเดล {model}"})
+                import contextlib
+                import io
+                with contextlib.redirect_stdout(io.StringIO()):
+                    ok = set_agent_model(role, model)
+                return self._send(200 if ok else 400, {"ok": ok, "message": f"{role} → {model}" if ok else "เขียน opencode.json ไม่ได้"})
             return self._send(404, {"error": "ไม่พบ"})
 
     class S(ThreadingHTTPServer):
@@ -5357,22 +5373,6 @@ def make_ui_server(port: int = 4097):
 
     return S(("127.0.0.1", port), H), token
 
-            if path == "/api/accounts":  # แก้รายการบัญชีสลับโมเดล (เพิ่ม/แก้/ลบ/ย้าย/คืนค่า repo)
-                ok, msg = edit_accounts(str(body.get("action") or ""), body)
-                return self._send(200 if ok else 400, {"ok": ok, "message": msg})
-            if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
-                role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
-                model = str(body.get("model") or "").strip()
-                models = ui_models()[0]
-                if not role or not model:
-                    return self._send(400, {"ok": False, "message": "ต้องระบุบทบาทและโมเดล"})
-                if models and model not in models:
-                    return self._send(400, {"ok": False, "message": f"เครื่องนี้ไม่มีโมเดล {model}"})
-                import contextlib
-                import io
-                with contextlib.redirect_stdout(io.StringIO()):
-                    ok = set_agent_model(role, model)
-                return self._send(200 if ok else 400, {"ok": ok, "message": f"{role} → {model}" if ok else "เขียน opencode.json ไม่ได้"})
 
 def cmd_ui(a) -> int:
     try:
@@ -5390,6 +5390,7 @@ def cmd_ui(a) -> int:
             import webbrowser
             webbrowser.open(url)
         return 0
+    threading.Thread(target=ui_models, daemon=True).start()  # อุ่นรายการโมเดลของเครื่อง (opencode models ช้า) ให้ตัวแก้บัญชี/สถานะ "ใช้ได้" พร้อมเร็ว
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"UI_URL={url}  (Ctrl+C เพื่อปิด)", flush=True)
     if not a.no_open:
@@ -5409,7 +5410,6 @@ GOAL_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*(G-\d+)\s*(.*)$")
 GOAL_VAGUE = ("สวย", "ดีขึ้น", "ดีกว่า", "ง่าย", "เร็วขึ้น", "เร็ว", "เหมาะสม", "ถูกต้อง", "สมบูรณ์", "เรียบร้อย", "ใช้งานได้", "ทำงานได้", "ไม่มีบั๊ก",
               "ลื่น", "นิ่ง", "ครบถ้วน", "user-friendly", "nice", "better", "faster", "clean", "properly", "works")
 GOAL_TRIVIAL_RE = re.compile(r"^\s*(echo\b|true\s*$|exit\s+0\s*$|rem\b|:\s*$|cd\s*$|dir\s*$|ls\s*$|type\s+nul)", re.I)
-    threading.Thread(target=ui_models, daemon=True).start()  # อุ่นรายการโมเดลของเครื่อง (opencode models ช้า) ให้ตัวแก้บัญชี/สถานะ "ใช้ได้" พร้อมเร็ว
 GOAL_DEFAULT_ROUNDS, GOAL_ROUNDS_CAP, GOAL_DEFAULT_HOURS = 5, 10, 6
 GOAL_UI_RE = re.compile(r"หน้าตา|หน้าจอ|ใช้ง่าย|ใช้งานง่าย|\bui\b|\bux\b|layout|ปุ่ม|เมนู|หน้าเว็บ", re.I)
 GOAL_COUNT_RE = re.compile(r"[≥>]=?\s*\d|อย่างน้อย\s*\d|ครบ\s*\d|\d+\s*(?:จุด|ช่อง|ปุ่ม|รายการ)|นับ|count|ใน\s*dom|querySelector", re.I)

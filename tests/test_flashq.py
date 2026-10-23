@@ -897,34 +897,6 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"],
                          "commandcode2/deepseek/deepseek-v4.1-flash")
 
-    def test_ui_log_tail_offset(self):
-        """ui: /api/log อ่านต่อจาก offset เฉพาะบรรทัดที่จบแล้ว"""
-        (self.home / "jobs").mkdir(parents=True)
-        (self.home / "logs").mkdir(parents=True)
-        log = self.home / "logs" / "j_1.jsonl"
-        log.write_text(json.dumps({"type": "text", "part": {"text": "สวัสดี"}}) + "\n" + '{"type":"te', encoding="utf-8")
-        (self.home / "jobs" / "j.json").write_text(json.dumps(
-            {"id": "j", "status": "ok", "created": "2026-01-01 00:00:00", "project": str(self.proj), "logs": [str(log)]}),
-            encoding="utf-8")
-        base = self.start_ui()
-        d = json.loads(self.http(base + "/api/log?id=j&offset=0")[1])
-        self.assertEqual(d["lines"], ["สวัสดี"])
-        with open(log, "a", encoding="utf-8") as f:
-            f.write('xt","part":{"text":"PONG"}}\n')
-        d2 = json.loads(self.http(base + f"/api/log?id=j&offset={d['offset']}")[1])
-        self.assertEqual(d2["lines"], ["PONG"])
-        self.assertEqual(d2["offset"], log.stat().st_size)
-
-    def test_ui_stop_running_and_dead(self):
-        """ui: หยุดงานที่กำลังทำ (ต้อง confirm=id · สั่ง abort session บน server) + ป้ายงานที่ process ตาย + รับทราบ"""
-        import http.server
-        import threading
-        sys.path.insert(0, str(REPO))
-        import flashq
-        hits = []
-
-        class Fake(http.server.BaseHTTPRequestHandler):
-            def do_POST(self):
     def test_ui_accounts_edit_and_role_model(self):
         """ui: แก้บัญชีสลับโมเดล (เพิ่ม/แก้/ย้าย/ลบ/คืนค่า) เขียน ~/.flashq/accounts.json ของเครื่อง ไม่แตะ repo · โมเดลต้องมีในเครื่อง (รายการเดียวกับ flashq models) · ตั้งโมเดลบทบาทได้"""
         self.env["FAKE_MODELS"] = "x/other-model|y/spare-model"
@@ -1000,6 +972,34 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(role(role="verifier", model="no/such"), 400)
         self.assertEqual(role(role="boss", model="x/other-model"), 400)
 
+    def test_ui_log_tail_offset(self):
+        """ui: /api/log อ่านต่อจาก offset เฉพาะบรรทัดที่จบแล้ว"""
+        (self.home / "jobs").mkdir(parents=True)
+        (self.home / "logs").mkdir(parents=True)
+        log = self.home / "logs" / "j_1.jsonl"
+        log.write_text(json.dumps({"type": "text", "part": {"text": "สวัสดี"}}) + "\n" + '{"type":"te', encoding="utf-8")
+        (self.home / "jobs" / "j.json").write_text(json.dumps(
+            {"id": "j", "status": "ok", "created": "2026-01-01 00:00:00", "project": str(self.proj), "logs": [str(log)]}),
+            encoding="utf-8")
+        base = self.start_ui()
+        d = json.loads(self.http(base + "/api/log?id=j&offset=0")[1])
+        self.assertEqual(d["lines"], ["สวัสดี"])
+        with open(log, "a", encoding="utf-8") as f:
+            f.write('xt","part":{"text":"PONG"}}\n')
+        d2 = json.loads(self.http(base + f"/api/log?id=j&offset={d['offset']}")[1])
+        self.assertEqual(d2["lines"], ["PONG"])
+        self.assertEqual(d2["offset"], log.stat().st_size)
+
+    def test_ui_stop_running_and_dead(self):
+        """ui: หยุดงานที่กำลังทำ (ต้อง confirm=id · สั่ง abort session บน server) + ป้ายงานที่ process ตาย + รับทราบ"""
+        import http.server
+        import threading
+        sys.path.insert(0, str(REPO))
+        import flashq
+        hits = []
+
+        class Fake(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
                 hits.append(self.path)
                 self.send_response(200)
                 self.send_header("Content-Length", "4")
