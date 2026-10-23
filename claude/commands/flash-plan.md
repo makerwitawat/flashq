@@ -1,6 +1,7 @@
 ---
 description: >-
   (Claude Code · ทุกโปรเจกต์) วางแผนให้ DeepSeek Flash ทำ (ยืนยันจุดแก้ → แผน T-xx → ส่งเข้าคิวกลาง flashq) · /flash-plan <งาน>. Triggers: ให้ deepseek ทำ, ส่งงานให้ deepseek, ส่งงานให้ flash
+effort: high
 ---
 <!-- flashq:managed — ติดตั้งโดย `flashq.py install` (ต้นฉบับ {{FLASHQ}}/claude/commands/) -->
 
