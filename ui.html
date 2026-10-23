@@ -828,7 +828,7 @@ function render() {
       <div id="rnL${i}" style="display:contents"></div>
     </div>
     <div class="row" style="margin-top:0.5rem"><button class="primary" data-log="${esc(r.id)}">ดู log สด</button>${actBtns(r, { retry: false, short: false })}
-      ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : ""}
+      ${r.session ? `<button data-open="${esc(r.id)}">เปิดใน desktop</button>` : isQa(r) ? `<span class="muted" title="นักทดสอบรันคำสั่งทดสอบเองโดยตรง ไม่ผ่านโมเดล จึงไม่มี session ใน opencode ให้เปิด — ดูความคืบหน้าที่ปุ่ม 'ดู log สด' (จะมี session เฉพาะตอน Flash วิเคราะห์สาเหตุที่ไม่ผ่าน)">ℹ ไม่มี session ใน opencode (รันคำสั่งตรง)</span>` : ""}
       <span class="sp"></span><button class="danger" data-stop="${esc(r.id)}">หยุดงานนี้</button></div></div>`).join("")
     : `<div class="empty">ว่าง — ไม่มีงานที่กำลังทำ${s.queued.length ? "" : " · กด <b>＋ ส่งงานใหม่</b> เพื่อรันคิว"}</div>`);
   // เวลา/ความเคลื่อนไหวเปลี่ยนทุกรอบ → เติมแยก ไม่ให้การ์ดทั้งใบ (และปุ่มหยุด/ดู log) ถูกสร้างใหม่ทุก 3 วิ
@@ -1769,8 +1769,14 @@ function runInfo(r) {
 /* --- อ่าน log ของงานที่กำลังทำ (ต่อจาก offset · ไม่อ่านซ้ำ) --- */
 const TOOL_TH = { read: "อ่านไฟล์", edit: "แก้ไฟล์", write: "เขียนไฟล์", patch: "แก้ไฟล์", apply_patch: "แก้ไฟล์", bash: "รันคำสั่ง", grep: "ค้นหาในไฟล์",
   glob: "ค้นหาไฟล์", list: "ดูรายการไฟล์", todowrite: "จดแผนงาน", todoread: "ดูแผนงาน", task: "เรียกผู้ช่วย", webfetch: "เปิดเว็บ" };
-function activity(L) {
-  if (!L || !L.last) return "เริ่มงาน…";
+function activity(L, r) {
+  if (r && isQa(r) && r.qa?.phase !== "analyze") {   // นักทดสอบ: log คือผลดิบของสคริปต์ทดสอบ (ไม่ใช่ 🔧 ของโมเดล) — ว่างจนกว่าสคริปต์จะพิมพ์ ไม่ได้แปลว่าค้าง
+    const cur = r.qa?.current || r.tasks || "";
+    const line = L && L.last ? (L.last.split(/\r?\n/).find((x) => x.trim()) || "").trim() : "";
+    const lv = r.qa_live, live = lv && lv.age_sec < 90 ? ` · ${lv.moved_sec < 90 ? "โปรเซสขยับอยู่" : "โปรเซสนิ่งมา " + dur(lv.moved_sec + lv.age_sec)} (${lv.n}${lv.names.length ? ": " + lv.names[0] : ""})` : "";   // ชีพจรจาก flashq (CPU/I/O ของโปรเซสทั้งชุด) — ไม่พึ่ง log
+    return (line ? "ผลล่าสุด: " + line : `กำลังรัน ${cur} · log ว่าง (ปกติ)`) + live;
+  }
+  if (!L || !L.last) return r && r.elapsed_sec > 45 ? "โมเดลกำลังคิด/อ่านบริบท · ยังไม่เรียกเครื่องมือ (ปกติ)" : "เริ่มงาน…";
   const line = L.last;
   if (line.startsWith("❌ {")) return "เจอข้อผิดพลาด";
   const m = line.match(/^(?:🔧|❌)\s*([^:\s]+):\s*([\s\S]*)$/);
@@ -2380,15 +2386,16 @@ function officeUpdate() {
     else t = `ผ่านไป ${dur(Math.floor(ri.el))} · ยังประมาณเวลาที่เหลือไม่ได้`;
     setText("ofCE" + k, t);
     setText("ofCM" + k, estWhy(ri.est));
-    const idleMs = r.log_idle_sec != null ? r.log_idle_sec * 1000 + (now - stateAt) : L ? now - L.changedAt : 0, logQuiet = (r.log_idle_sec != null || L) && idleMs > 180000;
+    const qaRun = isQa(r) && r.qa?.phase !== "analyze";   // สคริปต์ทดสอบบางชุดไม่พิมพ์ระหว่างรัน (flashq เฝ้า CPU/I/O เองและตัดถ้านิ่งสนิท) → เตือนช้ากว่าและไม่ทำการ์ดเป็นสีเตือน
+    const idleMs = r.log_idle_sec != null ? r.log_idle_sec * 1000 + (now - stateAt) : L ? now - L.changedAt : 0, logQuiet = (r.log_idle_sec != null || L) && idleMs > (qaRun ? 600000 : 180000);
     // log หลักเงียบได้เพราะงานส่งต่อให้ผู้ช่วยย่อย (subagent) — ตัวคุมงานถามเซิร์ฟเวอร์แล้วว่าใครขยับล่าสุด
     const aa = r.agent_act, aIdle = aa && aa.idle_sec != null ? aa.idle_sec + (now - stateAt) / 1000 : null, sub = aa && aa.subs && aa.subs[0];
-    const quiet = logQuiet && !(aIdle != null && aIdle < 180);
+    const quiet = logQuiet && !qaRun && !(aIdle != null && aIdle < 180);
     const subTxt = logQuiet && sub && sub.ago_sec != null ? `🧑‍💻 ผู้ช่วยย่อย${sub.title ? " «" + trunc(sub.title, 40) + "»" : ""} ขยับ ${dur(Math.floor(sub.ago_sec + (now - stateAt) / 1000))} ที่แล้ว` : "";  // สิ่งที่ทำอยู่แสดงในบรรทัด 🛠
-    const warn = logQuiet ? (quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}`
+    const warn = logQuiet ? (qaRun ? `log เงียบ ${dur(Math.floor(idleMs / 1000))} (ปกติของบางชุดทดสอบ — flashq เฝ้าอยู่ ตัดเองถ้าโปรเซสนิ่งสนิท)` : quiet ? `⚠ log เงียบมา ${dur(Math.floor(idleMs / 1000))}${r.log_idle_sec == null ? " (นับตั้งแต่เปิดหน้านี้)" : ""}`
       : `log หลักเงียบ ${dur(Math.floor(idleMs / 1000))} (ปกติ — งานอยู่ที่ผู้ช่วยย่อย)`) + (subTxt ? " · " + subTxt : "") : "";
     // บรรทัด 🛠: log หลักเงียบแต่ผู้ช่วยย่อยยังขยับ → แสดงสิ่งที่ผู้ช่วยย่อยทำ (ไม่ใช่คำสั่งเก่าล่าสุดของ session หลัก)
-    const act = trunc(logQuiet && !quiet && sub && sub.doing ? "ผู้ช่วยย่อย → " + sub.doing : activity(L), 90);
+    const act = trunc(logQuiet && !quiet && sub && sub.doing ? "ผู้ช่วยย่อย → " + sub.doing : activity(L, r), 90);
     setText("ofCT" + k, act);
     setText("ofCA" + k, L ? `เรียกใช้เครื่องมือแล้ว ${L.tools} ครั้ง · ติดขัด ${L.errs} ครั้ง${warn ? " · " + warn : ""}` : warn);
     const sw = r.shell_watch;

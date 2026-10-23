@@ -2301,6 +2301,7 @@ QA_ANALYZE_MIN = 10
 QA_ADAPT_FLOOR_SEC = float(os.environ.get("FLASHQ_QA_ADAPT_FLOOR_SEC") or 300)  # ชุดที่ไม่ได้ตั้ง idle_min: log เคยขยับเป็นจังหวะแล้วเงียบเกิน max(ค่านี้, 6 × ช่วงเงียบนานสุดที่เห็น) = สงสัยค้าง
 QA_FROZEN_SEC = float(os.environ.get("FLASHQ_QA_FROZEN_SEC") or 120)  # สงสัยแล้วต้องเห็นทั้งชุดโปรเซสของคำสั่ง CPU/I/O นิ่งสนิทเกินนี้ถึงฆ่า (ยังขยับ = ทำงานจริง เช่น build เงียบ ๆ ไม่ฆ่า)
 QA_ADAPT_POLL_SEC = float(os.environ.get("FLASHQ_QA_ADAPT_POLL_SEC") or 30)
+QA_LIVE_POLL_SEC = float(os.environ.get("FLASHQ_QA_LIVE_POLL_SEC") or 20)  # ทุกกี่วินาทีที่วัดชีพจรโปรเซสของชุดทดสอบให้หน้าเว็บ (อ่านตารางโปรเซส ~1-3 วิ)
 QA_DEFAULT_RETRY = 1           # ชุดที่ล้มลองซ้ำ 1 รอบ (เหตุชั่วคราว เช่น ConnectionReset) · ผ่านเฉพาะรอบหลัง = FLAKY ไม่ใช่ PASS · ปิดด้วย retry: 0 / --retry 0
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 QA_KEY_RE = re.compile(r"^(?:FAILED|ERROR|FAIL)\b|AssertionError|^E {2,}|^Traceback|\b\d+ (?:passed|failed|errors?|skipped)\b|^Ran \d+ tests?|"
@@ -2616,8 +2617,9 @@ def qa_kill(p: subprocess.Popen) -> None:
         pass
 
 
-def tree_act(pid: int) -> float | None:
-    """CPU+I/O สะสมรวมของโปรเซส pid และลูกหลานทั้งหมด (ตัวนับที่ไม่ขยับ = นิ่งสนิท) · อ่านตารางโปรเซสไม่ได้/ไม่พบ pid = None (ห้ามใช้ตัดสินฆ่า)"""
+def tree_live(pid: int) -> dict | None:
+    """โปรเซส pid และลูกหลานทั้งหมด: {act: CPU+I/O สะสมรวม (ตัวนับที่ไม่ขยับ = นิ่งสนิท), n: จำนวนโปรเซส, names: ชื่อโปรเซสไม่ซ้ำ (ไม่รวม shell/conhost)}
+    อ่านตารางโปรเซสไม่ได้/ไม่พบ pid = None (ห้ามใช้ตัดสินฆ่า)"""
     tab = proc_table()
     if tab is None:
         return None
@@ -2627,15 +2629,40 @@ def tree_act(pid: int) -> float | None:
     by = {p["pid"]: p for p in tab}
     if pid not in by:
         return None
-    seen, stack, total = set(), [by[pid]], 0.0
+    seen, stack, total, names = set(), [by[pid]], 0.0, []
     while stack and len(seen) < 300:
         p = stack.pop()
         if p["pid"] in seen:
             continue
         seen.add(p["pid"])
         total += p["act"]
+        if p["name"].lower() not in ("cmd.exe", "conhost.exe", "powershell.exe", "pwsh.exe", "") and p["name"] not in names:
+            names.append(p["name"])
         stack += [c for c in kids.get(p["pid"], []) if c["created"] >= p["created"] - 1]  # ppid ของ Windows อาจชี้ pid ที่ถูกใช้ซ้ำ
-    return total
+    return {"act": total, "n": len(seen), "names": names[:5]}
+
+
+def tree_act(pid: int) -> float | None:
+    """CPU+I/O สะสมรวมของโปรเซส pid และลูกหลานทั้งหมด (ดู tree_live)"""
+    lv = tree_live(pid)
+    return None if lv is None else lv["act"]
+
+
+def qa_live_beat(job: dict, pid: int, stop: threading.Event) -> None:
+    """วัดชีพจรโปรเซสของชุดทดสอบทุก QA_LIVE_POLL_SEC → job["qa_live"] = {at, moved (ครั้งล่าสุดที่ CPU/I/O เปลี่ยน), n, names} · หน้าเว็บเอาไปโชว์ (ไม่ใช้ตัดสินฆ่า)"""
+    last_act, moved = None, time.time()
+    while not stop.is_set():
+        lv = tree_live(pid)
+        if lv and not stop.is_set():
+            now_t = time.time()
+            if lv["act"] != last_act:
+                last_act, moved = lv["act"], now_t
+            job["qa_live"] = {"at": now_t, "moved": moved, "n": lv["n"], "names": lv["names"]}
+            try:
+                save_job(job)
+            except OSError:
+                pass
+        stop.wait(QA_LIVE_POLL_SEC)
 
 
 def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
@@ -2655,6 +2682,9 @@ def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
         status, why, rc = "DONE", "", None
         last_m, last_chg, maxgap, changes = 0.0, time.time(), 0.0, 0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามชุดนี้ (ชุดที่ตั้ง idle_min เองไม่ใช้)
         last_chk, last_act, act_chg = 0.0, None, 0.0
+        stop_live = threading.Event()
+        if QA_LIVE_POLL_SEC > 0:  # ชีพจรให้หน้าเว็บ: สคริปต์ที่ไม่พิมพ์อะไรก็เห็นว่าโปรเซสยังขยับอยู่ (กลไกล้วน ไม่เรียกโมเดล · thread แยก ไม่รบกวนจังหวะลูปตรวจค้าง)
+            threading.Thread(target=qa_live_beat, args=(job, p.pid, stop_live), daemon=True).start()
         try:
             while True:
                 try:
@@ -2697,6 +2727,9 @@ def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
         except BaseException:
             qa_kill(p)
             raise
+        finally:
+            stop_live.set()
+    job.pop("qa_live", None)
     return {"status": status, "rc": rc if rc is not None else -1, "secs": round(time.time() - t0, 1), "why": why}
 
 
@@ -4895,6 +4928,8 @@ def ui_state() -> dict:
             row.update(elapsed_sec=_secs(j.get("started", "")), slot=h.get("slot") or j.get("slot") or 0, extra=bool(h.get("extra")),
                        log_idle_sec=log_idle_sec(j), plan_done=plan_done_tasks(j),
                        shell_watch=_fresh_shell_watch(j),
+                       qa_live=({"n": ql["n"], "names": ql["names"], "age_sec": int(time.time() - ql["at"]), "moved_sec": int(ql["at"] - ql["moved"])}
+                                if (ql := j.get("qa_live")) and j.get("kind") == "qa" else None),
                        shell_kills=len(j.get("shell_kills") or []), shell_released=len(j.get("shell_released") or []),
                        agent_act=_agent_act_row(j.get("agent_act")))
             running.append(row)

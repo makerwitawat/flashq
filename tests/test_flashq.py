@@ -1608,6 +1608,27 @@ class FlashqTest(unittest.TestCase):
         spec.loader.exec_module(mod)
         self.assertEqual(mod.DEFAULTS["agent_timeout_min"], 30)
 
+    def test_tree_live_pulse(self):
+        """ชีพจรงานทดสอบ: tree_live รวม CPU/I/O + นับโปรเซสลูกหลาน + ชื่อไม่ซ้ำ (ไม่รวม shell) · pid ไม่พบ = None"""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("flashq_live", FLASHQ)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        procs = Path(tempfile.mkdtemp()) / "procs_live.json"
+        self.addCleanup(shutil.rmtree, str(procs.parent), True)
+        t = time.time()
+        procs.write_text(json.dumps([
+            {"pid": 10, "ppid": 1, "name": "cmd.exe", "cmd": "", "created": t, "act": 5},
+            {"pid": 11, "ppid": 10, "name": "powershell.exe", "cmd": "", "created": t + 1, "act": 7},
+            {"pid": 12, "ppid": 11, "name": "MapEditor.exe", "cmd": "", "created": t + 2, "act": 100},
+            {"pid": 13, "ppid": 11, "name": "MapEditor.exe", "cmd": "", "created": t + 3, "act": 50},
+            {"pid": 99, "ppid": 1, "name": "other.exe", "cmd": "", "created": t, "act": 1000}]), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"FLASHQ_FAKE_PROCS": str(procs)}):
+            lv = mod.tree_live(10)
+            self.assertEqual((lv["act"], lv["n"], lv["names"]), (162, 4, ["MapEditor.exe"]))
+            self.assertEqual(mod.tree_act(10), 162)
+            self.assertIsNone(mod.tree_live(555))
+
     def test_ui_submit_and_retry_keep_verify_kind(self):
         """ui: ส่งแบบ kind=verify แล้วสั่งซ้ำ → ยังเป็นงานตรวจ (agent เดิม) ไม่กลายเป็นงานทำจริง"""
         with socket.socket() as s:
@@ -3620,6 +3641,28 @@ class QaTest(unittest.TestCase):
         self.assertIn("นิ่งสนิท", r.stdout)
         r = self.run_q("qa", "busy", "--no-analyze", env=env)
         self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "ตัวอ่านตารางโปรเซสใช้ได้บน Windows")
+    def test_silent_suite_shows_live_pulse_in_state_then_clears(self):
+        """ชุดที่ไม่พิมพ์อะไรเลย: ระหว่างรันงานมี qa_live (จำนวนโปรเซส/ชื่อ) ให้หน้าเว็บโชว์ · จบแล้วหายไป"""
+        quiet = self.py("quiet.py", "import time\nt = time.time()\nwhile time.time() - t < 12:\n    sum(range(10000))\n")
+        self.presets(quiet={"cmd": quiet, "timeout_min": 5, "retry": 0})
+        pr = self.run_q("qa", "quiet", "--no-analyze", env={"FLASHQ_QA_LIVE_POLL_SEC": "1"}, wait=False)
+        seen = None
+        t_end = time.time() + 40
+        while time.time() < t_end and pr.poll() is None:
+            for j in self.job_files():
+                if j.get("qa_live"):
+                    seen = j["qa_live"]
+            if seen:
+                break
+            time.sleep(0.5)
+        out, _ = pr.communicate(timeout=60)
+        self.assertIsNotNone(seen, out)
+        self.assertGreaterEqual(seen["n"], 1)
+        self.assertTrue(any("python" in n.lower() for n in seen["names"]), seen)
+        self.assertIn("FLASH_RUN=OK", out)
+        self.assertFalse(any(j.get("qa_live") for j in self.job_files()))
 
     def test_only_timeouts_is_timeout_status_and_log_shows_summary(self):
         slow = self.py("slow.py", "import time\ntime.sleep(120)\n")
