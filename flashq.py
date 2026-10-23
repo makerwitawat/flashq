@@ -67,7 +67,10 @@ QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รอ
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
-START_LIMIT_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 180)  # รอ sessionID ใน log นานสุดกี่วิ ก่อนนับเป็น NOSTART (เทสต์ตั้งสั้นได้)
+# รอ sessionID ใน log นานสุดกี่วิ ก่อนนับเป็น NOSTART (เทสต์ตั้งสั้นได้ — ตั้งแล้วใช้ค่าเดียวทุกรอบ)
+# วัดจาก log จริง 180 งาน (2026-10-23): เริ่มได้ใน p50 6 วิ · p90 10 วิ · p99 112 วิ · สูงสุด 145 วิ → รอบแรกรอ 60 วิ แล้วฆ่า-ลองใหม่ดีกว่านั่งรอ 3 นาที (รอบถัดไปมักเริ่มได้ใน 6 วิ) · รอบลองใหม่ให้เวลามากขึ้นเผื่อเครื่องหน่วงจริง
+START_LIMIT_FIRST_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 60)
+START_LIMIT_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 120)
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
@@ -85,6 +88,7 @@ DEFAULTS = {
     "agent_stall_min": 10,  # เหมือน stall_min แต่ผู้ตรวจ/ผู้สืบ
     "stall_floor_min": 8,  # ขั้นต่ำของเกณฑ์ "ค้าง" แบบปรับตามจังหวะงานจริง (เกณฑ์ = max(ค่านี้, 6 × ช่วงเงียบที่นานสุดที่เคยเห็น) แต่ไม่เกิน stall_min)
     "agent_stall_floor_min": 4,
+    "model_wait_min": 4,  # server ยืนยันว่าไม่มี tool ใดรันอยู่ (= รอโมเดลตอบอย่างเดียว) แล้ว log เงียบเกินนี้ (นาที) = ตัดสินค้างเลย ไม่รอขั้นต่ำ stall_floor_min · ต้องต่อ server (--attach live) ถึงยืนยันได้ (0 = ปิด)
     "agent_timeout_min": 30,  # ผู้ตรวจ/ผู้สืบ (verify/investigate) สั้นกว่างานทำจริง — กัน agent วนจนกินช่องคิว
     "doc_timeout_min": 30,  # ช่างเอกสาร (flashq doc): เวลาสูงสุดต่อ 1 รัน · ทับรายชุดได้ด้วย timeout_min ใน doc.presets.<ชื่อ>
     "qa_timeout_min": 30,  # นักทดสอบ (flashq qa): เวลาสูงสุดต่อ 1 ชุดทดสอบ · ทับรายชุดได้ด้วย timeout_min ใน qa.presets.<ชื่อ> · เกิน = ฆ่าทั้งต้นแล้วรายงาน TIMEOUT
@@ -1236,10 +1240,10 @@ def ensure_live_server(exe: list[str], ext_dirs: list[str] = ()) -> bool:
     return False
 
 
-def wait_session(p: subprocess.Popen, log: Path) -> str | None:
-    """รอ sessionID ใน log · "" = process จบก่อน · None = ไม่ขึ้นใน START_LIMIT_SEC (เจอตอน desktop เพิ่งเปิดใหม่)"""
+def wait_session(p: subprocess.Popen, log: Path, limit: int | None = None) -> str | None:
+    """รอ sessionID ใน log · "" = process จบก่อน · None = ไม่ขึ้นใน limit วิ (ค่าเริ่มต้น START_LIMIT_SEC · เจอตอน desktop เพิ่งเปิดใหม่)"""
     pos, buf = 0, ""  # อ่านเฉพาะส่วนที่เพิ่มต่อท้าย (ไม่อ่านทั้งไฟล์ซ้ำทุกวินาที)
-    for _ in range(START_LIMIT_SEC):
+    for _ in range(limit or START_LIMIT_SEC):
         if p.poll() is not None:
             return ""
         with open(log, "rb") as f:
@@ -1516,7 +1520,7 @@ def run_once(*args, **kw) -> dict:
 
 
 def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: int, no_open: bool, attempt: int, stall_min: float = 0, stall_floor: float = 0,
-              shell_idle: float = 0, env: dict | None = None) -> dict:
+              shell_idle: float = 0, env: dict | None = None, model_wait: float = 0) -> dict:
     log = LOGS / f"{job['id']}_{attempt}.jsonl"
     err = LOGS / f"{job['id']}_{attempt}.err"
     job.setdefault("logs", []).append(str(log))
@@ -1529,7 +1533,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
         p = subprocess.Popen(cmd, cwd=str(root), stdout=fo, stderr=fe, env=env)
         job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
-        sid = wait_session(p, log)
+        sid = wait_session(p, log, START_LIMIT_FIRST_SEC if attempt == 1 else START_LIMIT_SEC)
         if sid is None:
             kill_tree(p.pid)
             p.wait()
@@ -1548,6 +1552,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
             watch = ShellWatch(shell_idle) if shell_idle and attach.startswith("http") and (os.name == "nt" or os.environ.get("FLASHQ_FAKE_PROCS")) else None
+            warned = False  # เตือนล่วงหน้า "log เงียบ" ครั้งเดียวต่อรอบ
             busy_until = 0.0  # ตัวเฝ้า shell เห็นโปรเซสขยับล่าสุด (กันเกณฑ์ log เงียบฆ่างาน build ยาวที่ยังทำงานจริง)
             while True:  # เฝ้า 3 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ · คำสั่ง shell ค้าง → ฆ่าเฉพาะคำสั่ง
                 try:
@@ -1576,7 +1581,10 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                         limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
                         act = None
                         can_ask = attach.startswith("http") and bool(job.get("session"))
+                        mw = model_wait * 60 if (model_wait and limit and can_ask) else 0  # เกณฑ์ "รอโมเดล" (ใช้ได้เมื่อถาม server ได้เท่านั้น) · ไม่เกินเกณฑ์ปกติ
+                        mw = min(mw, limit) if mw else 0
                         if can_ask and ((limit and (idle >= limit or (idle >= limit / 2 and time.time() - last_poll >= 20)))
+                                        or (mw and idle >= mw and time.time() - last_poll >= 20)
                                         or (watch and idle >= SHELL_POLL_SEC and time.time() - last_poll >= SHELL_POLL_SEC)):
                             # log เงียบแล้ว → ถามเซิร์ฟเวอร์ว่า subagent/tool ยังขยับไหม (ไม่ถามทุกรอบ แต่ถามสดเสมอก่อนตัดสินฆ่า)
                             last_poll = time.time()
@@ -1602,7 +1610,15 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                                 save_job(job)
                         if busy_until:
                             idle = min(idle, time.time() - busy_until)
-                        if limit and idle >= limit:
+                        model_wait_hit = bool(mw and act is not None and not act["running"] and idle >= mw)  # ถามสดรอบนี้แล้ว: ไม่มี tool รัน + ไม่มีอะไรขยับเลย = รอโมเดลอย่างเดียว
+                        if limit and not warned and idle >= max(60, (mw or limit) / 2):  # เตือนล่วงหน้าครั้งเดียว (idle นับรวมความขยับที่ server เห็นแล้ว)
+                            warned = True
+                            print(f"WARN: ไม่มีความเคลื่อนไหว {idle / 60:.1f} นาที — ถ้าเงียบถึง {(mw or limit) / 60:.1f} นาที"
+                                  + (" และ server ไม่เห็น tool รันอยู่" if mw else "") + " จะถือว่าค้าง ฆ่าแล้วลองใหม่เอง", flush=True)
+                        if model_wait_hit and not (idle >= limit):
+                            why = (f"STALL: รอโมเดลนาน {idle / 60:.1f} นาที (เกณฑ์รอโมเดล {mw / 60:g} นาที · server ยืนยันว่าไม่มี tool ใดรันอยู่และไม่มีความขยับ) "
+                                   f"· สาเหตุ: ผู้ให้บริการ ({job.get('model') or 'ค่าเริ่มต้น'}) ไม่ตอบคำขอ")
+                        elif limit and idle >= limit:
                             why = f"STALL: ไม่มีความเคลื่อนไหว {idle / 60:.1f} นาที (เกณฑ์ {limit / 60:.1f} = 6× ช่วงเงียบนานสุดที่เห็น {maxgap / 60:.1f}, ขั้นต่ำ {stall_floor:g}, เพดาน {stall_min:g})"
                             if act is not None:
                                 if act["running"]:
@@ -2178,14 +2194,15 @@ def cmd_run(a) -> int:
                 cmd += ["--", prompt]
             else:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
-            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env)
+            res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env,
+                           model_wait=float(cfg.get("model_wait_min") or 0))
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
             if res.get("perm_denied"):
                 job["perm_denied"] = [x for x in (job.get("perm_denied") or []) + res["perm_denied"] if x][:20]
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:  # ค้างเพราะ log เงียบ (มักเป็น request ไปโมเดลไม่ตอบ) → ลองใหม่ 1 ครั้ง · งานทำจริง /flash ข้ามงานที่ติ๊ก [x] แล้ว จึงต่อจากที่ค้างได้
                 stall_retry -= 1
-                if not worker_like and job["model"]:  # ผู้ตรวจ/ผู้สืบ: ค้างที่ผู้ให้บริการนี้ → รอบใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี)
+                if job["model"] and (not worker_like or not a.model):  # ค้างที่ผู้ให้บริการนี้ → รอบใหม่ย้ายไปผู้ให้บริการอื่นของโมเดลเดิม (ถ้ามี · ไม่แตะ opencode.json) · งานทำจริงที่ผู้ใช้ไม่ได้ระบุ --model เองก็ย้าย (เจอจริง 2026-10-21..23: STALL ซ้ำที่บัญชีเดิม)
                     tried_models.add(job["model"])
                     alts = other_providers(job["model"], tried_models)
                     if alts:
@@ -2253,7 +2270,7 @@ def cmd_run(a) -> int:
     if res.get("no_progress"):
         print("WARN: สถานะ OK แต่ไม่มี commit ใหม่และ worker ไม่รายงาน DONE → น่าจะหยุดถามหรือยังไม่ได้ทำงาน · อ่านสรุปท้ายแล้วตอบ/สั่งซ้ำ อย่าเชื่อ OK")
     if res["status"] == "NOSTART" and job.get("nostart_diag"):
-        print(f"REASON: opencode ไม่เริ่มทำงานภายใน {START_LIMIT_SEC} วิ ทั้ง {len(job['nostart_diag'])} รอบ · รอบสุดท้าย: {job['nostart_diag'][-1]}")
+        print(f"REASON: opencode ไม่เริ่มทำงาน (รอบแรกรอ {START_LIMIT_FIRST_SEC} วิ · รอบลองใหม่ {START_LIMIT_SEC} วิ) ทั้ง {len(job['nostart_diag'])} รอบ · รอบสุดท้าย: {job['nostart_diag'][-1]}")
     if res["status"] == "TIMEOUT":
         print(f"REASON: {job.get('timeout_reason', '')}")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))
@@ -2281,7 +2298,10 @@ QA_MAX_CMD = 2000
 QA_LOG_CAP = 100 * 1024 * 1024   # log ของ 1 ชุดเกินนี้ = คำสั่งพ่นข้อความไม่หยุด → ฆ่า (กันดิสก์เต็ม)
 QA_READ_CAP = 600 * 1024         # อ่านท้าย log แค่นี้ตอนตรวจ expect/ดึงบรรทัดสำคัญ
 QA_ANALYZE_MIN = 10
-QA_DEFAULT_RETRY = 1             # ชุดที่ล้มลองซ้ำ 1 รอบ (เหตุชั่วคราว เช่น ConnectionReset) · ผ่านเฉพาะรอบหลัง = FLAKY ไม่ใช่ PASS · ปิดด้วย retry: 0 / --retry 0
+QA_ADAPT_FLOOR_SEC = float(os.environ.get("FLASHQ_QA_ADAPT_FLOOR_SEC") or 300)  # ชุดที่ไม่ได้ตั้ง idle_min: log เคยขยับเป็นจังหวะแล้วเงียบเกิน max(ค่านี้, 6 × ช่วงเงียบนานสุดที่เห็น) = สงสัยค้าง
+QA_FROZEN_SEC = float(os.environ.get("FLASHQ_QA_FROZEN_SEC") or 120)  # สงสัยแล้วต้องเห็นทั้งชุดโปรเซสของคำสั่ง CPU/I/O นิ่งสนิทเกินนี้ถึงฆ่า (ยังขยับ = ทำงานจริง เช่น build เงียบ ๆ ไม่ฆ่า)
+QA_ADAPT_POLL_SEC = float(os.environ.get("FLASHQ_QA_ADAPT_POLL_SEC") or 30)
+QA_DEFAULT_RETRY = 1           # ชุดที่ล้มลองซ้ำ 1 รอบ (เหตุชั่วคราว เช่น ConnectionReset) · ผ่านเฉพาะรอบหลัง = FLAKY ไม่ใช่ PASS · ปิดด้วย retry: 0 / --retry 0
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 QA_KEY_RE = re.compile(r"^(?:FAILED|ERROR|FAIL)\b|AssertionError|^E {2,}|^Traceback|\b\d+ (?:passed|failed|errors?|skipped)\b|^Ran \d+ tests?|"
                        r"^(?:OK|FAILED) ?(?:\(|$)|\bnot ok\b|error\[E\d+\]|panicked at|^--- FAIL|BUILD FAILED|✖|✕|\bTests?:\s|\d+ failing|\berror:", re.I)
@@ -2596,6 +2616,28 @@ def qa_kill(p: subprocess.Popen) -> None:
         pass
 
 
+def tree_act(pid: int) -> float | None:
+    """CPU+I/O สะสมรวมของโปรเซส pid และลูกหลานทั้งหมด (ตัวนับที่ไม่ขยับ = นิ่งสนิท) · อ่านตารางโปรเซสไม่ได้/ไม่พบ pid = None (ห้ามใช้ตัดสินฆ่า)"""
+    tab = proc_table()
+    if tab is None:
+        return None
+    kids: dict = {}
+    for p in tab:
+        kids.setdefault(p["ppid"], []).append(p)
+    by = {p["pid"]: p for p in tab}
+    if pid not in by:
+        return None
+    seen, stack, total = set(), [by[pid]], 0.0
+    while stack and len(seen) < 300:
+        p = stack.pop()
+        if p["pid"] in seen:
+            continue
+        seen.add(p["pid"])
+        total += p["act"]
+        stack += [c for c in kids.get(p["pid"], []) if c["created"] >= p["created"] - 1]  # ppid ของ Windows อาจชี้ pid ที่ถูกใช้ซ้ำ
+    return total
+
+
 def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
     """รันคำสั่ง 1 ชุดจนจบ/เกินเวลา/ค้าง/log ใหญ่เกิน · คืน {status: DONE|TIMEOUT|HANG|BIGLOG|ERROR, rc, secs, why}
     ยังไม่ตัดสินผ่าน/ไม่ผ่าน (qa_verdict ทำ) · ฆ่าทั้งต้นเสมอ (ไม่ทิ้งลูกค้างพอร์ต) · flashq ถูกขัดจังหวะ = ฆ่าคำสั่งก่อนออก"""
@@ -2611,6 +2653,8 @@ def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
         job["child_pid"], job["child_pid_start"] = p.pid, proc_start(p.pid)
         save_job(job)
         status, why, rc = "DONE", "", None
+        last_m, last_chg, maxgap, changes = 0.0, time.time(), 0.0, 0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามชุดนี้ (ชุดที่ตั้ง idle_min เองไม่ใช้)
+        last_chk, last_act, act_chg = 0.0, None, 0.0
         try:
             while True:
                 try:
@@ -2622,10 +2666,25 @@ def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
                     status, why = "TIMEOUT", f"เกินเวลา {spec['timeout_min']:g} นาที (ฆ่าทั้งต้นแล้ว)"
                 else:
                     try:
+                        m = os.path.getmtime(log)
                         if os.path.getsize(log) > QA_LOG_CAP:
                             status, why = "BIGLOG", f"log เกิน {QA_LOG_CAP // 1048576} MB (คำสั่งพ่นข้อความไม่หยุด · ฆ่าแล้ว)"
-                        elif spec["idle_min"] and time.time() - os.path.getmtime(log) > spec["idle_min"] * 60:
+                        elif spec["idle_min"] and time.time() - m > spec["idle_min"] * 60:
                             status, why = "HANG", f"log เงียบเกิน {spec['idle_min']:g} นาที (ตั้ง idle_min ไว้ · ฆ่าแล้ว)"
+                        elif not spec["idle_min"]:
+                            nowt = time.time()
+                            if m != last_m:
+                                if last_m:
+                                    maxgap, changes = max(maxgap, nowt - last_chg), changes + 1
+                                last_m, last_chg, last_act = m, nowt, None
+                            limit = max(QA_ADAPT_FLOOR_SEC, 6 * maxgap)
+                            if changes >= 5 and nowt - last_chg >= limit and nowt - last_chk >= QA_ADAPT_POLL_SEC:  # เคยพ่นเป็นจังหวะแล้วเงียบผิดปกติ → ดูว่าโปรเซสยังขยับไหม
+                                last_chk, act = nowt, tree_act(p.pid)
+                                if act is not None and act != last_act:
+                                    last_act, act_chg = act, nowt
+                                elif act is not None and nowt - act_chg >= QA_FROZEN_SEC:
+                                    status, why = "HANG", (f"log เงียบ {(nowt - last_chg) / 60:.1f} นาที (เกณฑ์ปรับตามจังหวะ {limit / 60:.1f} นาที = 6× ช่วงเงียบนานสุด {maxgap / 60:.1f}) "
+                                                           f"และโปรเซสทั้งชุด CPU/I/O นิ่งสนิท {(nowt - act_chg) / 60:.1f} นาที → ค้าง · ฆ่าแล้ว")
                     except OSError:
                         pass
                 if why:
@@ -4887,7 +4946,7 @@ def job_reason(j: dict, state: str) -> str:
         return one_line(j.get("timeout_reason") or "หมดเวลา (ไม่มีบันทึกสาเหตุ)", 500)
     if state == "nostart":
         diag = j.get("nostart_diag") or []
-        return one_line(f"opencode ไม่เริ่มทำงานภายใน {START_LIMIT_SEC} วิ" + (f" · รอบสุดท้าย: {diag[-1]}" if diag else ""), 500)
+        return one_line(f"opencode ไม่เริ่มทำงาน (รอ {START_LIMIT_FIRST_SEC}/{START_LIMIT_SEC} วิ ต่อรอบ)" + (f" · รอบสุดท้าย: {diag[-1]}" if diag else ""), 500)
     if state == "denied":
         return one_line("opencode ปฏิเสธสิทธิ์: " + " · ".join(f"{x.get('kind', '')}: {x.get('path', '')}" for x in (j.get("perm_denied") or [])[:5]), 500)
     if state == "quota":
@@ -7157,7 +7216,7 @@ def main() -> int:
         r.add_argument("--wait-min", type=float, default=720, help="รอคิวได้นานสุดกี่นาที")
         r.add_argument("--no-wait", action="store_true", help="คิวไม่ว่าง = จบทันที FLASH_RUN=BUSY")
         r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
-        r.add_argument("--retry-nostart", type=int, default=1, help="NOSTART แล้วลองใหม่กี่ครั้ง")
+        r.add_argument("--retry-nostart", type=int, default=2, help="NOSTART แล้วลองใหม่กี่ครั้ง")
         r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
         r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
         r.set_defaults(fn=cmd_run)

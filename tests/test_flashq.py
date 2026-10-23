@@ -5,6 +5,7 @@ import re
 import shutil
 import socket
 import subprocess
+import types
 import sys
 import tempfile
 import time
@@ -1856,10 +1857,11 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("NOSTART → ลองใหม่อัตโนมัติ", out)
         self.assertIn("NOSTART รอบ 1:", out)
         self.assertIn("NOSTART รอบ 2:", out)
-        self.assertIn("REASON: opencode ไม่เริ่มทำงานภายใน 3 วิ ทั้ง 2 รอบ", out)
+        self.assertIn("NOSTART รอบ 3:", out)  # ลองใหม่เองได้ 2 ครั้ง (ค่าเริ่มต้น --retry-nostart 2)
+        self.assertIn("REASON: opencode ไม่เริ่มทำงาน (รอบแรกรอ 3 วิ · รอบลองใหม่ 3 วิ) ทั้ง 3 รอบ", out)
         self.assertIn("run=dddd4444", out)
         job = json.loads(next((self.home / "jobs").glob("*.json")).read_text(encoding="utf-8"))
-        self.assertEqual(len(job["nostart_diag"]), 2)
+        self.assertEqual(len(job["nostart_diag"]), 3)
         self.assertTrue(job["last"].startswith("NOSTART: "))
 
     def test_server_activity_sees_child_session_and_running_tool(self):
@@ -1974,6 +1976,22 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(len(aborts), 2, hits)  # รอบแรก + รอบลองใหม่
         self.assertTrue(all(re.match(r"/session/ses_fake\d+/abort\?directory=", p) for p in aborts), aborts)
         self.assertIn("หยุด session", r.stdout)
+
+    def test_live_model_wait_cuts_stall_before_floor(self):
+        """server ยืนยันว่าไม่มี tool รันและไม่มีอะไรขยับ = รอโมเดลอย่างเดียว → ตัดที่ model_wait_min ไม่ต้องรอขั้นต่ำ stall_floor_min (5 นาที)
+        แต่ถ้า subagent ยังขยับ = ไม่ตัด"""
+        (self.proj / ".flash.json").write_text(json.dumps({"stall_min": 10, "stall_floor_min": 5, "model_wait_min": 0.05, "require_plan_in_remote": False}), encoding="utf-8")
+        mode = {"active": False}
+        url, hits = self.fake_live_server(mode)
+        t0 = time.time()
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env={"FLASHQ_LIVE_URL": url, "FAKE_SLEEP": "60"})
+        self.assertLess(time.time() - t0, 45, r.stdout)
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        self.assertIn("เกณฑ์รอโมเดล", r.stdout)
+        self.assertIn("ลองใหม่อัตโนมัติ", r.stdout)
+        mode["active"] = True
+        r = self.run_q("run", "PLAN.md", "T-01", "--attach", "live", "--no-open", env={"FLASHQ_LIVE_URL": url, "FAKE_SLEEP": "12"})
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
 
     @unittest.skipUnless(os.name == "nt", "หน้าต่าง console เป็นเรื่องของ Windows")
     def test_detached_spawn_children_do_not_open_console_windows(self):
@@ -3526,6 +3544,27 @@ class QaTest(unittest.TestCase):
         self.assertTrue(row["last"].startswith("❌"))  # หัวข้อผลอยู่หน้า (ไม่ถูกตัดท้าย)
         r = self.run_q("list", "--all")
         self.assertIn("[ทดสอบ] ok bad silent slow  [", r.stdout)  # ไม่มีช่องว่างซ้อนจากแผนที่ว่าง
+
+    @unittest.skipUnless(os.name == "nt", "ตัวอ่าน CPU/I/O ของโปรเซสใช้ได้บน Windows")
+    def test_silent_frozen_suite_is_hang_but_busy_silent_suite_is_spared(self):
+        """ชุดที่ไม่ได้ตั้ง idle_min: พ่น log เป็นจังหวะแล้วเงียบ + โปรเซสนิ่งสนิท = ค้าง (ตัดเร็ว ไม่รอ timeout_min) · เงียบแต่ CPU ยังขยับ = ทำงานจริง ไม่ฆ่า"""
+        env = {"FLASHQ_QA_ADAPT_FLOOR_SEC": "2", "FLASHQ_QA_FROZEN_SEC": "3", "FLASHQ_QA_ADAPT_POLL_SEC": "1"}
+        hang = self.py("hang.py", "import time\nfor i in range(6):\n    print('PASS', i, flush=True)\n    time.sleep(1.2)\ntime.sleep(120)\n")
+        busy = self.py("busy.py", "import time\nfor i in range(6):\n    print('PASS', i, flush=True)\n    time.sleep(1.2)\nt = time.time()\nwhile time.time() - t < 20:\n    sum(range(10000))\nprint('PASS=6 FAIL=0', flush=True)\n")
+        self.presets(hang={"cmd": hang, "timeout_min": 10, "retry": 0}, busy={"cmd": busy, "timeout_min": 10, "retry": 0})
+        t0 = time.time()
+        pr = self.run_q("qa", "hang", "--no-analyze", env=env, wait=False)
+        try:
+            out, _ = pr.communicate(timeout=100)
+        except subprocess.TimeoutExpired:
+            pr.kill()
+            self.fail("ไม่ตัดภายใน 100 วิ: " + pr.communicate()[0])
+        r = types.SimpleNamespace(stdout=out)
+        self.assertLess(time.time() - t0, 90, r.stdout)
+        self.assertIn("FLASH_RUN=TIMEOUT", r.stdout)
+        self.assertIn("นิ่งสนิท", r.stdout)
+        r = self.run_q("qa", "busy", "--no-analyze", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
 
     def test_only_timeouts_is_timeout_status_and_log_shows_summary(self):
         slow = self.py("slow.py", "import time\ntime.sleep(120)\n")
