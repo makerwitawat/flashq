@@ -1259,12 +1259,13 @@ def wait_session(p: subprocess.Popen, log: Path, limit: int | None = None) -> st
 
 
 OC_LOG = Path(os.environ.get("FLASHQ_OPENCODE_LOG") or (Path.home() / ".local" / "share" / "opencode" / "log" / "opencode.log"))
-OC_DB_WARN_GB = 5  # ฐานข้อมูล opencode ใหญ่กว่านี้ = เสี่ยงสร้าง session ช้า/ค้าง (เจอจริง 2026-10-22: 11 GB · NOSTART 4 จาก ~73 งาน)
+OC_DB_WARN_GB = 5  # ฐานข้อมูล opencode ใหญ่กว่านี้ = เตือนให้ล้าง (ไม่ใช่ต้นตอค้างที่ init — SQLite busy_timeout 5 วิแล้ว error · ต้นตอจริงคือ stdin ไม่ปิด พิสูจน์ 2026-10-23)
 OC_LOG_TAIL_BYTES = 8 << 20
 # ขั้นตอนเริ่มระบบของ opencode (เรียงตามลำดับใน log) → ข้อความบอกว่าค้างหลังขั้นไหน
-OC_STAGES = (("loop ", "เริ่มระบบจบและเข้ารอบสนทนาแล้ว — ไม่ได้ค้างตอนเริ่ม (log งานขึ้นช้าเพราะโมเดล/ผู้ให้บริการตอบช้า?)"),
+OC_STAGES = (("llm runtime selected", "ส่งคำขอไปผู้ให้บริการโมเดลแล้วไม่ได้คำตอบเลย — ผู้ให้บริการเงียบ (รอบลองใหม่มักผ่าน · เป็นบ่อย = สลับ provider)"),
+             ("loop ", "เข้ารอบสนทนาแล้ว กำลังเตรียมเรียกโมเดล (โหลด skill/ไฟล์ช้า)"),
              ("created id=", "สร้าง session แล้วแต่ยังไม่เข้ารอบสนทนา"),
-             ("init", "ค้างหลังโหลดคอนฟิก/ปิด LSP ก่อนสร้าง session — ขั้นเขียน session ลงฐานข้อมูล opencode.db"),
+             ("init", "ค้างก่อนสร้าง session — opencode run รออ่าน stdin ที่ไม่ปิด (flashq ปิด stdin ให้แล้ว · ยังเจอ = สาเหตุใหม่ ส่งสืบ)"),
              ("loading path=", "ค้างระหว่างโหลดคอนฟิก"), ("bootstrapping", "ค้างตอนเริ่มโปรเจกต์ (bootstrapping)"), ("creating instance", "ค้างตอนสร้าง instance"))
 
 
@@ -1298,10 +1299,15 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
                     runs[m.group(2)] = {"start": ts, "msgs": []}
             if m.group(2) in runs and not msg.startswith(("cleanup", "duplicate skill")):  # cleanup = งานเบื้องหลังเรียกหลัง 1 นาที ไม่ใช่ขั้นเริ่มระบบ
                 runs[m.group(2)]["msgs"].append((ts, msg))
+                if msg.startswith("loop ") and re.search(r"\bstep=[1-9]", msg):  # ถึงรอบ 2 = โมเดลตอบแล้ว log ของรอบนั้นต้องมี sessionID → เป็นของงานอื่นที่เปิดโฟลเดอร์เดียวกันพร้อมกัน
+                    runs[m.group(2)]["other"] = True
+        mine = {k: v for k, v in runs.items() if not v.get("other")}
         if not runs:
             parts.append("log กลางของ opencode ไม่มีรอบที่เปิดโฟลเดอร์นี้เลย → process ไม่ทันบูต (เครื่องหน่วง/ติดไวรัสสแกน/ไฟล์ opencode เปิดไม่ขึ้น)")
+        elif not mine:
+            parts.append(f"รอบที่เปิดโฟลเดอร์นี้ {len(runs)} รอบเป็นของงานอื่นที่ทำงานอยู่ทั้งหมด → process ของงานนี้ไม่ทันบูต")
         else:
-            for rid, r in sorted(runs.items(), key=lambda kv: kv[1]["start"])[-2:]:
+            for rid, r in sorted(mine.items(), key=lambda kv: kv[1]["start"])[-2:]:
                 msgs = [x[1] for x in r["msgs"]]
                 stage = next((txt for key, txt in OC_STAGES if any(x.startswith(key) for x in msgs)), "")
                 lastts, last = r["msgs"][-1]
@@ -1313,7 +1319,7 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
     try:
         gb = Path(db).stat().st_size / (1 << 30)
         if gb >= OC_DB_WARN_GB:
-            parts.append(f"⚠ ฐานข้อมูล opencode ใหญ่ {gb:.0f} GB (เกณฑ์เตือน {OC_DB_WARN_GB} GB) — การสร้าง session ต้องเขียนลงไฟล์นี้ อาจค้างเมื่อมีโปรเซสอื่นถือไว้/ดิสก์ช้า · แนะนำล้าง session เก่า/หมุนไฟล์ (สำรองก่อน) แล้วลองใหม่")
+            parts.append(f"⚠ ฐานข้อมูล opencode ใหญ่ {gb:.0f} GB (เกณฑ์เตือน {OC_DB_WARN_GB} GB) — ทำให้ opencode ช้า/เปลืองดิสก์ · แนะนำล้าง session เก่า/หมุนไฟล์ (สำรองก่อน)")
     except OSError:
         pass
     return " · ".join(parts)

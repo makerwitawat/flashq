@@ -1903,13 +1903,17 @@ class FlashqTest(unittest.TestCase):
         lines.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now_ts + 60))}.000Z level=INFO run=aaaa1111 message=cleanup prune=7.days")
         lines += self.oc_log_lines(self.proj, "bbbb2222", "loop", now_ts, other_dir=True)
         lines += self.oc_log_lines(self.proj, "cccc3333", "loop", now_ts - 3600)
+        # รอบ d = งานอื่นในโฟลเดอร์เดียวกันที่เริ่มพร้อมกันและโมเดลตอบแล้ว (ถึง step=1) → ห้ามเอามาปน
+        lines += self.oc_log_lines(self.proj, "dddd4444", "loop", now_ts + 1)
+        lines.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now_ts + 20))}.000Z level=INFO run=dddd4444 message=loop session.id=ses_x step=1")
         log.write_text("\n".join(lines) + "\n", encoding="utf-8")
         db.write_bytes(b"x" * 200)
         mod.OC_DB_WARN_GB = 100 / (1 << 30)  # ตั้งเกณฑ์ให้ไฟล์เล็กในเทสต์ถือว่า "ใหญ่"
         d = mod.nostart_diag(self.proj, now_ts, log, db)
         self.assertIn("run=aaaa1111", d)
         self.assertIn("`init`", d)
-        self.assertIn("opencode.db", d)
+        self.assertIn("stdin", d)
+        self.assertNotIn("dddd4444", d)
         self.assertNotIn("cleanup", d)  # บรรทัดสุดท้ายต้องเป็น init ไม่ใช่ cleanup เบื้องหลัง
         self.assertNotIn("bbbb2222", d)
         self.assertNotIn("cccc3333", d)
@@ -1919,6 +1923,15 @@ class FlashqTest(unittest.TestCase):
         # ไม่มีรอบของโปรเจกต์นี้เลย → process ไม่ทันบูต · log หาย/ไฟล์ db หาย = ไม่พัง
         self.assertIn("ไม่ทันบูต", mod.nostart_diag(self.tmp / "ไม่มีโปรเจกต์นี้", now_ts, log, self.tmp / "no.db"))
         self.assertIn("อ่าน log opencode ไม่ได้", mod.nostart_diag(self.proj, now_ts, self.tmp / "no.log", self.tmp / "no.db"))
+        # มีแต่รอบของงานอื่น → บอกว่าเป็นของงานอื่น · รอบที่ส่งคำขอโมเดลแล้วเงียบ → บอกว่าผู้ให้บริการไม่ตอบ
+        other = self.oc_log_lines(self.proj, "dddd4444", "loop", now_ts)
+        other.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now_ts + 20))}.000Z level=INFO run=dddd4444 message=loop session.id=ses_x step=1")
+        log.write_text("\n".join(other) + "\n", encoding="utf-8")
+        self.assertIn("ของงานอื่น", mod.nostart_diag(self.proj, now_ts, log, self.tmp / "no.db"))
+        quiet = self.oc_log_lines(self.proj, "eeee5555", "loop", now_ts)
+        quiet.append(f"timestamp={time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now_ts + 10))}.000Z level=INFO run=eeee5555 message=\"llm runtime selected\" llm.runtime=ai-sdk")
+        log.write_text("\n".join(quiet) + "\n", encoding="utf-8")
+        self.assertIn("ผู้ให้บริการโมเดลแล้วไม่ได้คำตอบ", mod.nostart_diag(self.proj, now_ts, log, self.tmp / "no.db"))
 
     def test_nostart_run_prints_reason_and_records_it(self):
         """opencode ไม่ขึ้น sessionID (ปลอมให้นอนเฉย ๆ) → ลองใหม่ 1 ครั้ง · แต่ละรอบพิมพ์ "NOSTART รอบ n: ..." · ท้ายผลมี REASON · ใส่ในงาน (nostart_diag + last)"""
