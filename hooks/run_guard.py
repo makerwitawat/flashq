@@ -31,6 +31,7 @@ DETACH = {"nohup", "setsid", "disown", "start-process", "start-job", "saps"}
 POLL = {"sleep", "start-sleep", "timeout"}
 CUT = {"head", "tail", "select-object", "select"}
 OPS = (";", "&&", "||", "|", "&", "\n")
+INTERP_RE = re.compile(r"^(py(thon[\d.]*)?|pythonw|pwsh|powershell|bash|sh|node|uv|uvx|env|call|exec|time|sudo)(\.exe)?$", re.I)
 
 
 def config() -> dict:
@@ -147,7 +148,10 @@ def job_kind(words: list[str], wrappers: tuple[str, ...]) -> str:
     for i, w in enumerate(words):
         b = base(w)
         if b in wrappers:
-            return "run"
+            # เป็นการรันจริงเมื่อเป็นคำสั่งเอง หรืออยู่หลังตัวแปลภาษา (python x.py) เท่านั้น — `head x/flash_run.py` · `diff` · `for f in …` แค่อ่านไฟล์ ไม่ใช่ส่งงาน
+            if all(INTERP_RE.match(base(p)) or p.startswith("-") or "=" in p for p in words[:i]):
+                return "run"
+            continue
         if b in ("flashq", "flashq.py"):
             for x in words[i + 1:]:
                 if not x.startswith("-"):

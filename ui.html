@@ -104,6 +104,16 @@ tr.click:hover td, tr.sel td { background: var(--hover); }
 .acc:last-child { border-bottom: 0; }
 .acc .m { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.85rem; color: var(--muted); }
 .acc.cur b { color: var(--accent); }
+.acc-edit { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid var(--line); }
+.acc-edit h3 { font-size: 0.9rem; margin: 0.6rem 0 0.3rem; }
+.acc-edit .arow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
+.acc-edit .arow input.s { width: 5.5rem; }
+.acc-edit .pick { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 0.3rem; min-width: 0; }
+.acc-edit .pick .pv { flex: 1 1 9rem; min-width: 0; }
+.acc-edit .pick .mf { flex: 1 1 7rem; min-width: 0; width: 7rem; }
+.acc-edit .pick .md { flex: 1 1 100%; min-width: 0; }
+.acc-edit .arow .rl { flex: 0 0 100%; font-size: 0.85rem; }
+.acc-edit .bad { color: var(--fail); }
 .bar { height: 0.35rem; background: var(--line); border-radius: 1rem; overflow: hidden; min-width: 3rem; }
 .bar i { display: block; height: 100%; background: var(--ok); }
 .stats td, .stats th { padding: 0.25rem 0.35rem; font-size: 0.88rem; }
@@ -422,7 +432,8 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
       <div class="pb">
         <div class="muted" style="margin-bottom:0.4rem">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
         <div id="accounts"></div>
-        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button></div>
+        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button><button id="accEditBtn" title="เพิ่ม/ลบ/แก้บัญชี และโมเดลของแต่ละบทบาท">✎ แก้ไขรายการ</button></div>
+        <div id="accEdit" class="acc-edit" hidden></div>
       </div>
     </section>
     <section class="panel" data-panel="stats">
@@ -1403,6 +1414,93 @@ $("maxPar").onchange = async () => {
   if (n > 1 && !await ask({ title: `ให้รันพร้อมกันได้ ${n} งาน?`, tone: "warn", ok: `ตั้งเป็น ${n} งาน`,
     body: "• ทุกงานใช้บัญชี/โควตาเดียวกัน\n• งานโปรเจกต์เดียวกันจะแก้ checkout เดียวกันพร้อมกัน\n• งานที่รอคิวจะเริ่มเพิ่มทันทีถ้ามีช่องว่าง" })) { $("maxPar").value = String(state?.slots?.max || 1); return; }
   const d = await post("/api/config", { max_parallel: n }); toast(d.message || d.error || "ผิดพลาด"); refresh();
+};
+
+/* ---------- ตัวแก้บัญชี flash-worker + โมเดลของแต่ละบทบาท (รายการโมเดล = เดียวกับ flashq models) · วาดเมื่อเปิด/หลังสั่งเท่านั้น ไม่ถูก poll ทับช่องที่กำลังพิมพ์ ---------- */
+let accInfo = { models: [], roles: [], note: "", tail: "" };
+async function loadAccInfo(refresh) {
+  try {
+    const r = await fetch("/api/models" + (refresh ? "?refresh=1" : ""));
+    if (r.ok) accInfo = await r.json();
+  } catch (e) {}
+}
+const pvOf = (m) => String(m || "").split("/")[0];
+const CUSTOM = "__custom";
+function modelOpts(pv, cur, filter = "") {
+  const f = filter.trim().toLowerCase();
+  const all = (accInfo.models || []).filter((m) => pvOf(m) === pv);
+  const list = all.filter((m) => !f || m.toLowerCase().includes(f) || m === cur);
+  const extra = cur && !all.includes(cur) ? [cur] : [];  // ค่าที่ตั้งไว้แต่เครื่องนี้ไม่มี — คงไว้ให้เห็น
+  const head = !pv ? `<option value="">— เลือกผู้ให้บริการก่อน —</option>` : cur ? "" : `<option value="">— เลือกโมเดล (${all.length} รุ่น) —</option>`;
+  return head + [...extra, ...list].map((m) => `<option value="${esc(m)}"${m === cur ? " selected" : ""}>${esc(m.slice(pv.length + 1))}${extra.includes(m) ? " (ไม่พบในเครื่อง)" : ""}</option>`).join("")
+    + (pv ? `<option value="${CUSTOM}">✎ พิมพ์ชื่อโมเดลเอง…</option>` : "");
+}
+function pickerHTML(cur) {
+  const pv = pvOf(cur), provs = accInfo.providers || [];
+  const grp = (label, list) => list.length ? `<optgroup label="${label}">${list.map((p) => `<option value="${esc(p.id)}"${p.id === pv ? " selected" : ""}>${esc(p.id)} (${p.count} รุ่น)</option>`).join("")}</optgroup>` : "";
+  return `<span class="pick"><select class="pv" aria-label="ผู้ให้บริการ">${cur ? "" : `<option value="">— ผู้ให้บริการ —</option>`}${pv && !provs.some((p) => p.id === pv) ? `<option value="${esc(pv)}" selected>${esc(pv)} (ไม่พบในเครื่อง)</option>` : ""}${grp("ตั้งไว้ใน opencode.json", provs.filter((p) => p.declared))}${grp("มากับ opencode / ล็อกอินไว้", provs.filter((p) => !p.declared))}</select>
+    <input class="mf" placeholder="กรองโมเดล…" aria-label="กรองโมเดล"><select class="md" aria-label="โมเดล">${modelOpts(pv, cur)}</select></span>`;
+}
+function renderAccEditor() {
+  const el = $("accEdit"); if (el.hidden || !state) return;
+  const accs = state.accounts || [], have = new Set(accInfo.models);
+  const rows = accs.map((a, i) => `<div class="arow" data-short="${esc(a.short)}">
+    <input class="s" value="${esc(a.short)}" aria-label="ชื่อย่อ" maxlength="16">
+    <button data-acc="up" ${i === 0 ? "disabled" : ""} title="ขึ้น (สลับก่อน)">▲</button><button data-acc="down" ${i === accs.length - 1 ? "disabled" : ""} title="ลง">▼</button>
+    <button data-acc="save" class="primary">บันทึก</button><button data-acc="del" class="danger" ${accs.length <= 1 ? "disabled" : ""}>ลบ</button>
+    ${pickerHTML(a.model)}${accInfo.models.length && !have.has(a.model) ? `<span class="rl bad">เครื่องนี้ไม่มีโมเดลนี้</span>` : ""}</div>`).join("");
+  const roles = (accInfo.roles || []).map((r) => `<div class="arow" data-role="${esc(r.key)}"><span class="rl"><b>${esc(r.key)}</b> ${esc(r.label)}</span>
+    <button data-acc="role" class="primary">ตั้ง</button>${pickerHTML(r.model)}</div>`).join("");
+  const nProv = (accInfo.providers || []).length, nDecl = (accInfo.providers || []).filter((p) => p.declared).length;
+  el.innerHTML = `<div class="muted">${state.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด · มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น${accInfo.note ? ` <span class="bad">(${esc(accInfo.note)})</span>` : ""}</div>
+    ${rows}
+    <h3>เพิ่มบัญชี</h3>
+    <div class="arow" data-new="1"><input class="s" placeholder="ชื่อย่อ" aria-label="ชื่อย่อใหม่" maxlength="16"><button data-acc="add" class="primary">+ เพิ่ม</button>${pickerHTML("")}</div>
+    <div class="row" style="margin-top:0.4rem"><button data-acc="reload" title="อ่านรายการโมเดลจาก opencode ใหม่">โหลดรายการโมเดลใหม่</button>${state.accounts_source === "machine" ? `<button data-acc="reset" class="danger">คืนค่าตั้งต้นของ repo</button>` : ""}</div>
+    <h3>โมเดลของแต่ละบทบาท (เหมือน flashq models)</h3>${roles || `<div class="empty">อ่านบทบาทไม่ได้</div>`}`;
+}
+$("accEditBtn").onclick = async () => {
+  const el = $("accEdit"); el.hidden = !el.hidden;
+  $("accEditBtn").textContent = el.hidden ? "✎ แก้ไขรายการ" : "✕ ปิดตัวแก้";
+  if (!el.hidden) { renderAccEditor(); await loadAccInfo(false); renderAccEditor(); }
+};
+/* เปลี่ยนผู้ให้บริการ/พิมพ์กรอง → เติมรายการโมเดลของผู้ให้บริการนั้นใหม่ · เลือก "พิมพ์ชื่อเอง" → ถามชื่อ (ไม่ต้องใส่ผู้ให้บริการ) */
+$("accEdit").onchange = async (ev) => {
+  const t = ev.target, pick = t.closest(".pick"); if (!pick) return;
+  const pv = pick.querySelector(".pv").value, md = pick.querySelector(".md");
+  if (t.classList.contains("pv")) { pick.querySelector(".mf").value = ""; md.innerHTML = modelOpts(pv, ""); return; }
+  if (t.classList.contains("md") && t.value === CUSTOM) {
+    const name = await ask({ title: `ชื่อโมเดลของ ${pv}`, body: "พิมพ์เฉพาะส่วนหลังชื่อผู้ให้บริการ (เช่น deepseek-v4.1-flash) — ใช้ได้เมื่อเครื่องนี้มีโมเดลนั้นจริง", ok: "ใช้ชื่อนี้", input: { label: "ชื่อโมเดล", placeholder: "ชื่อโมเดล", check: (v) => (v.trim() ? "" : "ต้องไม่ว่าง") } });
+    const full = name ? `${pv}/${name.trim()}` : "";
+    md.innerHTML = modelOpts(pv, full);
+    if (!full) md.value = "";
+  }
+};
+$("accEdit").oninput = (ev) => {
+  const t = ev.target; if (!t.classList.contains("mf")) return;
+  const pick = t.closest(".pick"), md = pick.querySelector(".md"), cur = md.value && md.value !== CUSTOM ? md.value : "";
+  md.innerHTML = modelOpts(pick.querySelector(".pv").value, cur, t.value);
+};
+$("accEdit").onclick = async (ev) => {
+  const b = ev.target.closest("[data-acc]"); if (!b) return;
+  const row = b.closest(".arow"), act = b.dataset.acc;
+  const val = (sel) => (row?.querySelector(sel)?.value || "").trim();
+  const model = () => { const v = val("select.md"); return v === CUSTOM ? "" : v; };
+  let d;
+  if (act === "reload") { await loadAccInfo(true); toast(`โหลดแล้ว ${accInfo.models.length} รุ่น`); return renderAccEditor(); }
+  if (act === "add") { if (!model()) return toast("เลือกผู้ให้บริการและโมเดลก่อน"); d = await post("/api/accounts", { action: "add", short: val("input.s"), model: model() }); }
+  else if (act === "save") d = await post("/api/accounts", { action: "update", short: row.dataset.short, new_short: val("input.s"), model: model() });
+  else if (act === "up" || act === "down") d = await post("/api/accounts", { action: "move", short: row.dataset.short, dir: act });
+  else if (act === "del") {
+    if (!await ask({ title: `ลบบัญชี ${row.dataset.short}?`, body: "ลบออกจากรายการสลับของเครื่องนี้เท่านั้น (ไม่แตะ opencode.json)", ok: "ลบ", cancel: "ไม่ลบ", tone: "danger" })) return;
+    d = await post("/api/accounts", { action: "remove", short: row.dataset.short });
+  } else if (act === "reset") {
+    if (!await ask({ title: "คืนค่าตั้งต้นของ repo?", body: "ลบรายการบัญชีของเครื่องนี้ทิ้ง แล้วใช้ accounts.json ใน repo แทน", ok: "คืนค่า", cancel: "ไม่", tone: "danger" })) return;
+    d = await post("/api/accounts", { action: "reset" });
+  } else if (act === "role") { if (!model()) return toast("เลือกผู้ให้บริการและโมเดลก่อน"); d = await post("/api/role_model", { role: row.dataset.role, model: model() }); }
+  toast(d.message || d.error || "ผิดพลาด");
+  if (act === "role") await loadAccInfo(false);
+  await refresh(); renderAccEditor();
 };
 
 $("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };

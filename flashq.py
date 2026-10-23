@@ -3931,6 +3931,125 @@ def write_machine_accounts(models: list[str]) -> str:
     write_json(HOME / "accounts.json", {"agent": "flash-worker", "_note": "สร้างโดย flashq models — ลำดับสลับบัญชีของเครื่องนี้ (ลบไฟล์นี้ = กลับไปใช้ accounts.json ใน repo)", "accounts": rows})
     return f"{len(rows)} รายการ: " + ", ".join(s for s, _ in rows)
 
+
+ACC_SHORT_RE = re.compile(r"[\w.\-]{1,16}")
+_UI_MODELS_CACHE: dict = {}
+
+
+def accounts_source() -> str:
+    """รายการบัญชีมาจากไหน: machine = ~/.flashq/accounts.json (เครื่องนี้ · แก้ได้จากหน้าเว็บ/flashq models) · repo = ค่าตั้งต้นใน repo"""
+    return "machine" if read_json(HOME / "accounts.json") else "repo"
+
+
+def ui_models(refresh: bool = False) -> tuple[list[str], str]:
+    """machine_models() แบบแคช 60 วินาที (เรียก `opencode models` ช้า) · หน้าเว็บใช้เลือกโมเดลของบัญชี/บทบาท"""
+    hit = _UI_MODELS_CACHE.get("v")
+    if refresh or not hit or time.time() - hit[0] > 60:
+        hit = _UI_MODELS_CACHE["v"] = (time.time(), machine_models())
+    return hit[1]
+
+
+def declared_providers() -> set[str]:
+    """provider ที่ตั้งไว้ใน opencode.json (provider.<ชื่อ>) — ที่เหลือใน `opencode models` คือที่มากับ opencode/ล็อกอินไว้"""
+    pv = read_json(OC_CONFIG).get("provider")
+    return set(pv) if isinstance(pv, dict) else set()
+
+
+def provider_rows(models: list[str]) -> list[dict]:
+    """ผู้ให้บริการทั้งหมดที่ใช้ได้บนเครื่องนี้ (ชื่อต้นของ provider/model + ที่ตั้งใน opencode.json แม้ยังไม่ระบุรุ่น) เรียงตั้งไว้ใน opencode.json ก่อน"""
+    count: dict[str, int] = {}
+    for m in models:
+        count[m.partition("/")[0]] = count.get(m.partition("/")[0], 0) + 1
+    decl = declared_providers()
+    return sorted(({"id": p, "count": count.get(p, 0), "declared": p in decl} for p in set(count) | decl),
+                  key=lambda r: (not r["declared"], r["id"].lower()))
+
+
+def model_usable(model: str) -> bool:
+    """โมเดลนี้ opencode ใช้ได้ไหม: ประกาศใน opencode.json หรืออยู่ใน `opencode models` (อันหลังเรียก opencode จึงเช็กเมื่อแบบแรกไม่ผ่านเท่านั้น)"""
+    pv, _, name = model.partition("/")
+    if name in read_json(OC_CONFIG).get("provider", {}).get(pv, {}).get("models", {}):
+        return True
+    return model in machine_models()[0]
+
+
+def edit_accounts(action: str, body: dict) -> tuple[bool, str]:
+    """แก้รายการบัญชีสลับโมเดล flash-worker ที่ ~/.flashq/accounts.json ของเครื่องนี้ (ไม่แตะ accounts.json ใน repo)
+    action: add (short?, model) · update (short, new_short?, model?) · remove (short) · move (short, dir=up|down) · reset (ลบไฟล์ของเครื่อง → กลับใช้ของ repo)
+    โมเดลต้องเป็น provider/ชื่อ และต้องมีในเครื่องนี้ (รายการเดียวกับ flashq models) เมื่ออ่านรายชื่อได้ · คืน (สำเร็จ?, ข้อความ)"""
+    agent, accs = accounts()
+    rows = [[s, m] for s, m in accs]
+    if action == "reset":
+        if accounts_source() != "machine":
+            return False, "ใช้ค่าตั้งต้นของ repo อยู่แล้ว"
+        (HOME / "accounts.json").unlink(missing_ok=True)
+        return True, "ลบรายการของเครื่องนี้แล้ว — กลับไปใช้ accounts.json ใน repo"
+    short = str(body.get("short") or "").strip()
+    model = str(body.get("model") or "").strip()
+    models = ui_models()[0] if action in ("add", "update") and model else []
+
+    def bad_model() -> str:
+        if not re.fullmatch(r"[\w.\-]+/\S+", model):
+            return f"โมเดลต้องเป็นรูป provider/ชื่อ — ได้ '{model}'"
+        if models and model not in models:
+            return f"เครื่องนี้ไม่มีโมเดล {model} (ดูรายการที่เลือกได้ในช่องโมเดล)"
+        if any(m == model and s != short for s, m in rows):
+            return f"{model} อยู่ในรายการแล้ว"
+        return ""
+
+    idx = next((i for i, (s, _) in enumerate(rows) if s == short), -1)
+    if action == "add":
+        if not model:
+            return False, "ต้องระบุโมเดล"
+        if err := bad_model():
+            return False, err
+        if not short:
+            base = model.partition("/")[0]
+            short, n = base, 2
+            while any(s == short for s, _ in rows):
+                short, n = f"{base}{n}", n + 1
+        if not ACC_SHORT_RE.fullmatch(short):
+            return False, "ชื่อย่อใช้ตัวอักษร ตัวเลข . _ - ได้ไม่เกิน 16 ตัว"
+        if idx >= 0:
+            return False, f"ชื่อย่อ '{short}' ซ้ำ"
+        rows.append([short, model])
+        msg = f"เพิ่ม {short} → {model}"
+    elif idx < 0:
+        return False, f"ไม่พบบัญชี '{short}'"
+    elif action == "update":
+        new_short = str(body.get("new_short") or short).strip()
+        if not ACC_SHORT_RE.fullmatch(new_short):
+            return False, "ชื่อย่อใช้ตัวอักษร ตัวเลข . _ - ได้ไม่เกิน 16 ตัว"
+        if new_short != short and any(s == new_short for s, _ in rows):
+            return False, f"ชื่อย่อ '{new_short}' ซ้ำ"
+        if model:
+            if err := bad_model():
+                return False, err
+        rows[idx] = [new_short, model or rows[idx][1]]
+        msg = f"แก้ {short} → {rows[idx][0]}: {rows[idx][1]}"
+    elif action == "remove":
+        if len(rows) <= 1:
+            return False, "ลบตัวสุดท้ายไม่ได้ — ต้องเหลืออย่างน้อย 1 บัญชี (ให้สลับบัญชีได้)"
+        gone = rows.pop(idx)
+        msg = f"ลบ {gone[0]} ({gone[1]})"
+    elif action == "move":
+        j = idx + (-1 if body.get("dir") == "up" else 1)
+        if not 0 <= j < len(rows):
+            return False, "ขยับต่อไม่ได้แล้ว"
+        rows[idx], rows[j] = rows[j], rows[idx]
+        msg = f"ย้าย {short} {'ขึ้น' if j < idx else 'ลง'} (ลำดับ = ลำดับสลับตอนโควตาหมด)"
+    else:
+        return False, f"ไม่รู้จัก action '{action}'"
+    HOME.mkdir(parents=True, exist_ok=True)
+    write_json(HOME / "accounts.json", {"agent": agent, "_note": "ลำดับสลับบัญชีของเครื่องนี้ (แก้จากหน้าเว็บ/flashq models) — ลบไฟล์นี้ = กลับไปใช้ accounts.json ใน repo", "accounts": rows})
+    return True, msg
+
+
+def role_rows() -> list[dict]:
+    """โมเดลที่แต่ละบทบาท (ผู้ทำ/ผู้ตรวจ/…) ใช้อยู่ — เหมือนตารางของ flashq models"""
+    return [{"key": k, "agent": ag, "label": lb, "model": agent_model(ag)} for k, ag, lb in MODEL_ROLES]
+
+
 def switch_account(arg: str) -> str:
     """สลับบัญชี · คืนโมเดลใหม่ ("" = ล้มเหลว)"""
     agent, accs = accounts()
@@ -3952,8 +4071,8 @@ def switch_account(arg: str) -> str:
             return ""
         target = lookup[arg]
     provider, _, name = target.partition("/")
-    if name not in cfg.get("provider", {}).get(provider, {}).get("models", {}):
-        print(f"FAIL: {target} ไม่มีใน provider ของ {OC_CONFIG}")
+    if name not in cfg.get("provider", {}).get(provider, {}).get("models", {}) and not model_usable(target):
+        print(f"FAIL: {target} ไม่มีใน provider ของ {OC_CONFIG} และไม่อยู่ใน opencode models")
         return ""
     shutil.copy2(OC_CONFIG, OC_CONFIG.with_name(OC_CONFIG.name + ".bak-flash-switch"))
     cfg.setdefault("agent", {}).setdefault(agent, {})["model"] = target
@@ -3973,9 +4092,13 @@ def cmd_switch(a) -> int:
     agent, accs = accounts()
     cfg = read_json(OC_CONFIG)
     current = cfg.get("agent", {}).get(agent, {}).get("model")
+    extra: list[str] | None = None  # `opencode models` เรียกครั้งเดียว เฉพาะเมื่อมีรายการที่ไม่ได้ประกาศใน opencode.json
     for short, model in accs:
         provider, _, name = model.partition("/")
-        ok = "" if name in cfg.get("provider", {}).get(provider, {}).get("models", {}) else "  (ไม่มีใน provider!)"
+        declared = name in cfg.get("provider", {}).get(provider, {}).get("models", {})
+        if not declared and extra is None:
+            extra = machine_models()[0]
+        ok = "" if declared or model in (extra or []) else "  (ไม่มีใน provider!)"
         print(f"{'*' if model == current else ' '} {short:7} {model}{ok}")
     print(f"ปัจจุบัน: {current or '(ยังไม่ตั้ง)'} — ดูสถานะอย่างเดียว ไม่ได้เปลี่ยน")
     return 0
@@ -4537,7 +4660,7 @@ def cmd_review(a) -> int:
         if not cand:
             print(f"ไม่พบป้ายที่กำลังตรวจของแผน {key} (ข้าม)", file=sys.stderr)
             return 0
-        r = max(cand, key=lambda x: x.get("started", ""))
+        r = max(cand, key=lambda x: (x[0], x[1].get("started", "")))[1]  # ชื่อตรงทุกตัวก่อน แล้วเอาที่เริ่มล่าสุด
         r.update(status=a.tasks_or_result, finished=now(), note=a.note or "")
         r.pop("age_sec", None), r.pop("done_sec", None)
         write_json(REVIEWS / f"{r['id']}.json", r)
@@ -4618,7 +4741,8 @@ def ui_state() -> dict:
     agent, accs = accounts()
     cfg = read_json(OC_CONFIG)
     providers = cfg.get("provider", {})
-    acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {})}
+    cached = (_UI_MODELS_CACHE.get("v") or (0, ([], "")))[1][0]  # แคชของหน้าเว็บ (ไม่เรียก opencode ตอน poll) · มากับ opencode = ใช้ได้ด้วย
+    acc_rows = [{"short": s, "model": m, "available": m.partition("/")[2] in providers.get(m.partition("/")[0], {}).get("models", {}) or m in cached}
                 for s, m in accs]
     rows = history + queued + running
     history_total = len(history)
@@ -4634,7 +4758,7 @@ def ui_state() -> dict:
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
             "schedule": sch["mode"], "starve_min": starve_min(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history,
-            "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows,
+            "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows, "accounts_source": accounts_source(),
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
             "project_paths": sorted({r["project"] for r in rows if r["project"]}),
             "qa_presets": {p: n for p in sorted({r["project"] for r in rows if r["project"]}) if (n := qa_preset_names(p))},  # ชุดทดสอบที่ตั้งไว้ของแต่ละโปรเจกต์ (ให้ฟอร์มส่งงานเลือกได้)
@@ -5066,6 +5190,9 @@ def make_ui_server(port: int = 4097):
                 body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
             except ValueError:
                 return self._send(400, {"error": "body ต้องเป็น JSON"})
+            if u.path == "/api/models":  # โมเดลที่เครื่องนี้มี (เหมือน flashq models) + โมเดลของแต่ละบทบาท · ให้ตัวแก้บัญชีเลือก
+                models, note = ui_models(q.get("refresh", ["0"])[0] == "1")
+                return self._send(200, {"models": models, "providers": provider_rows(models), "note": note, "tail": recommended_tail(), "roles": role_rows()})
             path = urlparse(self.path).path
             if path == "/api/cancel":
                 j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
@@ -5211,6 +5338,22 @@ def make_ui_server(port: int = 4097):
 
     return S(("127.0.0.1", port), H), token
 
+            if path == "/api/accounts":  # แก้รายการบัญชีสลับโมเดล (เพิ่ม/แก้/ลบ/ย้าย/คืนค่า repo)
+                ok, msg = edit_accounts(str(body.get("action") or ""), body)
+                return self._send(200 if ok else 400, {"ok": ok, "message": msg})
+            if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
+                role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
+                model = str(body.get("model") or "").strip()
+                models = ui_models()[0]
+                if not role or not model:
+                    return self._send(400, {"ok": False, "message": "ต้องระบุบทบาทและโมเดล"})
+                if models and model not in models:
+                    return self._send(400, {"ok": False, "message": f"เครื่องนี้ไม่มีโมเดล {model}"})
+                import contextlib
+                import io
+                with contextlib.redirect_stdout(io.StringIO()):
+                    ok = set_agent_model(role, model)
+                return self._send(200 if ok else 400, {"ok": ok, "message": f"{role} → {model}" if ok else "เขียน opencode.json ไม่ได้"})
 
 def cmd_ui(a) -> int:
     try:
@@ -5247,6 +5390,7 @@ GOAL_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*(G-\d+)\s*(.*)$")
 GOAL_VAGUE = ("สวย", "ดีขึ้น", "ดีกว่า", "ง่าย", "เร็วขึ้น", "เร็ว", "เหมาะสม", "ถูกต้อง", "สมบูรณ์", "เรียบร้อย", "ใช้งานได้", "ทำงานได้", "ไม่มีบั๊ก",
               "ลื่น", "นิ่ง", "ครบถ้วน", "user-friendly", "nice", "better", "faster", "clean", "properly", "works")
 GOAL_TRIVIAL_RE = re.compile(r"^\s*(echo\b|true\s*$|exit\s+0\s*$|rem\b|:\s*$|cd\s*$|dir\s*$|ls\s*$|type\s+nul)", re.I)
+    threading.Thread(target=ui_models, daemon=True).start()  # อุ่นรายการโมเดลของเครื่อง (opencode models ช้า) ให้ตัวแก้บัญชี/สถานะ "ใช้ได้" พร้อมเร็ว
 GOAL_DEFAULT_ROUNDS, GOAL_ROUNDS_CAP, GOAL_DEFAULT_HOURS = 5, 10, 6
 GOAL_UI_RE = re.compile(r"หน้าตา|หน้าจอ|ใช้ง่าย|ใช้งานง่าย|\bui\b|\bux\b|layout|ปุ่ม|เมนู|หน้าเว็บ", re.I)
 GOAL_COUNT_RE = re.compile(r"[≥>]=?\s*\d|อย่างน้อย\s*\d|ครบ\s*\d|\d+\s*(?:จุด|ช่อง|ปุ่ม|รายการ)|นับ|count|ใน\s*dom|querySelector", re.I)

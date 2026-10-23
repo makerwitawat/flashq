@@ -582,6 +582,11 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(hook("python flashq.py run --help", bg=False).returncode, 0)
         self.assertEqual(hook("python flashq.py status", bg=False).returncode, 0)
         self.assertEqual(hook("git status && sleep 1 &", bg=False).returncode, 0)
+        # แค่อ่านไฟล์ที่ชื่อเป็น wrapper (head · diff · for … in …) ไม่ใช่การส่งงาน
+        self.assertEqual(hook("for f in tools/plans/flash_run.py tools/plans/x.py; do head -12 $f; done", bg=False).returncode, 0)
+        self.assertEqual(hook("head -12 tools/plans/flash_run.py | cut -c1-80", bg=False).returncode, 0)
+        self.assertEqual(hook("diff tools/plans/flash_run.py /d/other/flash_run.py", bg=False).returncode, 0)
+        self.assertEqual(hook("C:/Python312/python.exe tools/plans/flash_run.py docs/p.md T-01", bg=False).returncode, 2)
         # เนื้อหา heredoc (เช่นข้อความ commit ที่เล่าเหตุการณ์ flash_run.py … & sleep) เป็นข้อความ ไม่ใช่คำสั่ง
         msg = "git commit -F - <<'EOF'\nflashq: เคยพลาด flash_run.py x.md T-01 & sleep 30; head -6 o.txt\nEOF\ngit log -1"
         self.assertEqual(hook(msg, bg=False).returncode, 0)
@@ -589,8 +594,14 @@ class FlashqTest(unittest.TestCase):
         r = hook("& python tools/plans/flash_run.py docs/p.md T-01", tool="PowerShell")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(hook("ls", tool="Read").returncode, 0)
+        rows = [json.loads(x) for x in (self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()]  # ทุกครั้งที่บล็อกถูกจดไว้ไล่ย้อนหลัง
+        self.assertTrue(rows and all({"at", "reason", "command"} <= set(x) for x in rows), rows)
+        self.assertTrue(any("run_in_background" in x["reason"] for x in rows), rows)
+        self.assertIn("run_guard.log", hook(run, bg=False).stderr)  # ข้อความบล็อกบอกที่ดู log
         (self.home / "run_guard_off").write_text("", encoding="utf-8")  # ปิดยามชั่วคราว
+        n_rows = len(rows)
         self.assertEqual(hook(run, bg=False).returncode, 0)
+        self.assertEqual(len((self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()), n_rows + 1)  # ปิดยาม = ไม่บล็อก ไม่จดเพิ่ม (+1 มาจากบรรทัด assertIn ด้านบน)
         (self.home / "run_guard_off").unlink()
         (self.home / "config.json").write_text(json.dumps({"run_guard": False}), encoding="utf-8")
         self.assertEqual(hook(run, bg=False).returncode, 0)
@@ -683,14 +694,8 @@ class FlashqTest(unittest.TestCase):
         run = dict(base, id="jobrun01", status="running", pid=os.getpid(), pid_start=mod.proc_start(os.getpid()))
         for j in (ok, bad, run):
             mod.save_job(j)
-        rows = [json.loads(x) for x in (self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()]  # ทุกครั้งที่บล็อกถูกจดไว้ไล่ย้อนหลัง
-        self.assertTrue(rows and all({"at", "reason", "command"} <= set(x) for x in rows), rows)
-        self.assertTrue(any("run_in_background" in x["reason"] for x in rows), rows)
-        self.assertIn("run_guard.log", hook(run, bg=False).stderr)  # ข้อความบล็อกบอกที่ดู log
         self.assertEqual(mod.claude_check_action(run)[0], 409)  # ยังรันอยู่
-        n_rows = len(rows)
         code, r = mod.claude_check_action(ok)
-        self.assertEqual(len((self.home / "run_guard.log").read_text(encoding="utf-8").splitlines()), n_rows + 1)  # ปิดยาม = ไม่บล็อก ไม่จดเพิ่ม (+1 มาจากบรรทัด assertIn ด้านบน)
         self.assertEqual(code, 200, r)
         self.assertTrue(opened[-1].startswith("claude://code/new?q=%2Fflash-check%20PLAN.md"), opened)
         self.assertIn("&folder=", opened[-1])
@@ -892,6 +897,81 @@ class FlashqTest(unittest.TestCase):
 
         class Fake(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
+    def test_ui_accounts_edit_and_role_model(self):
+        """ui: แก้บัญชีสลับโมเดล (เพิ่ม/แก้/ย้าย/ลบ/คืนค่า) เขียน ~/.flashq/accounts.json ของเครื่อง ไม่แตะ repo · โมเดลต้องมีในเครื่อง (รายการเดียวกับ flashq models) · ตั้งโมเดลบทบาทได้"""
+        self.env["FAKE_MODELS"] = "x/other-model|y/spare-model"
+        base = self.start_ui()
+        token = re.search(r'const TOKEN = "([^"]+)"', self.http(base + "/")[1]).group(1)
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+
+        def acc(**kw):
+            code, body = self.http(base + "/api/accounts", json.dumps(kw).encode(), hdr)
+            return code, json.loads(body)
+
+        def state():
+            return json.loads(self.http(base + "/api/state")[1])
+
+        mf = self.home / "accounts.json"
+        self.assertEqual(state()["accounts_source"], "repo")
+        self.assertFalse(mf.exists())
+        code, d = self.http(base + "/api/models")
+        info = json.loads(d)
+        self.assertIn("x/other-model", info["models"])
+        self.assertIn("commandcode/deepseek/deepseek-v4.1-flash", info["models"])  # ที่ประกาศใน opencode.json ด้วย
+        self.assertEqual([r["key"] for r in info["roles"]][0], "worker")
+        provs = {p["id"]: p for p in info["providers"]}  # ผู้ให้บริการทั้งหมด: ที่ตั้งใน opencode.json + ที่มากับ opencode
+        self.assertTrue(provs["commandcode"]["declared"])
+        self.assertEqual((provs["x"]["declared"], provs["x"]["count"]), (False, 1))
+        self.assertLess([p["id"] for p in info["providers"]].index("commandcode2"), [p["id"] for p in info["providers"]].index("x"))  # ที่ตั้งไว้มาก่อน
+
+        self.assertEqual(self.http(base + "/api/accounts", b"{}", {"Content-Type": "application/json"})[0], 403)  # ไม่มี token
+        code, d = acc(action="add", short="xo", model="x/other-model")
+        self.assertEqual(code, 200, d)
+        self.assertEqual(state()["accounts_source"], "machine")
+        self.assertEqual(state()["accounts"][-1]["short"], "xo")
+        self.assertTrue(state()["accounts"][-1]["available"])  # โมเดลที่มากับ opencode (ไม่ได้ประกาศใน opencode.json) ก็ใช้ได้
+        code, d = self.http(base + "/api/switch", json.dumps({"target": "xo"}).encode(), hdr)
+        self.assertEqual(code, 200, d)
+        self.assertEqual(self.oc_agent_models()["flash-worker"], "x/other-model")
+        self.assertEqual(len(json.loads(mf.read_text(encoding="utf-8"))["accounts"]), 6)  # 5 ของ repo + 1
+        self.assertEqual(len(json.loads((REPO / "accounts.json").read_text(encoding="utf-8"))["accounts"]), 5)  # repo ไม่ถูกแตะ
+        # ปฏิเสธ: โมเดลที่เครื่องไม่มี · ซ้ำ · ชื่อย่อซ้ำ/ผิดรูป · รูปแบบโมเดลผิด
+        self.assertEqual(acc(action="add", short="n1", model="no/such")[0], 400)
+        self.assertEqual(acc(action="add", short="n2", model="x/other-model")[0], 400)
+        self.assertEqual(acc(action="add", short="xo", model="y/spare-model")[0], 400)
+        self.assertEqual(acc(action="add", short="bad name!", model="y/spare-model")[0], 400)
+        self.assertEqual(acc(action="add", short="n3", model="noslash")[0], 400)
+        # ไม่ใส่ชื่อย่อ = ตั้งจากชื่อ provider
+        self.assertEqual(acc(action="add", model="y/spare-model")[0], 200)
+        self.assertEqual(state()["accounts"][-1]["short"], "y")
+        # แก้ชื่อ/โมเดล · ย้าย · ลบ
+        self.assertEqual(acc(action="update", short="xo", new_short="xo2")[0], 200)
+        self.assertEqual(acc(action="update", short="xo2", new_short="cc")[0], 400)  # ชื่อชนของเดิม
+        self.assertEqual(acc(action="move", short="xo2", dir="up")[0], 200)
+        self.assertEqual([a["short"] for a in state()["accounts"]][-3:], ["xo2", "inferx", "y"])
+        self.assertEqual(acc(action="move", short="cc", dir="up")[0], 400)  # บนสุดแล้ว
+        self.assertEqual(acc(action="remove", short="y")[0], 200)
+        self.assertEqual(acc(action="remove", short="ไม่มี")[0], 400)
+        self.assertEqual(acc(action="nope")[0], 400)
+        # ลบจนเหลือตัวเดียว = ลบตัวสุดท้ายไม่ได้
+        for s in [a["short"] for a in state()["accounts"]][1:]:
+            self.assertEqual(acc(action="remove", short=s)[0], 200)
+        code, d = acc(action="remove", short=state()["accounts"][0]["short"])
+        self.assertEqual(code, 400, d)
+        self.assertEqual(len(state()["accounts"]), 1)
+        # คืนค่า repo
+        self.assertEqual(acc(action="reset")[0], 200)
+        self.assertFalse(mf.exists())
+        self.assertEqual(state()["accounts_source"], "repo")
+        self.assertEqual(acc(action="reset")[0], 400)
+        # โมเดลของบทบาท (ใช้ set_agent_model เดียวกับ flashq models)
+        def role(**kw):
+            return self.http(base + "/api/role_model", json.dumps(kw).encode(), hdr)[0]
+        self.assertEqual(role(role="verifier", model="x/other-model"), 200)
+        self.assertEqual(self.oc_agent_models()["flash-verifier"], "x/other-model")
+        self.assertEqual(role(role="verifier", model="no/such"), 400)
+        self.assertEqual(role(role="boss", model="x/other-model"), 400)
+
                 hits.append(self.path)
                 self.send_response(200)
                 self.send_header("Content-Length", "4")
