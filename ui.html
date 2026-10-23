@@ -104,16 +104,41 @@ tr.click:hover td, tr.sel td { background: var(--hover); }
 .acc:last-child { border-bottom: 0; }
 .acc .m { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.85rem; color: var(--muted); }
 .acc.cur b { color: var(--accent); }
-.acc-edit { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid var(--line); }
-.acc-edit h3 { font-size: 0.9rem; margin: 0.6rem 0 0.3rem; }
-.acc-edit .arow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
-.acc-edit .arow input.s { width: 5.5rem; }
-.acc-edit .pick { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 0.3rem; min-width: 0; }
-.acc-edit .pick .pv { flex: 1 1 9rem; min-width: 0; }
-.acc-edit .pick .mf { flex: 1 1 7rem; min-width: 0; width: 7rem; }
-.acc-edit .pick .md { flex: 1 1 100%; min-width: 0; }
-.acc-edit .arow .rl { flex: 0 0 100%; font-size: 0.85rem; }
-.acc-edit .bad { color: var(--fail); }
+/* ตัวช่วยจัดการบัญชี flash-worker (popup แบบ wizard) */
+dialog.wz { width: min(36rem, calc(100vw - 2rem)); }
+dialog.wz[open] { animation: ask-in .16s ease-out; }
+.wz-box { padding: 1rem 1.2rem; display: grid; gap: 0.7rem; }
+.wz-h { display: flex; align-items: center; gap: 0.5rem; }
+.wz-h h2 { flex: 1; }
+.wz-steps { display: flex; gap: 0.2rem; align-items: center; flex-wrap: wrap; }
+.wz-st { border: 0; background: none; color: var(--muted); display: flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.15rem; font-size: 0.9rem; cursor: pointer; }
+.wz-st i { font-style: normal; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: grid; place-items: center; font-size: 0.8rem; border: 1px solid var(--line); }
+.wz-st.on { color: var(--text); font-weight: 700; }
+.wz-st.on i { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wz-st.done i { background: color-mix(in srgb, var(--ok) 20%, var(--panel)); border-color: var(--ok); }
+.wz-st:disabled { opacity: .45; cursor: default; }
+.wz-sep { color: var(--muted); }
+.wz-list { display: grid; gap: 0.35rem; max-height: min(48vh, 22rem); overflow: auto; padding-right: 0.15rem; }
+.wz-item { text-align: left; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; border: 1px solid var(--line); border-radius: 0.45rem; background: var(--panel); color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
+.wz-item:hover { border-color: var(--accent); }
+.wz-item:disabled { opacity: .55; cursor: not-allowed; }
+.wz-item:disabled:hover { border-color: var(--line); }
+.wz-item.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.wz-item .n { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+.wz-grp { color: var(--muted); font-size: 0.8rem; margin: 0.3rem 0 0; }
+.wz-tag { font-size: 0.75rem; padding: 0.05rem 0.45rem; border-radius: 1rem; border: 1px solid var(--line); color: var(--muted); }
+.wz-tag.ok { color: var(--ok); border-color: var(--ok); }
+.wz-row { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+.wz-row:last-child { border-bottom: 0; }
+.wz-main { flex: 1; min-width: 0; }
+.wz-sub { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.wz-bad { color: var(--fail); font-size: 0.85rem; }
+.wz-act { display: flex; gap: 0.25rem; flex-wrap: wrap; justify-content: flex-end; }
+.wz-sum { border: 1px solid var(--line); border-radius: 0.45rem; padding: 0.55rem 0.7rem; display: grid; gap: 0.25rem; background: var(--code); overflow-wrap: anywhere; }
+.wz-sum button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 0.3rem; }
+.wz-foot { display: flex; gap: 0.5rem; justify-content: flex-end; flex-wrap: wrap; align-items: center; }
+.wz-foot .sp { margin-right: auto; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.wz-hint { margin: 0; color: var(--muted); font-size: 0.9rem; }
 .bar { height: 0.35rem; background: var(--line); border-radius: 1rem; overflow: hidden; min-width: 3rem; }
 .bar i { display: block; height: 100%; background: var(--ok); }
 .stats td, .stats th { padding: 0.25rem 0.35rem; font-size: 0.88rem; }
@@ -432,8 +457,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
       <div class="pb">
         <div class="muted" style="margin-bottom:0.4rem">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
         <div id="accounts"></div>
-        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button><button id="accEditBtn" title="เพิ่ม/ลบ/แก้บัญชี และโมเดลของแต่ละบทบาท">✎ แก้ไขรายการ</button></div>
-        <div id="accEdit" class="acc-edit" hidden></div>
+        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button><button id="accEditBtn" title="เปิดตัวช่วย: เพิ่ม/ลบ/แก้บัญชี และโมเดลของแต่ละบทบาท">✎ แก้ไขรายการ</button></div>
       </div>
     </section>
     <section class="panel" data-panel="stats">
@@ -590,6 +614,14 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <p id="askErr" class="ask-err" hidden></p>
     <div class="row ask-btns"><button value="cancel" id="askNo" formnovalidate>ยกเลิก</button><button value="ok" id="askOk" class="primary">ตกลง</button></div>
   </form>
+</dialog>
+<dialog id="accDlg" class="wz" aria-labelledby="wzTitle">
+  <div class="wz-box">
+    <div class="wz-h"><h2 id="wzTitle">จัดการบัญชีโมเดล</h2><button type="button" class="ico" data-dlgclose title="ปิด">✕</button></div>
+    <div id="wzSteps" class="wz-steps" hidden></div>
+    <div id="wzBody"></div>
+    <div id="wzFoot" class="wz-foot"></div>
+  </div>
 </dialog>
 <dialog id="docDiffDlg">
   <form method="dialog">
@@ -1416,92 +1448,162 @@ $("maxPar").onchange = async () => {
   const d = await post("/api/config", { max_parallel: n }); toast(d.message || d.error || "ผิดพลาด"); refresh();
 };
 
-/* ---------- ตัวแก้บัญชี flash-worker + โมเดลของแต่ละบทบาท (รายการโมเดล = เดียวกับ flashq models) · วาดเมื่อเปิด/หลังสั่งเท่านั้น ไม่ถูก poll ทับช่องที่กำลังพิมพ์ ---------- */
-let accInfo = { models: [], roles: [], note: "", tail: "" };
+/* ---------- ตัวช่วยจัดการบัญชี flash-worker + โมเดลของแต่ละบทบาท (popup แบบ wizard) · รายการโมเดล = เดียวกับ flashq models
+   หน้ารายการ → เพิ่ม/แก้บัญชี: 1 ผู้ให้บริการ › 2 โมเดล › 3 ชื่อ+บันทึก · เปลี่ยนโมเดลบทบาท: 1 › 2 › 3 ยืนยัน
+   วาดเมื่อเปิด/กดเท่านั้น ไม่ถูก poll ทับช่องที่กำลังพิมพ์ ---------- */
+let accInfo = { models: [], roles: [], providers: [], note: "", tail: "" }, accLoaded = false;
 async function loadAccInfo(refresh) {
   try {
     const r = await fetch("/api/models" + (refresh ? "?refresh=1" : ""));
-    if (r.ok) accInfo = await r.json();
+    if (r.ok) { accInfo = await r.json(); accLoaded = true; }
   } catch (e) {}
 }
 const pvOf = (m) => String(m || "").split("/")[0];
-const CUSTOM = "__custom";
-function modelOpts(pv, cur, filter = "") {
-  const f = filter.trim().toLowerCase();
+const wz = { view: "home", kind: "", step: 1, max: 1, pv: "", model: "", short: "", orig: "", role: "", roleLabel: "", roleCur: "", fq: "", err: "", busy: false };
+const WZ_TITLE = { add: "เพิ่มบัญชี", edit: "แก้ไขบัญชี", role: "โมเดลของบทบาท" };
+const wzHas = (m) => (accInfo.models || []).includes(m);
+function wzStart(kind, init = {}) {
+  Object.assign(wz, { view: "wiz", kind, step: 1, max: init.model ? 3 : 1, pv: pvOf(init.model), model: init.model || "", short: init.short || "", orig: init.short || "",
+    role: init.role || "", roleLabel: init.roleLabel || "", roleCur: init.model || "", fq: "", err: "", busy: false });
+  wzRender();
+}
+function wzGo(n) { wz.step = n; wz.fq = ""; wz.err = ""; wz.max = Math.max(wz.max, n); wzRender(); }
+function wzHome() { wz.view = "home"; wz.err = ""; wzRender(); }
+function wzProvList() {
+  const f = wz.fq.trim().toLowerCase(), provs = accInfo.providers || [];
+  const extra = wz.pv && !provs.some((p) => p.id === wz.pv) ? [{ id: wz.pv, count: 0, declared: false, missing: true }] : [];
+  const item = (p) => `<button type="button" class="wz-item${p.id === wz.pv ? " sel" : ""}" data-pv="${esc(p.id)}"><b>${esc(p.id)}</b>${p.declared ? `<span class="wz-tag ok">ตั้งไว้ใน opencode.json</span>` : ""}${p.missing ? `<span class="wz-tag">ไม่พบในเครื่อง</span>` : ""}<span class="n">${p.count} รุ่น</span></button>`;
+  const grp = (label, list) => (list.length ? `<p class="wz-grp">${label} (${list.length})</p>${list.map(item).join("")}` : "");
+  const all = [...extra, ...provs].filter((p) => !f || p.id.toLowerCase().includes(f));
+  if (!accLoaded) return `<div class="empty">กำลังโหลดรายการจาก opencode…</div>`;
+  if (!all.length) return `<div class="empty">ไม่พบผู้ให้บริการที่ตรงกับ “${esc(wz.fq)}”</div>`;
+  return grp("ตั้งไว้ใน opencode.json", all.filter((p) => p.declared || p.missing)) + grp("มากับ opencode / ล็อกอินไว้", all.filter((p) => !p.declared && !p.missing));
+}
+function wzModelList() {
+  const f = wz.fq.trim().toLowerCase(), pv = wz.pv, tail = accInfo.tail || "";
   const all = (accInfo.models || []).filter((m) => pvOf(m) === pv);
-  const list = all.filter((m) => !f || m.toLowerCase().includes(f) || m === cur);
-  const extra = cur && !all.includes(cur) ? [cur] : [];  // ค่าที่ตั้งไว้แต่เครื่องนี้ไม่มี — คงไว้ให้เห็น
-  const head = !pv ? `<option value="">— เลือกผู้ให้บริการก่อน —</option>` : cur ? "" : `<option value="">— เลือกโมเดล (${all.length} รุ่น) —</option>`;
-  return head + [...extra, ...list].map((m) => `<option value="${esc(m)}"${m === cur ? " selected" : ""}>${esc(m.slice(pv.length + 1))}${extra.includes(m) ? " (ไม่พบในเครื่อง)" : ""}</option>`).join("")
-    + (pv ? `<option value="${CUSTOM}">✎ พิมพ์ชื่อโมเดลเอง…</option>` : "");
+  const rec = (m) => !!tail && (m === `${pv}/${tail}` || m.endsWith("/" + tail));
+  const extra = wz.model && pvOf(wz.model) === pv && !all.includes(wz.model) ? [wz.model] : [];
+  const list = [...extra, ...all.filter((m) => rec(m)), ...all.filter((m) => !rec(m))].filter((m) => !f || m.toLowerCase().includes(f) || m === wz.model);
+  const used = {};  // โมเดลที่บัญชีอื่นใช้อยู่แล้ว (server ไม่ให้ซ้ำ) — กดเลือกไม่ได้
+  if (wz.kind !== "role") for (const a of state?.accounts || []) if (!(wz.kind === "edit" && a.short === wz.orig)) used[a.model] = a.short;
+  const item = (m) => `<button type="button" class="wz-item${m === wz.model ? " sel" : ""}" data-md="${esc(m)}" ${used[m] ? "disabled" : ""}><span>${esc(m.slice(pv.length + 1))}</span>${rec(m) ? `<span class="wz-tag ok">แนะนำ</span>` : ""}${used[m] ? `<span class="wz-tag">ใช้แล้วในบัญชี ${esc(used[m])}</span>` : ""}${extra.includes(m) ? `<span class="wz-tag">ไม่พบในเครื่อง</span>` : ""}</button>`;
+  const custom = `<button type="button" class="wz-item" data-wz="custom"><span>✎ พิมพ์ชื่อโมเดลเอง…</span></button>`;
+  if (!accLoaded) return `<div class="empty">กำลังโหลดรายการจาก opencode…</div>`;
+  return (list.length ? list.map(item).join("") : `<div class="empty">${all.length ? `ไม่พบโมเดลที่ตรงกับ “${esc(wz.fq)}”` : `ผู้ให้บริการนี้ไม่มีโมเดลในรายการ`}</div>`) + custom;
 }
-function pickerHTML(cur) {
-  const pv = pvOf(cur), provs = accInfo.providers || [];
-  const grp = (label, list) => list.length ? `<optgroup label="${label}">${list.map((p) => `<option value="${esc(p.id)}"${p.id === pv ? " selected" : ""}>${esc(p.id)} (${p.count} รุ่น)</option>`).join("")}</optgroup>` : "";
-  return `<span class="pick"><select class="pv" aria-label="ผู้ให้บริการ">${cur ? "" : `<option value="">— ผู้ให้บริการ —</option>`}${pv && !provs.some((p) => p.id === pv) ? `<option value="${esc(pv)}" selected>${esc(pv)} (ไม่พบในเครื่อง)</option>` : ""}${grp("ตั้งไว้ใน opencode.json", provs.filter((p) => p.declared))}${grp("มากับ opencode / ล็อกอินไว้", provs.filter((p) => !p.declared))}</select>
-    <input class="mf" placeholder="กรองโมเดล…" aria-label="กรองโมเดล"><select class="md" aria-label="โมเดล">${modelOpts(pv, cur)}</select></span>`;
+function wzSteps() {
+  const el = $("wzSteps"), names = ["ผู้ให้บริการ", "โมเดล", wz.kind === "role" ? "ยืนยัน" : "ชื่อบัญชี"];
+  el.hidden = wz.view !== "wiz";
+  if (el.hidden) return;
+  el.innerHTML = names.map((n, i) => `<button type="button" class="wz-st${wz.step === i + 1 ? " on" : wz.step > i + 1 || (wz.max > i + 1 && wz.step !== i + 1) ? " done" : ""}" data-wzgo="${i + 1}" ${i + 1 > wz.max || (i + 1 === 3 && !wz.model) ? "disabled" : ""}><i>${wz.step > i + 1 ? "✓" : i + 1}</i>${n}</button>`).join(`<span class="wz-sep">›</span>`);
 }
-function renderAccEditor() {
-  const el = $("accEdit"); if (el.hidden || !state) return;
-  const accs = state.accounts || [], have = new Set(accInfo.models);
-  const rows = accs.map((a, i) => `<div class="arow" data-short="${esc(a.short)}">
-    <input class="s" value="${esc(a.short)}" aria-label="ชื่อย่อ" maxlength="16">
-    <button data-acc="up" ${i === 0 ? "disabled" : ""} title="ขึ้น (สลับก่อน)">▲</button><button data-acc="down" ${i === accs.length - 1 ? "disabled" : ""} title="ลง">▼</button>
-    <button data-acc="save" class="primary">บันทึก</button><button data-acc="del" class="danger" ${accs.length <= 1 ? "disabled" : ""}>ลบ</button>
-    ${pickerHTML(a.model)}${accInfo.models.length && !have.has(a.model) ? `<span class="rl bad">เครื่องนี้ไม่มีโมเดลนี้</span>` : ""}</div>`).join("");
-  const roles = (accInfo.roles || []).map((r) => `<div class="arow" data-role="${esc(r.key)}"><span class="rl"><b>${esc(r.key)}</b> ${esc(r.label)}</span>
-    <button data-acc="role" class="primary">ตั้ง</button>${pickerHTML(r.model)}</div>`).join("");
-  const nProv = (accInfo.providers || []).length, nDecl = (accInfo.providers || []).filter((p) => p.declared).length;
-  el.innerHTML = `<div class="muted">${state.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด · มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น${accInfo.note ? ` <span class="bad">(${esc(accInfo.note)})</span>` : ""}</div>
-    ${rows}
-    <h3>เพิ่มบัญชี</h3>
-    <div class="arow" data-new="1"><input class="s" placeholder="ชื่อย่อ" aria-label="ชื่อย่อใหม่" maxlength="16"><button data-acc="add" class="primary">+ เพิ่ม</button>${pickerHTML("")}</div>
-    <div class="row" style="margin-top:0.4rem"><button data-acc="reload" title="อ่านรายการโมเดลจาก opencode ใหม่">โหลดรายการโมเดลใหม่</button>${state.accounts_source === "machine" ? `<button data-acc="reset" class="danger">คืนค่าตั้งต้นของ repo</button>` : ""}</div>
-    <h3>โมเดลของแต่ละบทบาท (เหมือน flashq models)</h3>${roles || `<div class="empty">อ่านบทบาทไม่ได้</div>`}`;
-}
-$("accEditBtn").onclick = async () => {
-  const el = $("accEdit"); el.hidden = !el.hidden;
-  $("accEditBtn").textContent = el.hidden ? "✎ แก้ไขรายการ" : "✕ ปิดตัวแก้";
-  if (!el.hidden) { renderAccEditor(); await loadAccInfo(false); renderAccEditor(); }
-};
-/* เปลี่ยนผู้ให้บริการ/พิมพ์กรอง → เติมรายการโมเดลของผู้ให้บริการนั้นใหม่ · เลือก "พิมพ์ชื่อเอง" → ถามชื่อ (ไม่ต้องใส่ผู้ให้บริการ) */
-$("accEdit").onchange = async (ev) => {
-  const t = ev.target, pick = t.closest(".pick"); if (!pick) return;
-  const pv = pick.querySelector(".pv").value, md = pick.querySelector(".md");
-  if (t.classList.contains("pv")) { pick.querySelector(".mf").value = ""; md.innerHTML = modelOpts(pv, ""); return; }
-  if (t.classList.contains("md") && t.value === CUSTOM) {
-    const name = await ask({ title: `ชื่อโมเดลของ ${pv}`, body: "พิมพ์เฉพาะส่วนหลังชื่อผู้ให้บริการ (เช่น deepseek-v4.1-flash) — ใช้ได้เมื่อเครื่องนี้มีโมเดลนั้นจริง", ok: "ใช้ชื่อนี้", input: { label: "ชื่อโมเดล", placeholder: "ชื่อโมเดล", check: (v) => (v.trim() ? "" : "ต้องไม่ว่าง") } });
-    const full = name ? `${pv}/${name.trim()}` : "";
-    md.innerHTML = modelOpts(pv, full);
-    if (!full) md.value = "";
+function wzRender() {
+  const body = $("wzBody"), foot = $("wzFoot"), dlg = $("accDlg");
+  if (!dlg.open) return;
+  const btn = (act, label, cls = "", dis = false) => `<button type="button" data-wz="${act}" class="${cls}" ${dis ? "disabled" : ""}>${label}</button>`;
+  wzSteps();
+  if (wz.view === "home") {
+    $("wzTitle").textContent = "จัดการบัญชีโมเดล";
+    const accs = state?.accounts || [], cur = state?.current_model;
+    const rows = accs.map((a, i) => `<div class="wz-row" data-short="${esc(a.short)}"><div class="wz-main"><b>${esc(a.short)}</b>${a.model === cur ? ` <span class="wz-tag ok">ใช้อยู่</span>` : ""}
+      <div class="wz-sub mono">${esc(a.model)}</div>${accLoaded && !wzHas(a.model) ? `<div class="wz-bad">เครื่องนี้ไม่มีโมเดลนี้</div>` : ""}</div>
+      <div class="wz-act">${btn("up", "▲", "", i === 0)}${btn("down", "▼", "", i === accs.length - 1)}${btn("edit", "แก้ไข")}${btn("del", "ลบ", "danger", accs.length <= 1)}</div></div>`).join("");
+    const roles = (accInfo.roles || []).map((r) => `<div class="wz-row" data-role="${esc(r.key)}"><div class="wz-main"><b>${esc(r.key)}</b> ${esc(r.label)}<div class="wz-sub mono">${esc(r.model || "(ยังไม่ได้ตั้ง)")}</div></div>
+      <div class="wz-act">${btn("role", "เปลี่ยน")}</div></div>`).join("");
+    const nProv = (accInfo.providers || []).length, nDecl = (accInfo.providers || []).filter((p) => p.declared).length;
+    body.innerHTML = `<p class="wz-hint">${state?.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด${accLoaded ? ` · opencode มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น` : " · กำลังโหลดรายการโมเดล…"}${accInfo.note ? ` <span class="wz-bad">(${esc(accInfo.note)})</span>` : ""}</p>
+      ${rows || `<div class="empty">ยังไม่มีบัญชี</div>`}
+      <h3 style="margin:0.7rem 0 0.2rem;font-size:0.95rem">โมเดลของแต่ละบทบาท (เหมือน flashq models)</h3>${roles || `<div class="empty">อ่านบทบาทไม่ได้</div>`}`;
+    foot.innerHTML = `<span class="sp">${btn("reload", "โหลดรายการโมเดลใหม่")}${state?.accounts_source === "machine" ? btn("reset", "คืนค่าตั้งต้นของ repo", "danger") : ""}</span>${btn("add", "+ เพิ่มบัญชี", "primary")}${btn("close", "ปิด")}`;
+    return;
   }
-};
-$("accEdit").oninput = (ev) => {
-  const t = ev.target; if (!t.classList.contains("mf")) return;
-  const pick = t.closest(".pick"), md = pick.querySelector(".md"), cur = md.value && md.value !== CUSTOM ? md.value : "";
-  md.innerHTML = modelOpts(pick.querySelector(".pv").value, cur, t.value);
-};
-$("accEdit").onclick = async (ev) => {
-  const b = ev.target.closest("[data-acc]"); if (!b) return;
-  const row = b.closest(".arow"), act = b.dataset.acc;
-  const val = (sel) => (row?.querySelector(sel)?.value || "").trim();
-  const model = () => { const v = val("select.md"); return v === CUSTOM ? "" : v; };
-  let d;
-  if (act === "reload") { await loadAccInfo(true); toast(`โหลดแล้ว ${accInfo.models.length} รุ่น`); return renderAccEditor(); }
-  if (act === "add") { if (!model()) return toast("เลือกผู้ให้บริการและโมเดลก่อน"); d = await post("/api/accounts", { action: "add", short: val("input.s"), model: model() }); }
-  else if (act === "save") d = await post("/api/accounts", { action: "update", short: row.dataset.short, new_short: val("input.s"), model: model() });
-  else if (act === "up" || act === "down") d = await post("/api/accounts", { action: "move", short: row.dataset.short, dir: act });
-  else if (act === "del") {
-    if (!await ask({ title: `ลบบัญชี ${row.dataset.short}?`, body: "ลบออกจากรายการสลับของเครื่องนี้เท่านั้น (ไม่แตะ opencode.json)", ok: "ลบ", cancel: "ไม่ลบ", tone: "danger" })) return;
-    d = await post("/api/accounts", { action: "remove", short: row.dataset.short });
-  } else if (act === "reset") {
+  const isRole = wz.kind === "role";
+  $("wzTitle").textContent = isRole ? `โมเดลของบทบาท ${wz.role}` : wz.kind === "edit" ? `แก้ไขบัญชี ${wz.orig}` : "เพิ่มบัญชีใหม่";
+  const err = wz.err ? `<p class="ask-err">${esc(wz.err)}</p>` : "";
+  if (wz.step === 1) {
+    body.innerHTML = `<p class="wz-hint">เลือกผู้ให้บริการ — มีทุกตัวที่ opencode ใช้ได้บนเครื่องนี้ ไม่ว่าจะตั้งไว้ใน opencode.json หรือไม่</p><input id="wzQ" type="search" placeholder="ค้นหาผู้ให้บริการ…" value="${esc(wz.fq)}" autocomplete="off"><div id="wzList" class="wz-list">${wzProvList()}</div>`;
+    foot.innerHTML = `<span class="sp">${btn("home", "← กลับรายการ")}</span>${btn("next", "ต่อไป →", "primary", !wz.pv)}`;
+    $("wzQ").focus();
+  } else if (wz.step === 2) {
+    body.innerHTML = `<p class="wz-hint">เลือกโมเดลของ <b>${esc(wz.pv)}</b></p><input id="wzQ" type="search" placeholder="ค้นหาโมเดล…" value="${esc(wz.fq)}" autocomplete="off"><div id="wzList" class="wz-list">${wzModelList()}</div>`;
+    foot.innerHTML = `<span class="sp">${btn("back", "← ย้อนกลับ")}</span>${btn("next", "ต่อไป →", "primary", !wz.model || pvOf(wz.model) !== wz.pv)}`;
+    $("wzQ").focus();
+  } else {
+    const warn = accLoaded && !wzHas(wz.model) ? `<div class="wz-bad">เครื่องนี้ไม่พบโมเดลนี้ในรายการของ opencode — ตรวจชื่อให้แน่ใจก่อนบันทึก</div>` : "";
+    if (isRole) {
+      body.innerHTML = `<div class="wz-sum"><div>บทบาท: <b>${esc(wz.role)}</b> ${esc(wz.roleLabel)}</div><div>โมเดลเดิม: <span class="mono">${esc(wz.roleCur || "(ยังไม่ได้ตั้ง)")}</span></div>
+        <div>โมเดลใหม่: <span class="mono"><b>${esc(wz.model)}</b></span><button type="button" data-wzgo="2">เปลี่ยน</button></div>${warn}</div>${err}`;
+      foot.innerHTML = `<span class="sp">${btn("back", "← ย้อนกลับ")}</span>${btn("save", wz.busy ? "กำลังบันทึก…" : "ตั้งโมเดลนี้", "primary", wz.busy)}`;
+    } else {
+      if (!wz.short && wz.kind === "add") wz.short = wz.pv.slice(0, 16);
+      body.innerHTML = `<label class="field"><span>ชื่อย่อของบัญชี (ไม่เกิน 16 ตัว: ตัวอักษร ตัวเลข . _ -)</span><input id="wzName" value="${esc(wz.short)}" maxlength="16" autocomplete="off" spellcheck="false"></label>
+        <div class="wz-sum"><div>ผู้ให้บริการ: <b>${esc(wz.pv)}</b><button type="button" data-wzgo="1">เปลี่ยน</button></div><div>โมเดล: <span class="mono"><b>${esc(wz.model)}</b></span><button type="button" data-wzgo="2">เปลี่ยน</button></div>${warn}</div>${err}`;
+      foot.innerHTML = `<span class="sp">${btn("back", "← ย้อนกลับ")}</span>${btn("save", wz.busy ? "กำลังบันทึก…" : wz.kind === "edit" ? "บันทึกการแก้ไข" : "เพิ่มบัญชี", "primary", wz.busy)}`;
+      const n = $("wzName"); n.focus(); n.select();
+    }
+  }
+}
+function wzOpen() {
+  const dlg = $("accDlg"); if (!dlg.open) dlg.showModal();
+  wz.view = "home"; wz.err = ""; wzRender();
+  if (!accLoaded) loadAccInfo(false).then(() => { if (dlg.open) wzRender(); });
+}
+$("accEditBtn").onclick = wzOpen;
+$("accDlg").addEventListener("input", (ev) => {
+  const t = ev.target;
+  if (t.id === "wzQ") { wz.fq = t.value; $("wzList").innerHTML = wz.step === 1 ? wzProvList() : wzModelList(); }
+  else if (t.id === "wzName") { wz.short = t.value; if (wz.err) { wz.err = ""; document.querySelector("#wzBody .ask-err")?.remove(); } }
+});
+$("accDlg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target.id === "wzName") { ev.preventDefault(); wzAct("save"); } });
+async function wzCall(path, body) {  // คืน true เมื่อสำเร็จ · ผิดพลาด = แสดงในขั้นปัจจุบัน
+  wz.busy = true; wz.err = ""; wzRender();
+  let d; try { d = await post(path, body); } catch (e) { d = { ok: false, message: String(e.message || e) }; }
+  wz.busy = false;
+  if (!d || d.ok === false || d.error) { wz.err = d?.message || d?.error || "ผิดพลาด"; wzRender(); return false; }
+  toast(d.message || "สำเร็จ"); await refresh(); return true;
+}
+async function wzAct(act, row) {
+  const short = row?.dataset.short;
+  if (act === "close") return $("accDlg").close();
+  if (act === "home") return wzHome();
+  if (act === "back") return wzGo(wz.step - 1);
+  if (act === "next") return wzGo(wz.step + 1);
+  if (act === "add") return wzStart("add");
+  if (act === "edit") { const a = (state.accounts || []).find((x) => x.short === short); return a && wzStart("edit", { short: a.short, model: a.model }); }
+  if (act === "role") { const r = (accInfo.roles || []).find((x) => x.key === row.dataset.role); return r && wzStart("role", { role: r.key, roleLabel: r.label, model: r.model }); }
+  if (act === "reload") { await loadAccInfo(true); toast(`โหลดแล้ว ${accInfo.models.length} รุ่น`); return wzRender(); }
+  if (act === "up" || act === "down") { const d = await post("/api/accounts", { action: "move", short, dir: act }); if (d.ok === false) toast(d.message || d.error || "ผิดพลาด"); await refresh(); return wzRender(); }
+  if (act === "del") {
+    if (!await ask({ title: `ลบบัญชี ${short}?`, body: "ลบออกจากรายการสลับของเครื่องนี้เท่านั้น (ไม่แตะ opencode.json)", ok: "ลบ", cancel: "ไม่ลบ", tone: "danger" })) return;
+    const d = await post("/api/accounts", { action: "remove", short }); toast(d.message || d.error || "ผิดพลาด"); await refresh(); return wzRender();
+  }
+  if (act === "reset") {
     if (!await ask({ title: "คืนค่าตั้งต้นของ repo?", body: "ลบรายการบัญชีของเครื่องนี้ทิ้ง แล้วใช้ accounts.json ใน repo แทน", ok: "คืนค่า", cancel: "ไม่", tone: "danger" })) return;
-    d = await post("/api/accounts", { action: "reset" });
-  } else if (act === "role") { if (!model()) return toast("เลือกผู้ให้บริการและโมเดลก่อน"); d = await post("/api/role_model", { role: row.dataset.role, model: model() }); }
-  toast(d.message || d.error || "ผิดพลาด");
-  if (act === "role") await loadAccInfo(false);
-  await refresh(); renderAccEditor();
-};
+    const d = await post("/api/accounts", { action: "reset" }); toast(d.message || d.error || "ผิดพลาด"); await refresh(); return wzRender();
+  }
+  if (act === "custom") {
+    const name = await ask({ title: `ชื่อโมเดลของ ${wz.pv}`, body: "พิมพ์เฉพาะส่วนหลังชื่อผู้ให้บริการ (เช่น deepseek-v4.1-flash) — ใช้ได้เมื่อเครื่องนี้มีโมเดลนั้นจริง", ok: "ใช้ชื่อนี้", input: { label: "ชื่อโมเดล", placeholder: "ชื่อโมเดล", check: (v) => (v.trim() ? "" : "ต้องไม่ว่าง") } });
+    if (name) { wz.model = `${wz.pv}/${name.trim()}`; return wzGo(3); }
+    return;
+  }
+  if (act === "save") {
+    if (wz.busy) return;
+    if (wz.kind === "role") { if (await wzCall("/api/role_model", { role: wz.role, model: wz.model })) { await loadAccInfo(false); wzHome(); } return; }
+    const short = ($("wzName")?.value || wz.short).trim(); wz.short = short;
+    if (!short) { wz.err = "ต้องตั้งชื่อย่อ"; return wzRender(); }
+    const body = wz.kind === "edit" ? { action: "update", short: wz.orig, new_short: short, model: wz.model } : { action: "add", short, model: wz.model };
+    if (await wzCall("/api/accounts", body)) wzHome();
+  }
+}
+$("accDlg").addEventListener("click", (ev) => {
+  const t = ev.target;
+  const pv = t.closest("[data-pv]"), md = t.closest("[data-md]"), go = t.closest("[data-wzgo]"), b = t.closest("[data-wz]");
+  if (pv) { if (pv.dataset.pv !== wz.pv) { wz.pv = pv.dataset.pv; if (pvOf(wz.model) !== wz.pv) wz.model = ""; } return wzGo(2); }
+  if (md) { wz.model = md.dataset.md; return wzGo(3); }
+  if (go && !go.disabled) return wzGo(+go.dataset.wzgo);
+  if (b && !b.disabled) wzAct(b.dataset.wz, b.closest("[data-short],[data-role]"));
+});
 
 $("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
 $("projFilter").onchange = () => { store.set("proj", $("projFilter").value); render(); };

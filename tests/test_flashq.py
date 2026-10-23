@@ -901,7 +901,10 @@ class FlashqTest(unittest.TestCase):
         """ui: แก้บัญชีสลับโมเดล (เพิ่ม/แก้/ย้าย/ลบ/คืนค่า) เขียน ~/.flashq/accounts.json ของเครื่อง ไม่แตะ repo · โมเดลต้องมีในเครื่อง (รายการเดียวกับ flashq models) · ตั้งโมเดลบทบาทได้"""
         self.env["FAKE_MODELS"] = "x/other-model|y/spare-model"
         base = self.start_ui()
-        token = re.search(r'const TOKEN = "([^"]+)"', self.http(base + "/")[1]).group(1)
+        page = self.http(base + "/")[1]
+        token = re.search(r'const TOKEN = "([^"]+)"', page).group(1)
+        self.assertIn('id="accDlg"', page)  # ตัวแก้บัญชีเป็น popup wizard
+        self.assertNotIn('id="accEdit"', page)
         hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
 
         def acc(**kw):
