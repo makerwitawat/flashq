@@ -57,6 +57,7 @@ REPO = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
 INBOX = HOME / "inbox"  # ผลงานจบรอส่งถึง Claude (hook inbox_notify.py อ่านตอนผู้ใช้พิมพ์ข้อความถัดไป)
+INSTALLED = HOME / "installed.json"  # รุ่นที่ `install` ติดตั้งล่าสุด + หัวข้อ CHANGELOG (hook whatsnew.py บอก session ที่เปิดค้างว่ามีของใหม่)
 REVIEWS = HOME / "reviews"   # ป้าย "Claude กำลังตรวจ" ที่ /flash-check ตั้ง (ให้หน้าออฟฟิศแสดงผู้ตรวจ) — ไม่ใช่งานในคิว
 REVIEW_TTL_MIN = 90          # ป้ายที่ค้างเกินนี้ถือว่าถูกทิ้ง (session ตาย/ลืม done)
 CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
@@ -4671,6 +4672,40 @@ def install_items(claude_home: Path):
             yield dst_dir / src.name, text
 
 
+def changelog_news(limit: int = 10) -> list[str]:
+    """หัวข้อตัวหนา `- **หัวข้อ**` ของรายการใน CHANGELOG.md ใหม่สุดก่อน"""
+    try:
+        text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [m.group(1).strip() for m in re.finditer(r"^- \*\*(.+?)\*\*", text, re.M)][:limit]
+
+
+def record_install(claude_home: Path) -> None:
+    """บันทึกรุ่นที่ติดตั้ง (hash เนื้อไฟล์ทั้งชุด) ลง installed.json — `at` เปลี่ยนเฉพาะเมื่อเนื้อไฟล์เปลี่ยนจริง · แล้วพิมพ์หัวข้อล่าสุด
+    ให้คนที่เห็นผล "เหมือนเดิม" ทั้งชุดรู้ว่าของใหม่คืออะไร (มีคนติดตั้งไปก่อนแล้ว ไม่ใช่ไม่มีของใหม่)"""
+    h = hashlib.sha1()
+    for dst, text in install_items(claude_home):
+        h.update(dst.name.encode("utf-8"))
+        h.update(text.encode("utf-8"))
+    rev, news = h.hexdigest()[:12], changelog_news()
+    cur = read_json(INSTALLED) if INSTALLED.exists() else {}
+    if cur.get("rev") != rev:
+        cur = {"rev": rev, "at": time.time(), "news": news}
+    elif cur.get("news") != news:
+        cur["news"] = news
+    else:
+        cur = None
+    if cur is not None:
+        HOME.mkdir(parents=True, exist_ok=True)
+        write_json(INSTALLED, cur)
+    cur = cur or read_json(INSTALLED)
+    when = datetime.fromtimestamp(float(cur.get("at") or 0)).strftime("%Y-%m-%d %H:%M")
+    print(f"รุ่นที่ติดตั้ง {rev} (เนื้อไฟล์เปลี่ยนล่าสุด {when}) — ถ้าทุกไฟล์ขึ้น \"เหมือนเดิม\" แปลว่าติดตั้งไปก่อนแล้ว ไม่ได้แปลว่าไม่มีของใหม่ · หัวข้อล่าสุดใน CHANGELOG:")
+    for t in news[:5]:
+        print(f"  - {t[:110]}")
+
+
 def check_installed(claude_home: Path) -> int:
     """install --check: เทียบไฟล์ที่ติดตั้งไว้กับต้นฉบับ (อ่านอย่างเดียว) · 0 = ตรงครบ · 1 = มีไฟล์ล้าหลัง/ยังไม่ได้ติดตั้ง
     · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) ไม่นับว่าล้าหลัง"""
@@ -4750,6 +4785,12 @@ def cmd_install(a) -> int:
         else:
             print(f"ข้าม       ไม่พบ {deleg_hook} → ลงทะเบียน hook ไม่ได้")
             rc = 1
+        news_hook = claude_home / "hooks" / "whatsnew.py"
+        if news_hook.exists():
+            print(register_hook(claude_home / "settings.json", "UserPromptSubmit", "", f'python "{news_hook.as_posix()}"', "whatsnew.py"))
+        else:
+            print(f"ข้าม       ไม่พบ {news_hook} → ลงทะเบียน hook ไม่ได้")
+            rc = 1
     elif guard.exists():
         st = claude_home / "settings.json"
         if "image_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
@@ -4758,6 +4799,9 @@ def cmd_install(a) -> int:
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน run_guard (กันสั่งงานผิดวิธีจนไม่มีใครเฝ้า: & · sleep · ไม่ใส่ run_in_background) → install --hooks")
         if "delegate_guard.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
             print("หมายเหตุ   ยังไม่ได้ลงทะเบียน delegate_guard (กัน Claude แย่งไล่โค้ดเองเมื่อผู้ใช้สั่งส่งสืบให้ Flash) → install --hooks")
+        if "whatsnew.py" not in (st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""):
+            print("หมายเหตุ   ยังไม่ได้ลงทะเบียน whatsnew (บอก session ที่เปิดค้างว่ามีของใหม่ — ไม่เสีย token ถ้าไม่มีอะไรเปลี่ยน) → install --hooks")
+    record_install(claude_home)
     if getattr(a, "models", "ask") != "skip":
         ensure_models(getattr(a, "models", "ask"))
     return rc

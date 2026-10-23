@@ -610,9 +610,45 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("เหมือนเดิม  hook", r.stdout)
         self.assertEqual(len(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]), 3)
         ups = json.loads((claude / "settings.json").read_text(encoding="utf-8"))["hooks"]["UserPromptSubmit"]
-        self.assertEqual(len(ups), 2)
+        self.assertEqual(len(ups), 3)
         self.assertIn("inbox_notify.py", ups[0]["hooks"][0]["command"])
         self.assertTrue(ups[1]["hooks"][0]["command"].endswith("delegate_guard.py\" prompt"))
+        self.assertIn("whatsnew.py", ups[2]["hooks"][0]["command"])
+
+    def test_whatsnew_hook(self):
+        """install บันทึกรุ่น+หัวข้อ CHANGELOG · ติดตั้งซ้ำไม่เปลี่ยนรุ่น/เวลา · hook: session ที่เริ่มก่อนติดตั้งได้รับแจ้งครั้งเดียว · session ใหม่/รุ่นเท่าเดิม = เงียบ · ปิดได้"""
+        claude = self.tmp / "claude_home_wn"
+        home = self.tmp / "wn_home"
+        env = {"FLASHQ_CLAUDE_HOME": str(claude), "FLASHQ_HOME": str(home)}
+        r = self.run_q("install", "--hooks", "--models", "skip", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("หัวข้อล่าสุดใน CHANGELOG", r.stdout)
+        inst = json.loads((home / "installed.json").read_text(encoding="utf-8"))
+        self.assertTrue(inst["rev"] and inst["news"])
+        self.run_q("install", "--models", "skip", env=env)
+        self.assertEqual(json.loads((home / "installed.json").read_text(encoding="utf-8")), inst, "ติดตั้งซ้ำต้องไม่เปลี่ยนรุ่น/เวลา")
+        hook = claude / "hooks" / "whatsnew.py"
+        henv = dict(os.environ, FLASHQ_HOME=str(home), PYTHONIOENCODING="utf-8")
+
+        def run(sid, tp):
+            return subprocess.run([sys.executable, str(hook)], input=json.dumps({"session_id": sid, "transcript_path": str(tp)}),
+                                  capture_output=True, text=True, encoding="utf-8", env=henv, timeout=30).stdout
+
+        old = self.tmp / "old_session.jsonl"
+        old.write_text("{}", encoding="utf-8")
+        self.assertEqual(run("new1", self.tmp / "no_such.jsonl"), "", "session เกิดหลังติดตั้ง = เงียบ")
+        # จำลอง session เก่า: เวลาเริ่ม (ctime) ก่อนติดตั้ง — ctime แก้ผ่าน utime ไม่ได้ จึงเลื่อนเวลาติดตั้งให้ใหม่กว่าแทน
+        inst2 = dict(inst, at=time.time() + 600, rev="zzz999", news=["หัวข้อทดสอบใหม่"] + inst["news"])
+        (home / "installed.json").write_text(json.dumps(inst2), encoding="utf-8")
+        out = run("new1", self.tmp / "no_such.jsonl")
+        self.assertIn("หัวข้อทดสอบใหม่", out)
+        self.assertIn("เหมือนเดิม", out)
+        self.assertEqual(run("new1", self.tmp / "no_such.jsonl"), "", "แจ้งครั้งเดียวต่อรุ่น")
+        out = run("old1", old)  # session ที่ไม่เคยเห็นรุ่น และเริ่มก่อนติดตั้ง = แจ้ง
+        self.assertIn("ติดตั้งของใหม่", out)
+        (home / "config.json").write_text('{"whatsnew": false}', encoding="utf-8")
+        (home / "installed.json").write_text(json.dumps(dict(inst2, rev="yyy888", at=time.time() + 900)), encoding="utf-8")
+        self.assertEqual(run("new1", self.tmp / "no_such.jsonl"), "", "ปิดในคอนฟิก = เงียบ")
 
     def test_delegate_guard_hook(self):
         """ยามมอบงานสืบ: ผู้ใช้สั่งส่งสืบ → แทรกคำสั่ง + ตั้งงบอ่าน · อ่านเกินงบ = บล็อก (exit 2) · ไฟล์แผน/กติกาไม่นับ · ส่ง investigate แล้วเหลืองบยืนยัน 2 · ข้อความอื่นปลดงบ · ปิดได้"""
