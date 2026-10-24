@@ -24,7 +24,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | process/ไฟล์ | `pid_alive` (เทียบเวลาเริ่มกัน pid ซ้ำ) · `kill_tree` · `write_json`/`read_json` · `file_lock` |
 | โปรเจกต์/git | `project_root` · `detect_remote` · `detect_main_branch` · `project_cfg` |
 | คิว/ช่อง | `jobs` · `save_job` · `take_slot` · `acquire` · `release` · `request_run_now` |
-| จัดคิวอัตโนมัติ | `plan_files` · `plan_meta` (`flashq-files`/`flashq-parallel`) · `conflict_reason` · `schedule` · `overlap_report` |
+| จัดคิวอัตโนมัติ | `plan_files` · `plan_meta` (`flashq-files`/`flashq-parallel`/`flashq-exclusive`) · `conflict_reason` · `schedule` · `overlap_report` |
 | รันงาน | `ensure_live_server` · `wait_session` · `server_activity` (tool/subagent จาก server) · `ShellWatch` (ตัวเฝ้า shell) · `run_once` · `cmd_run` |
 | นักทดสอบ | `qa_detect`/`qa_suggest_lines` (เดาชุดจากไฟล์ ไม่รัน) · `qa_spec`/`qa_specs` (ตรวจ+ปรับชุดจาก `.flash.json`/`--cmd`) · `qa_exec` (รันคำสั่งเอง + ฆ่าทั้งต้นเมื่อ timeout/cancel) · `qa_verdict` (fail-closed จาก exit code + `expect`) · `qa_summary` · `qa_analyze` (Flash `flash-tester` อ่าน log เฉพาะตอนล้ม — ไม่เปลี่ยนคำตัดสิน) · `cmd_qa` |
 | ช่างเอกสาร | `doc_spec` (ตรวจชุดจาก `.flash.json` · paths กว้างเกิน/ครอบไฟล์ต้องห้าม = ปฏิเสธ) · `doc_guard`/`doc_before`/`doc_changed` (snapshot ก่อน-หลัง · ตรวจการลบไฟล์เองเพราะ `snapshot_changes` ไม่เห็น) · `doc_verdict` (fail-closed: ผ่านได้ทางเดียว `DRAFT` · `doc_secrets`/`doc_badrefs`) · `doc_backup`/`doc_restore` (สำรองไฟล์ที่สกปรกก่อนรัน → `~/.flashq/docbak/<job>` · ย้อนเฉพาะไฟล์ที่แตะ) · `doc_finalize` (`OUTSIDE`/`SECRET` ย้อนทันที) · `doc_since` · `cmd_doc` · `doc_review`/`cmd_doc_review` (รับ/ทิ้ง) · `doc_diff` (diff ใน Python เห็นไฟล์ใหม่) · `doc_row` (ส่วนที่หน้าเว็บใช้ ไม่ส่ง backup) |
