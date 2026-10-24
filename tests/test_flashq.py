@@ -2481,6 +2481,19 @@ class FlashqTest(unittest.TestCase):
             self.assertIn(want, r.stdout)
         self.assertTrue((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").is_file())
 
+    def test_goal_check_warns_big_goal_split_phases(self):
+        """ธงใหญ่ (เกณฑ์ >8 ข้อ) = เตือนให้แบ่งเฟส ไม่ใช่ error · ธงเล็กไม่เตือน"""
+        acc = f"\"{sys.executable}\" tests/acc.py"
+        tail = "goal-files: src/*\ngoal-locked: tests/acc.py\ngoal-max-rounds: 5\n"
+        self.goal_repo("".join(f"- [ ] G-{n:02d} ค่าเป็น new · ตรวจ: `{acc}`\n" for n in range(1, 10)) + tail)
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL_CHECK=OK", r.stdout, r.stdout)
+        self.assertIn("ธงใหญ่", r.stdout)
+        self.assertIn("แบ่งเป็นเฟส", r.stdout)
+        (self.proj / "docs/plans/GOAL_x.md").write_text(f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{acc}`\n" + tail, encoding="utf-8")
+        r = self.run_q("goal", "check", "docs/plans/GOAL_x.md")
+        self.assertNotIn("ธงใหญ่", r.stdout)
+
     def test_goal_check_warns_ui_counting_only(self):
         """งาน UI (มีคนตรวจเรื่องหน้าตา): เกณฑ์เครื่องเป็นการนับล้วน + ไม่อ้าง mockup = เตือน · อ้าง mockup แล้วเตือนข้อ mockup หาย"""
         acc = f"\"{sys.executable}\" tests/acc.py"

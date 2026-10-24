@@ -5843,6 +5843,7 @@ GOAL_VAGUE = ("สวย", "ดีขึ้น", "ดีกว่า", "ง่�
               "ลื่น", "นิ่ง", "ครบถ้วน", "user-friendly", "nice", "better", "faster", "clean", "properly", "works")
 GOAL_TRIVIAL_RE = re.compile(r"^\s*(echo\b|true\s*$|exit\s+0\s*$|rem\b|:\s*$|cd\s*$|dir\s*$|ls\s*$|type\s+nul)", re.I)
 GOAL_DEFAULT_ROUNDS, GOAL_ROUNDS_CAP, GOAL_DEFAULT_HOURS = 5, 10, 6
+GOAL_BIG_ITEMS, GOAL_BIG_FILES = 8, 10  # เกณฑ์/รายการ goal-files เกินนี้ = ธงใหญ่ → เตือนให้แบ่งเฟส (ธงจริง 12 เกณฑ์ติด STOP/คนตรวจค้าง)
 GOAL_UI_RE = re.compile(r"หน้าตา|หน้าจอ|ใช้ง่าย|ใช้งานง่าย|\bui\b|\bux\b|layout|ปุ่ม|เมนู|หน้าเว็บ", re.I)
 GOAL_COUNT_RE = re.compile(r"[≥>]=?\s*\d|อย่างน้อย\s*\d|ครบ\s*\d|\d+\s*(?:จุด|ช่อง|ปุ่ม|รายการ)|นับ|count|ใน\s*dom|querySelector", re.I)
 
@@ -5929,6 +5930,9 @@ def goal_lint(g: dict) -> tuple[list[str], list[str]]:
         warns.append(f"ไม่ได้ตั้ง goal-max-rounds → ใช้ {GOAL_DEFAULT_ROUNDS}")
     if machine and not g["locked"]:
         warns.append("ไม่มี `goal-locked:` → Flash แก้ไฟล์เทสต์ที่ใช้ตัดสินได้ (ผ่านแบบโกง) · ใส่ path เทสต์เกณฑ์เพื่อล็อก")
+    if len(items) > GOAL_BIG_ITEMS or len(g["files"]) > GOAL_BIG_FILES:
+        warns.append(f"ธงใหญ่ (เกณฑ์ {len(items)} ข้อ · goal-files {len(g['files'])} รายการ · เกณฑ์เตือน >{GOAL_BIG_ITEMS} ข้อ/>{GOAL_BIG_FILES} รายการ) "
+                     "→ แบ่งเป็นเฟส: GOAL_<เรื่อง>_P1, _P2 … เฟสละ ≤8 เกณฑ์ที่เครื่องวัดได้ · เฟสแรกคือแกนที่ทุกอย่างพึ่ง · จบเฟสแล้วค่อยตั้งเฟสถัดไป · ข้อ `คนตรวจ:` รวมไว้เฟสท้ายสุด")
     return errs, warns
 
 
