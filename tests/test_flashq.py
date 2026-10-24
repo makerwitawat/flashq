@@ -3159,6 +3159,23 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ชม.", b)
         self.assertEqual(flashq.running_brief({"id": "X2", "project": "", "plan": ""}), "X2")
 
+    def test_run_stats_and_eta(self):
+        """ประมาณเวลาเสร็จจากสถิติงานที่ผ่านมา: ข้อมูลน้อย = ไม่เดา · ในเกณฑ์ = บอกเหลือกี่นาที · เกิน p90 = เตือน"""
+        import flashq
+        from datetime import datetime, timedelta
+        f = lambda t: t.strftime("%Y-%m-%d %H:%M:%S")
+        base = datetime(2026, 1, 1, 10, 0, 0)
+        hist = [{"status": "ok", "kind": "work", "project": "P", "started": f(base), "finished": f(base + timedelta(minutes=m))} for m in (10, 12, 15, 20, 30, 40)]
+        self.assertIsNone(flashq.run_stats(hist[:3], "P"))
+        st = flashq.run_stats(hist, "P")
+        self.assertEqual(st["n"], 6)
+        now = datetime.now()
+        job = lambda mins: {"id": "R", "project": "P", "plan": "A.md", "tasks": "T-01", "started": f(now - timedelta(minutes=mins))}
+        self.assertIn("น่าจะเสร็จอีก", flashq.running_brief(job(5), st))
+        self.assertIn("เกินเวลาปกติ", flashq.running_brief(job(35), st))
+        self.assertIn("นานกว่า 9 ใน 10", flashq.running_brief(job(300), st))
+        self.assertIn("ช้าสุดตัดเวลา", flashq.running_brief(job(5), st))
+
     def test_plan_declarations_and_conflicts(self):
         """flashq-files / flashq-parallel ในแผน · เกณฑ์ชน: คนละโปรเจกต์ · ไฟล์ซ้อน · glob · ไฟล์/โฟลเดอร์ร่วม"""
         sys.path.insert(0, str(REPO))

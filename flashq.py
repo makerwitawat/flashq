@@ -50,7 +50,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -1165,12 +1165,43 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     return ""
 
 
-def running_brief(j: dict) -> str:
-    """อธิบายงานที่กำลังรันให้คนอ่านเข้าใจ: id (โปรเจกต์ · แผน · งานย่อย · รันมานานเท่าไร)"""
+def run_stats(all_jobs: list[dict], project: str) -> dict | None:
+    """เวลารันที่ผ่านมาของงานแก้โค้ดที่สำเร็จ (นาที): {median, p90, n} · ใช้ของโปรเจกต์เดียวกันถ้ามี ≥5 งาน ไม่งั้นใช้ทุกโปรเจกต์ · None = ข้อมูลไม่พอ"""
+    def mins(js):
+        out = []
+        for x in js:
+            if x.get("status") == "ok" and x.get("kind", "work") == "work" and x.get("started") and x.get("finished"):
+                d = _secs(x["started"], x["finished"])
+                if d is not None and d > 0:
+                    out.append(d / 60)
+        return sorted(out)
+    same = mins([x for x in all_jobs if _pnorm(x.get("project", "")) == _pnorm(project)])
+    v = same if len(same) >= 5 else mins(all_jobs)
+    if len(v) < 5:
+        return None
+    return {"median": v[len(v) // 2], "p90": v[min(len(v) - 1, int(len(v) * 0.9))], "n": len(v)}
+
+
+def running_brief(j: dict, stats: dict | None = None) -> str:
+    """อธิบายงานที่กำลังรันให้คนอ่านเข้าใจ: id (โปรเจกต์ · แผน · งานย่อย · รันมานานเท่าไร · คาดว่าจะเสร็จเมื่อไร)"""
     parts = [Path(j.get("project", "")).name, Path(str(j.get("plan") or "").replace("\\", "/")).name, str(j.get("tasks") or "")]
     sec = _secs(j.get("started") or j.get("created") or "")
     if sec is not None and sec >= 0:
         parts.append(f"รันมาแล้ว {sec // 3600} ชม. {sec % 3600 // 60} นาที" if sec >= 3600 else f"รันมาแล้ว {sec // 60} นาที")
+        if stats:
+            med, p90 = stats["median"], stats["p90"]
+            if sec / 60 <= med:
+                parts.append(f"ปกติใช้ ~{med:.0f} นาที → น่าจะเสร็จอีก ~{max(1, med - sec / 60):.0f} นาที")
+            elif sec / 60 <= p90:
+                parts.append(f"เกินเวลาปกติ (~{med:.0f} นาที) แต่ยังไม่เกินที่เคยเห็น 9 ใน 10 งาน ({p90:.0f} นาที)")
+            else:
+                parts.append(f"นานกว่า 9 ใน 10 งานที่ผ่านมา ({p90:.0f} นาที) — น่าจะติดอะไรอยู่")
+        key = "agent_timeout_min" if j.get("kind") in AGENT_KINDS else "timeout_min"
+        cap = float(read_config().get(key) or DEFAULTS.get(key) or 0)
+        t0 = _secs(j.get("started") or j.get("created") or "")
+        if cap and t0 is not None:
+            end = datetime.now() + timedelta(minutes=max(0.0, cap - t0 / 60))
+            parts.append(f"ช้าสุดตัดเวลา {end:%H:%M}")
     detail = " · ".join(p for p in parts if p)
     return f"{j['id']} ({detail})" if detail else j["id"]
 
@@ -1187,6 +1218,7 @@ def schedule(held: list[dict] | None = None) -> dict:
     active = [j for j in all_jobs if live_state(j) == "running"]
     queue = [j for j in all_jobs if j.get("status") == "queued" and live_state(j) == "queued"]
     memo: dict[str, dict] = {}
+    stats_memo: dict[str, dict] = {}  # สถิติเวลารันรายโปรเจกต์ คำนวณครั้งเดียวต่อรอบ และเฉพาะเมื่อมีงานต้องรอจริง
 
     def info(j: dict) -> dict:
         if j["id"] not in memo:
@@ -1222,7 +1254,10 @@ def schedule(held: list[dict] | None = None) -> dict:
         for r in active if mode == "auto" else ():  # ช่องเต็มก็ยังตรวจ เพื่อบอกเหตุชน + นับกันอดตาย
             c = conflict_reason(q, r, info)
             if c:
-                who = running_brief(r)
+                pk = _pnorm(q.get("project", ""))
+                if pk not in stats_memo:
+                    stats_memo[pk] = run_stats(all_jobs, q.get("project", "")) or {}
+                who = running_brief(r, stats_memo[pk] or None)
                 why = f"{c} · รอ {who} จบก่อน" if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {who}: {c}"
                 break
         if not why:
