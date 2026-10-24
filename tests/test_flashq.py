@@ -3151,6 +3151,14 @@ class FlashqTest(unittest.TestCase):
         self.assertLess(j["T-03"]["started"], j["T-01"]["finished"])  # T-03 ไม่ชนกับงานที่อดตาย = แซงได้
         self.assertGreaterEqual(j["T-04"]["started"], j["T-01"]["finished"])  # T-04 ชน = รอ
 
+    def test_running_brief_explains_blocker(self):
+        """ข้อความรอคิวบอกโปรเจกต์/แผน/งานย่อยของงานที่กำลังรัน ไม่ใช่แค่ id"""
+        import flashq
+        b = flashq.running_brief({"id": "X1", "project": "D:/a/IRIS", "plan": "docs/m/PLAN_A.md", "tasks": "T-01", "started": "2000-01-01 00:00:00"})
+        self.assertIn("X1 (IRIS · PLAN_A.md · T-01 · รันมาแล้ว", b)
+        self.assertIn("ชม.", b)
+        self.assertEqual(flashq.running_brief({"id": "X2", "project": "", "plan": ""}), "X2")
+
     def test_plan_declarations_and_conflicts(self):
         """flashq-files / flashq-parallel ในแผน · เกณฑ์ชน: คนละโปรเจกต์ · ไฟล์ซ้อน · glob · ไฟล์/โฟลเดอร์ร่วม"""
         sys.path.insert(0, str(REPO))

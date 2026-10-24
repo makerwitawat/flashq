@@ -1165,6 +1165,16 @@ def conflict_reason(a: dict, b: dict, info) -> str:
     return ""
 
 
+def running_brief(j: dict) -> str:
+    """อธิบายงานที่กำลังรันให้คนอ่านเข้าใจ: id (โปรเจกต์ · แผน · งานย่อย · รันมานานเท่าไร)"""
+    parts = [Path(j.get("project", "")).name, Path(str(j.get("plan") or "").replace("\\", "/")).name, str(j.get("tasks") or "")]
+    sec = _secs(j.get("started") or j.get("created") or "")
+    if sec is not None and sec >= 0:
+        parts.append(f"รันมาแล้ว {sec // 3600} ชม. {sec % 3600 // 60} นาที" if sec >= 3600 else f"รันมาแล้ว {sec // 60} นาที")
+    detail = " · ".join(p for p in parts if p)
+    return f"{j['id']} ({detail})" if detail else j["id"]
+
+
 def schedule(held: list[dict] | None = None) -> dict:
     """จำลองการจัดคิวตอนนี้: {mode, limit, used, start: [id ที่ได้เริ่ม], reasons: {id: เหตุที่ยังรอ}}
     auto = ไล่คิวตามลำดับ เริ่มงานแรกที่ไม่ชนกับงานที่กำลังทำ (+ที่เพิ่งเลือก) · ข้ามงานที่ชน
@@ -1212,7 +1222,8 @@ def schedule(held: list[dict] | None = None) -> dict:
         for r in active if mode == "auto" else ():  # ช่องเต็มก็ยังตรวจ เพื่อบอกเหตุชน + นับกันอดตาย
             c = conflict_reason(q, r, info)
             if c:
-                why = f"{c} · รอ {r['id']} จบก่อน" if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {r['id']}: {c}"
+                who = running_brief(r)
+                why = f"{c} · รอ {who} จบก่อน" if c.startswith("แผนสั่งให้รอ") else f"ชนกับ {who}: {c}"
                 break
         if not why:
             if free <= 0:
