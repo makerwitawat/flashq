@@ -109,10 +109,10 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | 635b3b1 | `.tmp/T-01.red.log` `KeyError: 'exclusive'` + `FAILED` · `.tmp/T-01.green.log` `1 passed` (`.tmp/T-01.extra.log` `7 passed` กันถดถอย) | |
-| T-02 | ✅แก้ (จด: worker amend commit ของตัวเองให้รวมไฟล์แผน → hash จริง `fb6e16c` แทน `f5c3aee` ที่ worker จดไว้) | fb6e16c | `.tmp/T-02.red.log:49` `FAILED` + `:44` `'แตะไฟล์ที่ทุกโมดูลใช้ร่วม Common/x.h' != ''` · `.tmp/T-02.green.log:2` `1 passed` | |
-| T-03 | ✅แก้ (จด: ปรับ sleep ของ T-01 14→30 วิ + `wait_for` ของ T-03 `sec=10` เพราะ 4 การ submit ทำให้เวลารวมยืด — แอสเซิร์ตตามแผนไม่เปลี่ยน · red log ล้มที่แอสเซิร์ต `T-03 ไม่ได้แซง` ไม่ใช่ข้อความ wait_for timeout ตรงตัว) | 26d94d9 | `.tmp/T-03.red.log:28` `AssertionError: T-03 ไม่ได้แซง (ยังถูกล็อกทั้งคิว)` + `:30` `FAILED` · `.tmp/T-03.green.log:2` `1 passed` · `.tmp/T-03.group.log:2` `7 passed` ไม่มี failed | |
-| T-04 | ✅แก้ | aad78fd | `.tmp/T-04.grep.log` `flashq-exclusive` เจอ 4 ไฟล์ (REFERENCE.md, CHANGELOG.md, templates/FLASH_PLAN_TEMPLATE.md, claude/commands/flash-plan.md) · `.tmp/T-04.syntax.log` ว่าง (0 ไบต์) | |
+| T-01 | ✅แก้ | 635b3b1 | `.tmp/T-01.red.log` `KeyError: 'exclusive'` + `FAILED` · `.tmp/T-01.green.log` `1 passed` (`.tmp/T-01.extra.log` `7 passed` กันถดถอย) | ✅ผ่าน (diff ตรงสเปก · แดง→เขียนมี log เวลาเรียงถูก · ไม่มีคำเดา) |
+| T-02 | ✅แก้ (จด: worker amend commit ของตัวเองให้รวมไฟล์แผน → hash จริง `fb6e16c` แทน `f5c3aee` ที่ worker จดไว้) | fb6e16c | `.tmp/T-02.red.log:49` `FAILED` + `:44` `'แตะไฟล์ที่ทุกโมดูลใช้ร่วม Common/x.h' != ''` · `.tmp/T-02.green.log:2` `1 passed` | ✅ผ่าน (diff ตรงสเปก · แดง→เขียนมี log เวลาเรียงถูก · ไม่มีคำเดา) |
+| T-03 | ✅แก้ (จด: ปรับ sleep ของ T-01 14→30 วิ + `wait_for` ของ T-03 `sec=10` เพราะ 4 การ submit ทำให้เวลารวมยืด — แอสเซิร์ตตามแผนไม่เปลี่ยน · red log ล้มที่แอสเซิร์ต `T-03 ไม่ได้แซง` ไม่ใช่ข้อความ wait_for timeout ตรงตัว) | 26d94d9 | `.tmp/T-03.red.log:28` `AssertionError: T-03 ไม่ได้แซง (ยังถูกล็อกทั้งคิว)` + `:30` `FAILED` · `.tmp/T-03.green.log:2` `1 passed` · `.tmp/T-03.group.log:2` `7 passed` ไม่มี failed | ✅ผ่าน (diff ตรงสเปก · แดง→เขียนมี log เวลาเรียงถูก · ไม่มีคำเดา) |
+| T-04 | ✅แก้ | aad78fd | `.tmp/T-04.grep.log` `flashq-exclusive` เจอ 4 ไฟล์ (REFERENCE.md, CHANGELOG.md, templates/FLASH_PLAN_TEMPLATE.md, claude/commands/flash-plan.md) · `.tmp/T-04.syntax.log` ว่าง (0 ไบต์) | ✅ผ่าน (diff ตรงสเปก · แดง→เขียนมี log เวลาเรียงถูก · ไม่มีคำเดา) |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - ข้อเสนอที่ผู้สืบเสนอแต่ Claude ยังไม่ได้ยืนยัน: `paths_overlap` เทียบชื่อไฟล์เปล่ากับ path เต็ม (`:1030-1031`) · `take_slot` ตรวจแล้วจองไม่ใช่ขั้นเดียว · โหมด FIFO ไม่ตรวจไฟล์ · ข้อความ "ช่อง x/y" ในโหมด auto
