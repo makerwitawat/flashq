@@ -265,8 +265,8 @@ body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: 
 .of-sub h3 { margin: 0; font-size: 1rem; }
 .of-two { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); align-items: start; }
 .of-legend { display: grid; gap: 0.3rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); margin: 0.4rem 0 0; padding: 0; list-style: none; font-size: 0.9rem; }
-[data-oflog] { cursor: pointer; }
-[data-oflog]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-oflog], [data-ofdead] { cursor: pointer; }
+[data-oflog]:focus-visible, [data-ofdead]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .of-floor { fill: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
 .of-wall { fill: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
@@ -404,7 +404,8 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
 <main id="dashView">
   <div class="col" id="colA">
     <section class="panel warn" id="deadBox" hidden data-panel="dead">
-      <div class="ph"><h2>⚠ ต้องรับทราบ: งานที่ process ตาย · งานที่ส่งแล้วไม่เข้าคิว</h2></div>
+      <div class="ph"><h2>⚠ ต้องรับทราบ: งานที่ process ตาย · งานที่ส่งแล้วไม่เข้าคิว</h2><span class="sp"></span>
+        <button id="deadAckAll" data-dismiss-all title="รับทราบงานที่ process ตายทั้งหมดในครั้งเดียว (ข้ามงานที่ opencode ยังทำงานอยู่)" hidden>รับทราบทั้งหมด</button></div>
       <div class="pb" id="dead"></div>
     </section>
     <section class="panel" id="goalBox" hidden data-panel="goals">
@@ -528,7 +529,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป · ไอคอนข้างเลข 🔍🕵️🧪📝 = ชนิดงาน) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
         <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · 🚫 = DENIED (opencode ปฏิเสธสิทธิ์ งานไม่ได้ทำ — ดูทางแก้ในกล่อง log) · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
-        <li>😴 <b>นอนที่เก้าอี้มุมซ้ายล่าง</b> ("⚠ process ตาย") = งานที่ process ตาย (ดูแผงเตือนในแดชบอร์ด) · ไม่เกี่ยวกับโซฟาห้องพัก</li>
+        <li>😴 <b>นอนที่เก้าอี้มุมซ้ายล่าง</b> ("⚠ process ตาย") = งานที่ process ตาย (คลิกที่เก้าอี้เพื่อรับทราบ หรือดูแผงเตือนในแดชบอร์ด) · ไม่เกี่ยวกับโซฟาห้องพัก</li>
         <li>⏱ ทุก <b>เวลาที่ประมาณ</b> มาจากประวัติงานที่ผ่านมา (ค่ากลางต่อ T-xx) ไม่ใช่ค่ารับประกัน — คิวจริงอาจเร็ว/ช้ากว่านี้ได้</li>
       </ul>
       <p class="of-note">คลิกตัวละคร/การ์ดเพื่อไปดู log สดของงานนั้น</p>
@@ -726,8 +727,8 @@ async function post(path, body) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
     let d = {}; try { d = await r.json(); } catch (e) {}
-    return { httpOk: r.ok, ...d };
     if (r.status === 403 && d.code === "token") $("stale").hidden = false;  // token หมดอายุ → ขึ้นป้ายให้รีเฟรช
+    return { httpOk: r.ok, ...d };
   } catch (e) { return { httpOk: false, message: NOCONN }; }
 }
 
@@ -798,6 +799,8 @@ function render() {
 
   const sf = s.submit_fails || [];
   $("deadBox").hidden = !s.dead.length && !sf.length;
+  $("deadAckAll").hidden = s.dead.length < 2;
+  $("deadAckAll").title = `รับทราบงานที่ process ตายทั้งหมดในครั้งเดียว (ข้ามงานที่ opencode ยังทำงานอยู่)${s.dead_clear_hours ? ` · ป้ายหายเองเมื่อพ้น ${s.dead_clear_hours} ชั่วโมง` : " · ปิดการหายเอง"}`;
   setHTML("dead", sf.map((f) => `<div class="dead-item">
     <div><b>ส่งงานแล้วไม่เข้าคิว</b> <span class="mono">${esc(f.body?.plan || f.body?.message || "")} ${esc(f.body?.tasks || "")}</span>
       <span class="muted">· ${esc(f.project)} · ${esc(f.at)}</span></div>
@@ -1290,7 +1293,7 @@ $("submitGo").onclick = async (e) => {
 
 /* ---------- คลิก ---------- */
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-copy],[data-cc],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-ack-submit],[data-resubmit],[data-retry],[data-docdiff],[data-docacc],[data-docdis],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
+  const t = ev.target.closest("[data-copy],[data-cc],[data-cancel],[data-runnow],[data-stop],[data-dismiss],[data-dismiss-all],[data-ack-submit],[data-resubmit],[data-retry],[data-docdiff],[data-docacc],[data-docdis],[data-open],[data-switch],[data-log],[data-collapse],[data-max]");
   if (!t) return;
   const panel = t.closest(".panel");
   if (t.hasAttribute("data-collapse")) {
@@ -1322,6 +1325,7 @@ document.addEventListener("click", async (ev) => {
     const d = await post("/api/stop", { id, confirm: id }); toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.dismiss) { const d = await post("/api/dismiss", { id: t.dataset.dismiss }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
+  if (t.hasAttribute("data-dismiss-all")) { const d = await post("/api/dismiss", { all: true }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.ackSubmit) { const d = await post("/api/dismiss", { submit: t.dataset.ackSubmit }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
   if (t.dataset.resubmit) {
     const f = (state?.submit_fails || []).find((x) => x.id === t.dataset.resubmit);
@@ -1651,6 +1655,7 @@ function applyTheme() {
   else if (theme === "time") { const h = new Date().getHours(); root.dataset.theme = isDarkHour(h) ? "dark" : "light"; }
   else root.dataset.theme = theme;
   $("themeBtn").textContent = `ธีม: ${THEME_TH[theme]}`;
+  $("themeBtn").title = theme === "time" ? `มืดช่วง ${String(DARK_FROM).padStart(2, "0")}:00–${String(DARK_TO).padStart(2, "0")}:00 · สว่างช่วงที่เหลือ · คลิกเพื่อสลับ · คลิกขวาเพื่อตั้งช่วงเวลา` : "สลับธีม (คลิกขวา = ตั้งช่วงเวลาของโหมดตามเวลา)";
 }
 $("themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; store.set("theme2", theme); applyTheme(); };
 $("themeBtn").oncontextmenu = async (e) => {
@@ -1665,7 +1670,6 @@ $("themeBtn").oncontextmenu = async (e) => {
 setInterval(() => { if (theme === "time") applyTheme(); }, 60000);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.body.classList.contains("has-max") && !dlg.open) { setMax(null); return; }
-  $("themeBtn").title = theme === "time" ? `มืดช่วง ${String(DARK_FROM).padStart(2, "0")}:00–${String(DARK_TO).padStart(2, "0")}:00 · สว่างช่วงที่เหลือ · คลิกเพื่อสลับ · คลิกขวาเพื่อตั้งช่วงเวลา` : "สลับธีม (คลิกขวา = ตั้งช่วงเวลาของโหมดตามเวลา)";
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || !!document.querySelector("dialog[open]");
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "+" || e.key === "=") stepZoom(1);
@@ -2136,7 +2140,7 @@ function sceneSVG(m) {
   if (m.queue.length > SHOW) g += `<text class="of-tb" x="150" y="${150 + SHOW * 70 - 14}" text-anchor="middle">+${m.queue.length - SHOW} งานรออยู่</text>`;
   if (!m.queue.length) g += `<text class="of-tm" x="150" y="200" text-anchor="middle">ไม่มีคิวรอ</text>`;
   if (m.dead.length) {
-    g += `<g class="of-st-sleep"><title>${esc(`${m.dead.length} งานที่ process ตายแล้ว`)}</title><rect class="of-chair" x="14" y="${H - 80}" width="80" height="34" rx="10"/>
+    g += `<g class="of-st-sleep" data-ofdead tabindex="0" role="button" aria-label="รับทราบงานที่ process ตาย ${m.dead.length} งาน"><title>${esc(`${m.dead.length} งานที่ process ตายแล้ว — คลิกเพื่อรับทราบ (ย้ายไปประวัติ)`)}</title><rect class="of-chair" x="14" y="${H - 80}" width="80" height="34" rx="10"/>
       ${person({ seed: m.dead[0].id, hue: hueOf(m.dead[0].project_name), pose: "sleep", mood: "sleep", x: 54, y: H - 38, s: 0.62 })}
       <text class="of-qt" x="54" y="${H - 22}" text-anchor="middle" style="font-size:11px;font-weight:700">⚠ process ตาย ${m.dead.length}</text></g>`;
   }
@@ -2505,6 +2509,15 @@ document.addEventListener("click", async (e) => {  // ปุ่ม "↩ เป�
   const d = await post("/api/open_claude", { id: b.dataset.openclaude }); toast(d.message || d.error || "ผิดพลาด");
 });
 $("goals").addEventListener("click", (e) => { const t = e.target.closest("button[data-oflog]"); if (t) openLog(t.dataset.oflog); });
+async function ackDeadFromOffice() {
+  const n = state?.dead?.length || 0;
+  if (!n || !await ask({ title: `รับทราบงานที่ process ตาย ${n} งาน?`, tone: "warn", ok: "รับทราบ",
+    body: "ย้ายไปประวัติเป็นสถานะ 'ตาย' · ข้ามงานที่ opencode ยังทำงานอยู่ (ตรวจเองก่อน) · ป้ายนี้จะหายเองเมื่อพ้นเวลาที่ตั้งไว้ด้วย" })) return;
+  const d = await post("/api/dismiss", { all: true });
+  toast(d.message || d.error || "ผิดพลาด");
+  refresh();
+}
+$("officeView").addEventListener("click", (e) => { if (e.target.closest("[data-ofdead]")) ackDeadFromOffice(); });
 /* ปุ่มบนการ์ดเป้าหมาย (ทั้งแดชบอร์ดและออฟฟิศ) */
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-gact]"); if (!b || b.disabled) return;
@@ -2541,7 +2554,7 @@ document.addEventListener("click", async (e) => {
   toast(r.message || r.error || (r.httpOk ? "เรียบร้อย" : "ผิดพลาด"));
   refresh();
 });
-$("officeView").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
+$("officeView").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.closest("g[data-ofdead]")) { e.preventDefault(); ackDeadFromOffice(); return; } if (e.key === "Enter" || e.key === " ") { const t = e.target.closest("g[data-oflog]"); if (t) { e.preventDefault(); openLogFromOffice(t.dataset.oflog); } } });
 $("ofCalm").checked = !!store.get("calm", false); document.body.classList.toggle("calm", $("ofCalm").checked);
 $("ofCalm").onchange = () => { document.body.classList.toggle("calm", $("ofCalm").checked); store.set("calm", $("ofCalm").checked); };
 document.addEventListener("visibilitychange", () => document.body.classList.toggle("of-paused", document.hidden));
