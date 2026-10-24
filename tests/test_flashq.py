@@ -3096,25 +3096,32 @@ class FlashqTest(unittest.TestCase):
         self.assertGreaterEqual(j["SAME"]["started"], j["T-01"]["finished"])
 
     def test_auto_starvation_locks_head(self):
-        """auto: งานที่ชนรอเกิน starve_min → ล็อกหัวคิว งานหลังจากนั้นห้ามแซงแม้ไม่ชน"""
+        """auto: งานที่ชนรอเกิน starve_min → ล็อกเฉพาะงานที่ชนกับมัน · งานที่ไม่ชนแซงได้"""
         self.auto_plan()
         self.assertEqual(self.run_q("config", "schedule", "auto").returncode, 0)
         self.assertEqual(self.run_q("config", "starve_min", "0.05").returncode, 1)  # ต่ำกว่าขั้นต่ำ
         self.assertEqual(self.run_q("config", "starve_min", "0.1").returncode, 0)  # 6 วิ
-        p1 = self.submit("PLAN.md", "T-01", sleep="14")
+        p1 = self.submit("PLAN.md", "T-01", sleep="30")
         self.wait_for(lambda: self.by_key().get("T-01", {}).get("status") == "running", msg="T-01 ไม่เริ่ม")
         p2 = self.submit("PLAN.md", "T-02", sleep="1")
         time.sleep(7.5)  # T-02 รอเกิน 6 วิ
+        (self.proj / "PLAN.md").write_text(  # เพิ่ม T-04 ที่ชน T-01/T-02 ไว้ก่อนส่ง T-03
+            "# plan\n- [ ] **T-01** `src/a.cpp`\n- [ ] **T-02** `src/a.cpp`\n- [ ] **T-03** `src/c.cpp`\n"
+            "- [ ] **T-04** `src/a.cpp`\n", encoding="utf-8")
         p3 = self.submit("PLAN.md", "T-03", sleep="1")
+        self.wait_for(lambda: self.by_key().get("T-03", {}).get("status") in ("running", "ok"), sec=10,
+                      msg="T-03 ไม่ได้แซง (ยังถูกล็อกทั้งคิว)")
+        p4 = self.submit("PLAN.md", "T-04", sleep="1")
         time.sleep(2)
         st = self.run_q("status").stdout
         self.assertIn("ล็อกหัวคิว", st)
         self.assertIn("กันอดตาย", st)
-        self.assertEqual(self.by_key()["T-03"]["status"], "queued")
-        for p in (p1, p2, p3):
+        self.assertEqual(self.by_key()["T-04"]["status"], "queued")
+        for p in (p1, p2, p3, p4):
             self.assertIn("FLASH_RUN=OK", p.communicate(timeout=120)[0])
         j = self.by_key()
-        self.assertGreaterEqual(j["T-03"]["started"], j["T-01"]["finished"])
+        self.assertLess(j["T-03"]["started"], j["T-01"]["finished"])  # T-03 ไม่ชนกับงานที่อดตาย = แซงได้
+        self.assertGreaterEqual(j["T-04"]["started"], j["T-01"]["finished"])  # T-04 ชน = รอ
 
     def test_plan_declarations_and_conflicts(self):
         """flashq-files / flashq-parallel ในแผน · เกณฑ์ชน: คนละโปรเจกต์ · ไฟล์ซ้อน · glob · ไฟล์/โฟลเดอร์ร่วม"""

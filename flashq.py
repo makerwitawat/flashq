@@ -1168,7 +1168,7 @@ def conflict_reason(a: dict, b: dict, info) -> str:
 def schedule(held: list[dict] | None = None) -> dict:
     """จำลองการจัดคิวตอนนี้: {mode, limit, used, start: [id ที่ได้เริ่ม], reasons: {id: เหตุที่ยังรอ}}
     auto = ไล่คิวตามลำดับ เริ่มงานแรกที่ไม่ชนกับงานที่กำลังทำ (+ที่เพิ่งเลือก) · ข้ามงานที่ชน
-           แต่งานที่ชนและรอเกิน starve_min นาที = ล็อกหัวคิว (งานหลังจากนั้นห้ามแซง)
+           แต่งานที่ชนและรอเกิน starve_min นาที = ล็อกหัวคิว (งานหลังจากนั้นที่ชนกับมันห้ามแซง)
     fifo = งานหัวคิวได้ช่องว่างตามลำดับ"""
     held = held_slots() if held is None else held
     limit, mode, starve = max_parallel(), schedule_mode(), starve_min()
@@ -1183,7 +1183,7 @@ def schedule(held: list[dict] | None = None) -> dict:
             memo[j["id"]] = job_info(j)
         return memo[j["id"]]
 
-    free, start, reasons, barrier = limit - len(held), [], {}, None
+    free, start, reasons, barriers = limit - len(held), [], {}, []
     lock_busy = LOCK.exists()
     for q in queue:
         qid = q["id"]
@@ -1198,8 +1198,15 @@ def schedule(held: list[dict] | None = None) -> dict:
             else:
                 reasons[qid] = "รอช่อง 1 ว่าง (งานส่งด้วยโค้ดรุ่นก่อน)"
             continue
-        if barrier:
-            reasons[qid] = f"รอ {barrier} ที่รอนานเกิน {starve:g} นาทีได้เริ่มก่อน (กันอดตาย)"
+        blocked = ""
+        for b in barriers:  # งานที่อดตาย: ห้ามแซงเฉพาะงานที่ชนกับมัน (งานอื่นไม่ชน = ไหลลงตรวจปกติ)
+            c = conflict_reason(q, b, info)
+            if c:
+                blocked = (f"ชนกับ {b['id']} ที่รอนานเกิน {starve:g} นาที ({c})"
+                           f" → รอให้ {b['id']} เริ่มก่อน (กันอดตาย)")
+                break
+        if blocked:
+            reasons[qid] = blocked
             continue
         why = ""
         for r in active if mode == "auto" else ():  # ช่องเต็มก็ยังตรวจ เพื่อบอกเหตุชน + นับกันอดตาย
@@ -1217,7 +1224,7 @@ def schedule(held: list[dict] | None = None) -> dict:
             continue
         w = _secs(q.get("created", ""))
         if w is not None and w > starve * 60:
-            barrier = qid
+            barriers.append(q)  # ล็อกเฉพาะงานที่ชนกับมัน
             why += f" · รอเกิน {starve:g} นาที → ล็อกหัวคิว"
         reasons[qid] = why
     return {"mode": mode, "limit": limit, "used": len(held), "start": start, "reasons": reasons}
