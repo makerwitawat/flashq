@@ -1032,15 +1032,16 @@ def paths_overlap(a: str, b: str) -> bool:
     return False
 
 
-# ประกาศในแผน (แนะนำ §0): `flashq-files: Client/Src/A.cpp, Client/Src/UI/*.h` · `flashq-parallel: no`
-DECL_RE = re.compile(r"^\s*(?:[-*]\s*)?`?\s*flashq-(files|parallel)\s*:\s*(.*?)\s*$", re.I)
+# ประกาศในแผน (แนะนำ §0): `flashq-files: Client/Src/A.cpp, Client/Src/UI/*.h` · `flashq-parallel: no` · `flashq-exclusive: Build/*, CMakeLists.txt`
+DECL_RE = re.compile(r"^\s*(?:[-*]\s*)?`?\s*flashq-(files|parallel|exclusive)\s*:\s*(.*?)\s*$", re.I)
 NO_WORDS = ("no", "false", "0", "off", "ไม่")
 # โฟลเดอร์ระดับบนที่ทุกโมดูลใช้ร่วม (ค่าเริ่มต้น · เพิ่มต่อโปรเจกต์ได้ด้วย "parallel_shared" ใน .flash.json)
 DEFAULT_SHARED = ("common/", "util/", "shared/", "cmake/")
 
 
 def plan_meta(project: str, plan: str) -> dict:
-    """{files: list | None (ไม่ได้ประกาศ), parallel: bool} จากบรรทัด flashq-files / flashq-parallel นอก code block"""
+    """{files: list | None (ไม่ได้ประกาศ), exclusive: list (ไม่ประกาศ = ไม่มีคีย์), parallel: bool}
+    จากบรรทัด flashq-files / flashq-exclusive / flashq-parallel นอก code block"""
     out = {"files": None, "parallel": True}
     if not plan:
         return out
@@ -1048,7 +1049,7 @@ def plan_meta(project: str, plan: str) -> dict:
         text = (Path(project) / plan).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return out
-    files, fence = [], False
+    files, excl, fence = [], [], False
     for line in text.splitlines():
         if line.lstrip().startswith("```"):
             fence = not fence
@@ -1057,7 +1058,8 @@ def plan_meta(project: str, plan: str) -> dict:
         if not m:
             continue
         val = m[2].strip().strip("`").strip()
-        if m[1].lower() == "parallel":
+        kind = m[1].lower()
+        if kind == "parallel":
             word = (val.lower().split(None, 1) or [""])[0]
             if word in NO_WORDS:
                 out["parallel"] = False
@@ -1067,12 +1069,15 @@ def plan_meta(project: str, plan: str) -> dict:
             continue
         if re.search(r"<[^>]*>", val):  # placeholder ของแม่แบบที่ยังไม่เติม
             continue
+        dest = excl if kind == "exclusive" else files
         for t in re.split(r"[,\s]+", val):
             t = t.strip("`'\"()")
             if t and not t.startswith("-"):
-                files.append(t.replace("\\", "/"))
+                dest.append(t.replace("\\", "/"))
     if files:
         out["files"] = sorted(set(files))
+    if excl:
+        out["exclusive"] = sorted(set(excl))
     return out
 
 
@@ -1081,7 +1086,8 @@ def job_info(j: dict) -> dict:
     meta = plan_meta(j.get("project", ""), j.get("plan", ""))
     declared = meta["files"] is not None
     files = meta["files"] if declared else plan_files(j.get("project", ""), j.get("plan", ""), j.get("tasks", ""))
-    return {"files": files, "parallel": meta["parallel"], "declared": declared, "why": meta.get("why", "")}
+    return {"files": files, "parallel": meta["parallel"], "declared": declared, "why": meta.get("why", ""),
+            "exclusive": meta.get("exclusive")}
 
 
 def shared_paths(project: str) -> list[str]:
@@ -1119,14 +1125,28 @@ def conflict_reason(a: dict, b: dict, info) -> str:
                 else "มีงานที่แก้ไฟล์กำลังรันในโปรเจกต์เดียวกัน — ช่างเอกสารต้องรอให้จบก่อน (ไม่งั้นแยกไม่ออกว่าใครแก้ไฟล์ไหน)")
     ia, ib = info(a), info(b)
     if not ia["parallel"] or not ib["parallel"]:
-        mine = not ia["parallel"]
-        head = "แผนสั่งให้รอ (flashq-parallel: no)" if mine else "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
-        why = (ia if mine else ib).get("why")
-        head += f" · เหตุผลจากแผน: {why}" if why else " · แผนไม่ได้เขียนเหตุผลไว้"
-        if ia["files"] is not None and ib["files"] is not None:  # บอกด้วยว่าไฟล์ซ้อนกันจริงไหม ผู้ใช้จะตัดสินใจกดรันเลยได้
-            over = sorted({x for x in ia["files"] for y in ib["files"] if paths_overlap(x, y)})
-            head += (" · ไฟล์ที่ซ้อนกันจริง: " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")) if over else " · ไฟล์ที่ประกาศไม่ซ้อนกัน"
-        return head
+        # แผนที่สั่ง no และประกาศ flashq-exclusive = ห้ามเฉพาะไฟล์ในขอบเขต · ฝั่งที่ไม่ได้ประกาศ = บล็อกทั้งก้อนเหมือนเดิม
+        locked = [(mine, ia if mine else ib, ib if mine else ia) for mine in (True, False)
+                  if not (ia if mine else ib)["parallel"]]
+        if any(not own.get("exclusive") for _mine, own, _other in locked):
+            mine = not ia["parallel"]
+            head = "แผนสั่งให้รอ (flashq-parallel: no)" if mine else "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
+            why = (ia if mine else ib).get("why")
+            head += f" · เหตุผลจากแผน: {why}" if why else " · แผนไม่ได้เขียนเหตุผลไว้"
+            if ia["files"] is not None and ib["files"] is not None:  # บอกด้วยว่าไฟล์ซ้อนกันจริงไหม ผู้ใช้จะตัดสินใจกดรันเลยได้
+                over = sorted({x for x in ia["files"] for y in ib["files"] if paths_overlap(x, y)})
+                head += (" · ไฟล์ที่ซ้อนกันจริง: " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")) if over else " · ไฟล์ที่ประกาศไม่ซ้อนกัน"
+            return head
+        for mine, own, other in locked:  # ประกาศขอบเขตไว้ → ชนเฉพาะเมื่ออีกฝ่ายแตะขอบเขตนั้น (ไม่งั้นไหลลงตรวจปกติ)
+            if other["files"] is None:
+                return "ดึงรายการไฟล์ของงานนั้นไม่ได้"
+            over = sorted({y for y in other["files"] for x in own["exclusive"] if paths_overlap(x, y)})
+            if over:
+                head = "แผนสั่งให้รอ (flashq-parallel: no)" if mine else "แผนของงานนั้นสั่งห้ามรันคู่ (flashq-parallel: no)"
+                why = own.get("why")
+                head += f" · เหตุผลจากแผน: {why}" if why else " · แผนไม่ได้เขียนเหตุผลไว้"
+                head += " · ขอบเขตห้ามรันคู่ซ้อนกับ: " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")
+                return head
     if ia["files"] is None:
         return "ดึงรายการไฟล์ของงานนี้ไม่ได้ (ใส่ flashq-files: ในแผน)"
     if ib["files"] is None:

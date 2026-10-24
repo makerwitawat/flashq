@@ -3157,6 +3157,21 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(flashq.conflict_reason(J("E.md"), J("E.md", str(self.tmp)), flashq.job_info), "")  # คนละโปรเจกต์
         self.assertTrue(flashq.paths_overlap("**", "x/y.cpp"))
         self.assertFalse(flashq.paths_overlap("Client/UI/*.h", "Client/a.cpp"))
+        # flashq-exclusive: ขอบเขตที่ห้ามงานอื่นแตะ (ใช้คู่กับ parallel: no) · ไม่ประกาศ = บล็อกทั้งก้อนเหมือนเดิม
+        (self.proj / "I.md").write_text("# I\nflashq-files: MapEditor/b.cpp\nflashq-parallel: no — แตะ build\n"
+                                       "flashq-exclusive: Build/*, CMakeLists.txt\n", encoding="utf-8")
+        (self.proj / "J.md").write_text("# J\nflashq-files: Client/z.cpp\n", encoding="utf-8")
+        (self.proj / "K.md").write_text("# K\nflashq-files: Build/x.cmake\n", encoding="utf-8")
+        self.assertEqual(flashq.plan_meta(P, "I.md")["exclusive"], ["Build/*", "CMakeLists.txt"])
+        self.assertNotIn("exclusive", flashq.plan_meta(P, "B.md"))
+        self.assertEqual(flashq.job_info(J("I.md"))["exclusive"], ["Build/*", "CMakeLists.txt"])
+        self.assertEqual(c("I.md", "J.md"), "")  # ไม่ซ้อนขอบเขต = รันพร้อมกันได้ แม้ I สั่ง no
+        self.assertEqual(c("J.md", "I.md"), "")
+        self.assertIn("แผนสั่งให้รอ", c("I.md", "K.md"))
+        self.assertIn("Build/x.cmake", c("I.md", "K.md"))
+        self.assertIn("flashq-parallel", c("K.md", "I.md"))
+        self.assertIn("Build/x.cmake", c("K.md", "I.md"))
+        self.assertIn("ดึงรายการไฟล์", c("I.md", "NOPE.md"))
 
     def test_ui_schedule_config_and_reason(self):
         """ui: POST /api/config schedule (ผิด = 400) · /api/state บอกโหมด + เหตุผลที่งานรอคิว"""
