@@ -1156,8 +1156,11 @@ def conflict_reason(a: dict, b: dict, info) -> str:
         return "ไฟล์ " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")
     proj = a.get("project", "")
     sh = shared_paths(proj)
-    hit = sorted({x for x in ia["files"] + ib["files"] if shared_hit(x, sh, proj)})
-    if hit:
+    ha = {x for x in ia["files"] if shared_hit(x, sh, proj)}  # ไฟล์ร่วมที่ฝั่ง a แตะ
+    hb = {x for x in ib["files"] if shared_hit(x, sh, proj)}  # ไฟล์ร่วมที่ฝั่ง b แตะ
+    strict = bool(project_cfg(Path(proj)).get("parallel_shared_strict")) if proj else False  # โหมดเข้ม = ฝั่งเดียวแตะก็ชน
+    if (ha and hb) or (strict and (ha or hb)):
+        hit = sorted(ha | hb)
         return "แตะไฟล์ที่ทุกโมดูลใช้ร่วม " + ", ".join(hit[:3]) + (f" (+{len(hit) - 3})" if len(hit) > 3 else "")
     return ""
 

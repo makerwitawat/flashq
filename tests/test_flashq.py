@@ -3134,6 +3134,7 @@ class FlashqTest(unittest.TestCase):
         (self.proj / "E.md").write_text("# E\nflashq-files: Common/x.h\n", encoding="utf-8")
         (self.proj / "F.md").write_text("# F\nflashq-files: CMakeLists.txt\n", encoding="utf-8")
         (self.proj / "G.md").write_text("# G\nflashq-files: Proto/p.h\n", encoding="utf-8")
+        (self.proj / "E2.md").write_text("# E2\nflashq-files: Common/y.h\n", encoding="utf-8")
         self.assertEqual(flashq.plan_meta(P, "A.md"), {"files": ["Client/UI/*.h", "Client/a.cpp"], "parallel": True})
         self.assertEqual(flashq.plan_meta(P, "D.md"), {"files": None, "parallel": False})  # placeholder ถูกข้าม
         self.assertEqual(flashq.job_info({"project": P, "plan": "D.md", "tasks": "T-01"})["files"], ["Tools/t.py"])
@@ -3150,9 +3151,18 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("เหตุผลจากแผน: แตะ build ทั้งโปรเจกต์", c("H.md", "A.md"))
         self.assertIn("ไฟล์ที่ซ้อนกันจริง: MapEditor/b.cpp", c("H.md", "B.md"))
         self.assertIn("ไฟล์ที่ประกาศไม่ซ้อนกัน", c("H.md", "A.md"))
-        self.assertIn("ใช้ร่วม", c("E.md", "B.md"))  # Common/ = โฟลเดอร์ร่วมค่าเริ่มต้น
-        self.assertIn("CMakeLists.txt", c("F.md", "B.md"))  # ไฟล์ระดับรากที่มีจริง
-        self.assertIn("Proto/p.h", c("G.md", "B.md"))  # parallel_shared ของโปรเจกต์
+        self.assertEqual(c("E.md", "B.md"), "")  # ฝั่งเดียวแตะไฟล์ร่วม = ไม่ชนแล้ว
+        self.assertEqual(c("F.md", "B.md"), "")
+        self.assertEqual(c("G.md", "B.md"), "")
+        self.assertIn("ใช้ร่วม", c("E.md", "E2.md"))  # สองฝั่งแตะโฟลเดอร์ร่วม Common/
+        self.assertIn("CMakeLists.txt", c("F.md", "G.md"))  # สองฝั่งแตะไฟล์ร่วมคนละแบบ
+        self.assertIn("Proto/p.h", c("F.md", "G.md"))
+        cfg = {"require_plan_in_remote": False, "parallel_shared": ["Proto/"], "parallel_shared_strict": True}
+        (self.proj / ".flash.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertIn("ใช้ร่วม", c("E.md", "B.md"))  # โหมดเข้ม: ฝั่งเดียวแตะก็ชน
+        self.assertIn("CMakeLists.txt", c("F.md", "B.md"))
+        (self.proj / ".flash.json").write_text(json.dumps({"require_plan_in_remote": False, "parallel_shared": ["Proto/"]}),
+                                               encoding="utf-8")
         self.assertIn("ดึงรายการไฟล์", c("NOPE.md", "B.md"))
         self.assertEqual(flashq.conflict_reason(J("E.md"), J("E.md", str(self.tmp)), flashq.job_info), "")  # คนละโปรเจกต์
         self.assertTrue(flashq.paths_overlap("**", "x/y.cpp"))

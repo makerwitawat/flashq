@@ -38,7 +38,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 
 ### กลุ่ม A — `flashq-parallel: no` ผูกขอบเขตไฟล์ด้วย `flashq-exclusive:`
 
-- [ ] **T-01** `flashq.py` (`DECL_RE` · `plan_meta` · `job_info` · `conflict_reason`) + `tests/test_flashq.py` (`test_plan_declarations_and_conflicts`) · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` (`DECL_RE` · `plan_meta` · `job_info` · `conflict_reason`) + `tests/test_flashq.py` (`test_plan_declarations_and_conflicts`) · แบบ: เทสต์ก่อน
   - แนวคิด: แผนเขียนเพิ่มได้ `flashq-exclusive: <path/glob, ...>` = ขอบเขตที่ห้ามงานอื่นแตะระหว่างที่แผนนี้รัน · ใช้คู่กับ `flashq-parallel: no` · **ไม่มี `flashq-exclusive` = พฤติกรรมเดิมทุกตัวอักษร**
   - จุดเสียบ 1: `DECL_RE = re.compile(` ใน `flashq.py` (ใกล้ `# ประกาศในแผน`) → เพิ่ม `exclusive` ในกลุ่ม `(files|parallel)` และอัปเดตคอมเมนต์ตัวอย่างบรรทัดบน
   - จุดเสียบ 2: ฟังก์ชัน `plan_meta` → parse `flashq-exclusive:` แบบเดียวกับ `flashq-files:` (ข้ามค่าที่มี placeholder `<...>` · แปลง `\` เป็น `/` · ข้ามโค้ดบล็อก) แต่เก็บแยกเป็นลิสต์ · ใส่คีย์ `out["exclusive"]` (sorted, ไม่ซ้ำ) **เฉพาะเมื่อมีค่า** (เหมือนคีย์ `why` — เทสต์เดิมเทียบ dict เต็ม ห้ามทำให้คีย์โผล่เมื่อไม่ได้ประกาศ)
@@ -61,7 +61,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 
 ### กลุ่ม B — ไฟล์ร่วม ชนเมื่อทั้งสองฝ่ายแตะ
 
-- [ ] **T-02** `flashq.py` (`conflict_reason` ท้ายฟังก์ชัน) + `tests/test_flashq.py` (`test_plan_declarations_and_conflicts`) · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` (`conflict_reason` ท้ายฟังก์ชัน) + `tests/test_flashq.py` (`test_plan_declarations_and_conflicts`) · แบบ: เทสต์ก่อน
   - จุดเสียบ: ใน `conflict_reason` บรรทัด `hit = sorted({x for x in ia["files"] + ib["files"] if shared_hit(x, sh, proj)})` ตามด้วย `if hit:` ที่คืน `"แตะไฟล์ที่ทุกโมดูลใช้ร่วม "`
   - ต้องเป็น: คำนวณไฟล์ร่วมที่แต่ละฝั่งแตะแยกกัน (ha จาก `ia["files"]`, hb จาก `ib["files"]`) · **ชนเมื่อ ha และ hb ไม่ว่างทั้งคู่** (ฝั่งเดียวแตะไม่ชน) · `hit` ที่ใส่ในข้อความ = ไฟล์ร่วมของสองฝั่งรวมกัน (sorted ไม่ซ้ำ) · ข้อความขึ้นต้น `แตะไฟล์ที่ทุกโมดูลใช้ร่วม ` เดิม
   - โหมดเข้ม (opt-in): `project_cfg(Path(proj)).get("parallel_shared_strict")` เป็นจริง → ชนเมื่อฝั่งใดฝั่งหนึ่งแตะไฟล์ร่วม (พฤติกรรมเดิม) · ค่าตั้งต้น = ไม่เข้ม · ตรวจก่อนว่า `project_cfg` ไม่ cache ข้ามการเปลี่ยนไฟล์ `.flash.json` ในเทสต์ (ถ้า cache ให้ล้าง cache ในเทสต์ ไม่ใช่แก้ตัว cache)
@@ -109,6 +109,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | 635b3b1 | `.tmp/T-01.red.log` `KeyError: 'exclusive'` + `FAILED` · `.tmp/T-01.green.log` `1 passed` (`.tmp/T-01.extra.log` `7 passed` กันถดถอย) | |
+| T-02 | ✅แก้ | f5c3aee | `.tmp/T-02.red.log` `FAILED` + `'แตะไฟล์ที่ทุกโมดูลใช้ร่วม Common/x.h' != ''` · `.tmp/T-02.green.log` `1 passed` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - ข้อเสนอที่ผู้สืบเสนอแต่ Claude ยังไม่ได้ยืนยัน: `paths_overlap` เทียบชื่อไฟล์เปล่ากับ path เต็ม (`:1030-1031`) · `take_slot` ตรวจแล้วจองไม่ใช่ขั้นเดียว · โหมด FIFO ไม่ตรวจไฟล์ · ข้อความ "ช่อง x/y" ในโหมด auto
