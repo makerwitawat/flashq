@@ -77,7 +77,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 
 ### กลุ่ม C — กันอดตายล็อกเฉพาะงานที่ชนกับตัวที่อดตาย
 
-- [ ] **T-03** `flashq.py` (`schedule`) + `tests/test_flashq.py` (`test_auto_starvation_locks_head`) · แบบ: เทสต์ก่อน
+- [x] **T-03** `flashq.py` (`schedule`) + `tests/test_flashq.py` (`test_auto_starvation_locks_head`) · แบบ: เทสต์ก่อน
   - จุดเสียบ (Grep `barrier` ใน `schedule` — มี 4 จุด): การประกาศ `free, start, reasons, barrier = ...` · บล็อก `if barrier:` ต้นลูป · `barrier = qid` ท้ายลูป · docstring ของ `schedule` ("ล็อกหัวคิว (งานหลังจากนั้นห้ามแซง)")
   - ต้องเป็น: เก็บงานที่อดตายเป็น**ลิสต์ของ dict งาน** (`barriers`) แทน id เดียว · ต้นลูปแต่ละงาน q: วนทุก b ใน barriers เรียก `conflict_reason(q, b, info)` · ชน → `reasons[qid]` = `f"ชนกับ {b['id']} ที่รอนานเกิน {starve:g} นาที ({เหตุ}) → รอให้ {b['id']} เริ่มก่อน (กันอดตาย)"` แล้ว `continue` · ไม่ชนกับ barrier ใด → ไหลลงตรวจปกติ (ชนกับงานที่กำลังรัน/ช่องว่าง) ตามเดิม · ท้ายลูป: งานที่รอเกิน starve เพราะชน → `barriers.append(q)` (ไม่ทับตัวเก่า) และคงข้อความเดิม `รอเกิน … → ล็อกหัวคิว` ต่อท้ายเหตุของงานนั้น
   - อัปเดต docstring/คอมเมนต์ให้ตรงกฎใหม่ ("งานหลังจากนั้นที่ชนกับมันห้ามแซง")
@@ -93,7 +93,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 
 ### กลุ่ม D — เอกสาร + แม่แบบ
 
-- [ ] **T-04** `docs/REFERENCE.md` · `docs/ARCHITECTURE.md` · `CHANGELOG.md` · `templates/FLASH_PLAN_TEMPLATE.md` · `claude/commands/flash-plan.md`
+- [x] **T-04** `docs/REFERENCE.md` · `docs/ARCHITECTURE.md` · `CHANGELOG.md` · `templates/FLASH_PLAN_TEMPLATE.md` · `claude/commands/flash-plan.md`
   - `docs/REFERENCE.md` (Grep `flashq-parallel: no` ย่อหน้า "ชน"): แก้คำอธิบายกฎชนให้ตรงโค้ดใหม่ — `flashq-parallel: no` + `flashq-exclusive:` (ขอบเขตห้ามรันคู่ · ไม่ใส่ = บล็อกทั้งโปรเจกต์เหมือนเดิม) · ไฟล์ร่วมชนเมื่อทั้งสองงานแตะ + `parallel_shared_strict` · กันอดตายล็อกเฉพาะงานที่ชนกับงานที่อดตาย
   - `docs/ARCHITECTURE.md` (แถว `จัดคิวอัตโนมัติ`): เพิ่ม `flashq-exclusive` ในรายการที่ `plan_meta` อ่าน
   - `CHANGELOG.md`: เพิ่มหัวข้อใหม่ด้านบนสุดตามรูปแบบเดิม (ดูหัวข้อบนสุดของไฟล์) ว่ากฎรอคิวแม่นขึ้น 3 ข้อ + วิธีใช้ `flashq-exclusive` + หมายเหตุว่า doc/qa ยังชนทั้งโปรเจกต์โดยตั้งใจ (เหตุผล: ตัดสินจากไฟล์เปลี่ยน/HEAD ทั้งโปรเจกต์)
@@ -110,7 +110,9 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "<
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
 | T-01 | ✅แก้ | 635b3b1 | `.tmp/T-01.red.log` `KeyError: 'exclusive'` + `FAILED` · `.tmp/T-01.green.log` `1 passed` (`.tmp/T-01.extra.log` `7 passed` กันถดถอย) | |
-| T-02 | ✅แก้ | f5c3aee | `.tmp/T-02.red.log` `FAILED` + `'แตะไฟล์ที่ทุกโมดูลใช้ร่วม Common/x.h' != ''` · `.tmp/T-02.green.log` `1 passed` | |
+| T-02 | ✅แก้ (จด: worker amend commit ของตัวเองให้รวมไฟล์แผน → hash จริง `fb6e16c` แทน `f5c3aee` ที่ worker จดไว้) | fb6e16c | `.tmp/T-02.red.log:49` `FAILED` + `:44` `'แตะไฟล์ที่ทุกโมดูลใช้ร่วม Common/x.h' != ''` · `.tmp/T-02.green.log:2` `1 passed` | |
+| T-03 | ✅แก้ (จด: ปรับ sleep ของ T-01 14→30 วิ + `wait_for` ของ T-03 `sec=10` เพราะ 4 การ submit ทำให้เวลารวมยืด — แอสเซิร์ตตามแผนไม่เปลี่ยน · red log ล้มที่แอสเซิร์ต `T-03 ไม่ได้แซง` ไม่ใช่ข้อความ wait_for timeout ตรงตัว) | 26d94d9 | `.tmp/T-03.red.log:28` `AssertionError: T-03 ไม่ได้แซง (ยังถูกล็อกทั้งคิว)` + `:30` `FAILED` · `.tmp/T-03.green.log:2` `1 passed` · `.tmp/T-03.group.log:2` `7 passed` ไม่มี failed | |
+| T-04 | ✅แก้ | aad78fd | `.tmp/T-04.grep.log` `flashq-exclusive` เจอ 4 ไฟล์ (REFERENCE.md, CHANGELOG.md, templates/FLASH_PLAN_TEMPLATE.md, claude/commands/flash-plan.md) · `.tmp/T-04.syntax.log` ว่าง (0 ไบต์) | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - ข้อเสนอที่ผู้สืบเสนอแต่ Claude ยังไม่ได้ยืนยัน: `paths_overlap` เทียบชื่อไฟล์เปล่ากับ path เต็ม (`:1030-1031`) · `take_slot` ตรวจแล้วจองไม่ใช่ขั้นเดียว · โหมด FIFO ไม่ตรวจไฟล์ · ข้อความ "ช่อง x/y" ในโหมด auto
