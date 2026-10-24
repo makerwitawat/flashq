@@ -6918,7 +6918,7 @@ def goal_job_windows(root: Path, stem: str) -> list[tuple[float, float]]:
 
 def _other_topic(files: list[str], topic: str) -> bool:
     """commit แตะแผน/เป้าหมายของเรื่องอื่น = งานของ session อื่นที่บังเอิญอยู่ในช่วงเวลาเดียวกัน"""
-    return bool(topic) and any(re.match(r"(GOAL_|PLAN_FLASH_).+\.md$", Path(f).name, re.I) and goal_topic(f) != topic for f in files)
+    return bool(topic) and any(re.match(r"(GOAL_|PLAN_).+\.md$", Path(f).name, re.I) and goal_topic(f) != topic for f in files)
 
 
 def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]], topic: str = "",

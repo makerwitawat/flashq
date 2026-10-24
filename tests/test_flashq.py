@@ -2726,6 +2726,13 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("lib/z.py, other.py", r.stdout)
         self.assertNotIn("junk.bin", r.stdout)
         self.assertNotIn("ไฟล์ล็อก", r.stdout)
+        (self.proj / "docs" / "other").mkdir(exist_ok=True)
+        (self.proj / "docs" / "other" / "PLAN_OTHER_FLASH_q.md").write_text("q\n", encoding="utf-8")  # แผนเรื่องอื่นชื่อ PLAN_<x>_FLASH_ + รหัสงาน (T-xx) ต้องไม่ถูกนับเป็นของธงนี้
+        subprocess.run(["git", "-C", str(self.proj), "add", "docs/other/PLAN_OTHER_FLASH_q.md"], check=True)
+        subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "docs: บันทึกผลแผนอื่น (T-01)"], check=True)
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=DONE", r.stdout, r.stdout)
+        self.assertNotIn("PLAN_OTHER_FLASH_q.md", r.stdout.split("เบรก:")[-1])
         (self.proj / "lib" / "w.py").write_text("w\n", encoding="utf-8")  # commit ของงาน Flash (มีรหัสงาน) ที่หลุดขอบเขต = STOP
         subprocess.run(["git", "-C", str(self.proj), "add", "lib/w.py"], check=True)
         subprocess.run(["git", "-C", str(self.proj), "commit", "-qm", "fix(lib): w (T-02)"], check=True)
