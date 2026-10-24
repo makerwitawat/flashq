@@ -5529,6 +5529,7 @@ def make_ui_server(port: int = 4097):
     from urllib.parse import parse_qs, urlparse
 
     token = secrets.token_urlsafe(24)
+    boot = secrets.token_hex(6)  # รหัสรอบการเริ่ม server — หน้าเว็บเทียบเพื่อรู้ว่า server รีสตาร์ตแล้ว (token เก่าใช้ไม่ได้)
 
     class H(BaseHTTPRequestHandler):
         server_version = "flashq-ui"
@@ -5559,16 +5560,21 @@ def make_ui_server(port: int = 4097):
             origin = self.headers.get("Origin")
             return origin is None or origin in {f"http://{h}" for h in allowed}
 
+        def _host_denied(self):
+            p = self.server.server_address[1]
+            return self._send(403, {"error": f"ไม่ได้รับอนุญาต: Host/Origin ไม่ตรง — เปิดหน้านี้ผ่าน http://127.0.0.1:{p} หรือ http://localhost:{p} เท่านั้น "
+                                             "(ห้ามผ่าน IP เครื่องอื่น ชื่อเครื่อง proxy หรือ tunnel)", "code": "host"})
+
         def do_GET(self):
             if not self._host_ok():
-                return self._send(403, {"error": "host/origin ไม่ได้รับอนุญาต"})
+                return self._host_denied()
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path == "/":
                 html = (REPO / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token)
                 return self._send(200, html, "text/html; charset=utf-8")
             if u.path == "/api/state":
-                return self._send(200, ui_state())
+                return self._send(200, {**ui_state(), "boot": boot})
             if u.path == "/api/log":
                 jid = q.get("id", [""])[0]
                 j = next((x for x in jobs() if x.get("id") == jid), None)
@@ -5613,8 +5619,11 @@ def make_ui_server(port: int = 4097):
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
-            if not self._host_ok() or not secrets.compare_digest(self.headers.get("X-Flashq-Token", ""), token):
-                return self._send(403, {"error": "ไม่ได้รับอนุญาต (host/origin/token)"})
+            if not self._host_ok():
+                return self._host_denied()
+            if not secrets.compare_digest(self.headers.get("X-Flashq-Token", "").encode("utf-8"), token.encode("utf-8")):
+                return self._send(403, {"error": "ไม่ได้รับอนุญาต: token ของหน้านี้หมดอายุ (server รีสตาร์ตหรือเปิดหน้าไว้นานเกินไป) — "
+                                                 "รีเฟรชหน้า (Ctrl+F5) แล้วกดอีกครั้ง · ถ้ายังไม่ได้ ตรวจว่าไม่มี flashq ui ซ้อนอยู่หลายพอร์ต", "code": "token"})
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")

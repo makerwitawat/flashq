@@ -1055,6 +1055,14 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(self.http(base + "/api/cancel", payload,
                                    {**hdr, "X-Flashq-Token": token, "Origin": "http://evil.example"})[0], 403)
         self.assertEqual(self.http(base + "/api/state", headers={"Host": "evil.example"})[0], 403)
+        # ข้อความ 403 ต้องบอกสาเหตุ+ทางแก้ (token หมดอายุ → รีเฟรช · Host/Origin ผิด → เปิดผ่าน 127.0.0.1/localhost)
+        bad = json.loads(self.http(base + "/api/cancel", payload, {**hdr, "X-Flashq-Token": "x"})[1])
+        self.assertEqual(bad["code"], "token")
+        self.assertIn("รีเฟรช", bad["error"])
+        bad = json.loads(self.http(base + "/api/cancel", payload, {**hdr, "X-Flashq-Token": token, "Origin": "http://evil.example"})[1])
+        self.assertEqual(bad["code"], "host")
+        self.assertIn("127.0.0.1", bad["error"])
+        self.assertTrue(st.get("boot"))  # รหัสรอบ server ให้หน้าเว็บรู้ว่ารีสตาร์ตแล้ว
 
         code, body = self.http(base + "/api/cancel", payload, {**hdr, "X-Flashq-Token": token})
         self.assertEqual(code, 200, body)

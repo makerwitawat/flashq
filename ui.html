@@ -204,6 +204,7 @@ dialog.ask[open] { animation: ask-in .16s ease-out; }
 
 #toast { position: fixed; right: 1rem; bottom: 1rem; background: var(--text); color: var(--bg); padding: 0.5rem 0.9rem; border-radius: 0.4rem; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 2rem); z-index: 100; white-space: pre-wrap; }
 #toast.show { opacity: .95; }
+#stale { margin: 0 0 0.5rem; padding: 0.5rem 0.9rem; border-radius: 0.4rem; background: color-mix(in srgb, #d97706 18%, var(--panel)); border: 1px solid #d97706; font-weight: 600; }
 kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-radius: 0.25rem; padding: 0 0.3rem; }
 
 /* ---------- แท็บ ออฟฟิศ ---------- */
@@ -398,6 +399,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
   </span>
   <button id="themeBtn" title="สลับธีม">ธีม: ตามระบบ</button>
 </header>
+<div id="stale" hidden>⚠ server รีสตาร์ตแล้ว — token ของหน้านี้ใช้ไม่ได้ ปุ่มสั่งงานจะขึ้น "ไม่ได้รับอนุญาต" · กด <b>Ctrl+F5</b> เพื่อโหลดหน้าใหม่ <button type="button" onclick="location.reload()">โหลดหน้าใหม่</button></div>
 <div id="backdrop"></div>
 <main id="dashView">
   <div class="col" id="colA">
@@ -714,17 +716,19 @@ const docLine = (j) => {
   const btn = d.state === "pending" ? `<div class="row" style="margin-top:0.25rem">${(d.changed || []).length ? `<button data-docdiff="${esc(j.id)}">ดู diff</button>` : ""}${d.verdict === "DRAFT" ? `<button class="primary" data-docacc="${esc(j.id)}" title="เก็บไฟล์ไว้ใน checkout (ไม่ commit ให้)">รับร่าง</button>` : ""}<button class="danger" data-docdis="${esc(j.id)}" title="ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะ">ทิ้งร่าง</button></div>` : "";
   return `<div class="muted" style="font-size:0.85em">${DOC_ICON[d.verdict] || "•"} ${esc(d.verdict)}${files}${st}</div>${why}${fl}${probs}${btn}`;
 };
-let state = null, prevStates = null;
+let state = null, prevStates = null, bootId = null;
 let logJob = null, logOffset = 0, logAttempt = 0, logTimer = null, logLines = [], logDone = false, logSession = "";
 
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3200); }
+const NOCONN = "เชื่อมต่อ server ไม่ได้ — ตรวจว่า flashq ui ยังเปิดอยู่ (ถ้าปิดไปให้รัน flashq ui ใหม่) แล้วรีเฟรชหน้า (Ctrl+F5)";
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), Math.max(3200, String(msg).length * 70)); }
 
 async function post(path, body) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
     let d = {}; try { d = await r.json(); } catch (e) {}
     return { httpOk: r.ok, ...d };
-  } catch (e) { return { httpOk: false, message: "เชื่อมต่อ server ไม่ได้" }; }
+    if (r.status === 403 && d.code === "token") $("stale").hidden = false;  // token หมดอายุ → ขึ้นป้ายให้รีเฟรช
+  } catch (e) { return { httpOk: false, message: NOCONN }; }
 }
 
 async function copyText(text, label) {
@@ -1098,8 +1102,11 @@ function checkReviews() {
 async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
-    state = await r.json();
-  } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม?"; return; }
+    const d = await r.json();
+    if (!r.ok) { $("updated").textContent = d.error || `server ตอบ ${r.status}`; return; }
+    state = d;
+  } catch (e) { $("updated").textContent = "เชื่อมต่อ server ไม่ได้ — flashq ui ยังเปิดอยู่ไหม? (ถ้าปิดไปให้รัน flashq ui ใหม่ แล้วรีเฟรชหน้า Ctrl+F5)"; return; }
+  if (state.boot) { if (bootId === null) bootId = state.boot; else if (state.boot !== bootId) $("stale").hidden = false; }  // server รีสตาร์ต → token เก่าใช้ไม่ได้
   stateAt = Date.now();
   // แยกทีละส่วน: ส่วนหนึ่งพัง ส่วนที่เหลือยังอัปเดต (เดิมทั้งหน้าขึ้น "เชื่อมต่อ server ไม่ได้" ทั้งที่ server ปกติ)
   for (const f of [render, checkFinished, checkReviews, renderGoals, checkGoals, officeTrack, () => { if (view === "office") { officeUpdate(); officePoll(); } }]) {
@@ -1387,7 +1394,7 @@ async function openDocDiff(id) {
   dlg.showModal();
   let d;
   try { const r = await fetch(`/api/doc_diff?id=${encodeURIComponent(id)}`, { cache: "no-store" }); d = await r.json(); if (!r.ok) throw new Error(d.error || d.message || r.status); }
-  catch (e) { $("docDiffHead").textContent = "โหลด diff ไม่ได้: " + (e.message || "เชื่อมต่อ server ไม่ได้"); return; }
+  catch (e) { $("docDiffHead").textContent = "โหลด diff ไม่ได้: " + (e.message || NOCONN); return; }
   $("docDiffHead").textContent = `${(d.files || []).length} ไฟล์: ${(d.files || []).join(" · ")}`;
   $("docDiffBody").innerHTML = String(d.diff || "(ไม่มี diff)").split(/\r?\n/).map((l) => {
     const c = /^(\+\+\+|---|@@)/.test(l) ? "hunk" : l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "";
@@ -1405,7 +1412,7 @@ async function openRunNow(id) {
   rnDlg.showModal();
   let rep;
   try { const r = await fetch(`/api/overlap?id=${encodeURIComponent(id)}`, { cache: "no-store" }); rep = await r.json(); if (!r.ok) throw new Error(rep.error); }
-  catch (e) { $("rnBody").textContent = "ตรวจไม่ได้: " + (e.message || "เชื่อมต่อ server ไม่ได้"); return; }
+  catch (e) { $("rnBody").textContent = "ตรวจไม่ได้: " + (e.message || NOCONN); return; }
   if (rnJob !== id) return;
   rnRep = rep;
   const fileList = (fs) => fs === null ? `<i>ตรวจไม่ได้</i>` : fs.length ? `<ul class="rn-list mono">${fs.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : `<i>ไม่พบ path ในงานที่สั่ง</i>`;
