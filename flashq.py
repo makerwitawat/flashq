@@ -54,6 +54,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+FROZEN = bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()  # รันเป็น exe (PyInstaller/Nuitka)
+RES = Path(getattr(sys, "_MEIPASS", REPO)) if FROZEN else REPO  # โฟลเดอร์ไฟล์ที่แนบมากับ exe (ui.html, accounts.json ฯลฯ)
+
+APP_DIR = Path(sys.argv[0]).resolve().parent if FROZEN else REPO  # โฟลเดอร์ที่วาง exe (ไฟล์ตั้งค่าที่วางข้าง exe ใช้ก่อนของที่แนบในตัว)
+
+
+def self_argv() -> list[str]:
+    """คำสั่งเรียกตัวเองเป็น subprocess (exe = ตัวมันเอง · ปกติ = python flashq.py)"""
+    return [str(Path(sys.argv[0]).resolve())] if FROZEN else [sys.executable, str(REPO / "flashq.py")]
+
+
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 JOBS, LOGS, LOCK = HOME / "jobs", HOME / "logs", HOME / "running.lock"
 INBOX = HOME / "inbox"  # ผลงานจบรอส่งถึง Claude (hook inbox_notify.py อ่านตอนผู้ใช้พิมพ์ข้อความถัดไป)
@@ -4305,7 +4316,7 @@ def cmd_runnow(a) -> int:
 
 
 def accounts() -> tuple[str, list[list[str]]]:
-    d = read_json(HOME / "accounts.json") or read_json(REPO / "accounts.json")  # ของเครื่องนี้ (flashq models สร้างให้) มาก่อนค่าตั้งต้นใน repo
+    d = read_json(HOME / "accounts.json") or read_json(APP_DIR / "accounts.json") or read_json(RES / "accounts.json")  # ของเครื่องนี้ (flashq models สร้างให้) มาก่อนค่าตั้งต้นใน repo
     return d.get("agent", "flash-worker"), d.get("accounts", [])
 
 
@@ -5406,7 +5417,7 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
             miss = [n for n in names if n not in have]
             if miss:
                 return [], f"ไม่มีชุดทดสอบ: {', '.join(miss)} (มี: {', '.join(have)})"
-            argv = [sys.executable, str(REPO / "flashq.py"), "qa", *names, "--project", project]
+            argv = [*self_argv(), "qa", *names, "--project", project]
             if body.get("no_analyze"):
                 argv.append("--no-analyze")
             timeout_min = num("timeout_min", 0, 1440)
@@ -5422,13 +5433,13 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
                 return [], "โปรเจกต์นี้ยังไม่ได้ตั้ง doc.presets ใน .flash.json"
             if names[0] not in have:
                 return [], f"ไม่มีชุดเอกสาร: {names[0]} (มี: {', '.join(have)})"
-            argv = [sys.executable, str(REPO / "flashq.py"), "doc", names[0], "--project", project]
+            argv = [*self_argv(), "doc", names[0], "--project", project]
             timeout_min = num("timeout_min", 0, 1440)
             if timeout_min:
                 argv += ["--timeout-min", str(timeout_min)]
             return argv, ""
         kind = body.get("kind") if body.get("kind") in AGENT_KINDS else ""
-        argv = [sys.executable, str(REPO / "flashq.py"), kind or "run"]
+        argv = [*self_argv(), kind or "run"]
         message = str(body.get("message") or "").strip()
         tail: list[str] = []  # บรีฟของ investigate ต่อท้ายสุดหลัง "--" (ขึ้นต้นด้วย - ก็ไม่ถูกตีเป็นตัวเลือก)
         if kind == "investigate":
@@ -5677,7 +5688,7 @@ def make_ui_server(port: int = 4097):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path == "/":
-                html = (REPO / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token)
+                html = (RES / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token)
                 return self._send(200, html, "text/html; charset=utf-8")
             if u.path == "/api/state":
                 return self._send(200, {**ui_state(), "boot": boot})
@@ -5940,6 +5951,61 @@ def cmd_ui(a) -> int:
         pass
     finally:
         srv.server_close()
+    return 0
+
+
+def gui_set_icon(title: str) -> None:
+    """ใส่ไอคอนให้หน้าต่าง (Windows: WM_SETICON) — exe ใช้ไอคอนที่ฝัง · ไม่ใช่ exe ใช้ assets/flashq.ico"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ico = RES / ("flashq.ico" if FROZEN else "assets/flashq.ico")
+        if not ico.is_file():
+            return
+        u = ctypes.windll.user32
+        hwnd = u.FindWindowW(None, title)
+        for flag, size in ((0, 16), (1, 32)):  # ICON_SMALL / ICON_BIG
+            h = u.LoadImageW(None, str(ico), 1, size, size, 0x10)  # IMAGE_ICON · LR_LOADFROMFILE
+            if hwnd and h:
+                u.SendMessageW(hwnd, 0x80, flag, h)  # WM_SETICON
+    except Exception:
+        pass
+
+
+def cmd_gui(a) -> int:
+    """หน้าต่างแอป (WebView2 ผ่าน pywebview) แทนการเปิดเบราว์เซอร์ — server เดิมรันในเธรด · pywebview ต้องติดตั้งแยก (ไม่บังคับสำหรับคำสั่งอื่น)"""
+    try:
+        import webview
+    except ImportError:
+        print("FAIL: ต้องติดตั้ง pywebview ก่อน (pip install pywebview) หรือใช้ `flashq ui` เปิดผ่านเบราว์เซอร์")
+        return 1
+    try:
+        srv, _ = make_ui_server(a.port)
+    except OSError as e:
+        print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
+        return 1
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=ui_models, daemon=True).start()
+    win = webview.create_window("flashq", f"http://127.0.0.1:{srv.server_address[1]}/", width=1280, height=840, min_size=(900, 600))
+
+    def on_shown():
+        gui_set_icon("flashq")
+        last = ""
+        while True:  # ชื่อหน้าต่างตาม <title> ของหน้าเว็บ (ui.html เปลี่ยนตามงานที่รัน เช่น "▶ 2:10 · โปรเจกต์ · flashq")
+            try:
+                t = win.evaluate_js("document.title") or "flashq"
+                if t != last:
+                    win.set_title(t)
+                    last = t
+            except Exception:
+                return  # หน้าต่างปิดแล้ว
+            time.sleep(1)
+
+    win.events.shown += lambda: threading.Thread(target=on_shown, daemon=True).start()
+    webview.start(debug=False)  # ปิดหน้าต่าง = จบโปรแกรม
+    srv.shutdown()
+    srv.server_close()
     return 0
 
 
@@ -7221,7 +7287,7 @@ def goal_ui_action(gid: str, action: str, body: dict) -> tuple[int, dict]:
     bp = GOALS_DIR / f"{gid}.busy.json"
     bz = read_json(bp)
     busy = bz.get("pid") and pid_alive(int(bz["pid"]), int(bz.get("pid_start") or 0))
-    me = [sys.executable, str(REPO / "flashq.py"), "goal"]
+    me = [*self_argv(), "goal"]
     if action == "open":
         target = goal if body.get("what") == "goal" else cwd
         if not target.exists():
@@ -7617,6 +7683,9 @@ def cmd_goal(a) -> int:
 
 
 def main() -> int:
+    for name in ("stdout", "stderr"):  # exe แบบหน้าต่างไม่มี console → stdout/stderr เป็น None · print/log ต้องไม่พัง
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # pipe บน Windows = cp874 พังกับไทย/อีโมจิ
     HOME.mkdir(parents=True, exist_ok=True)
     ap = argparse.ArgumentParser(prog="flashq")
@@ -7778,6 +7847,11 @@ def main() -> int:
     ui.add_argument("--port", type=int, default=4097, help="0 = สุ่มพอร์ตว่าง")
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")
     ui.set_defaults(fn=cmd_ui)
+    gu = sp.add_parser("gui", help="หน้าต่างแอป (ไม่ใช้เบราว์เซอร์ · ต้องมี pywebview)")
+    gu.add_argument("--port", type=int, default=0, help="0 = สุ่มพอร์ตว่าง")
+    gu.set_defaults(fn=cmd_gui)
+    if FROZEN and len(sys.argv) == 1:  # ดับเบิลคลิก exe = เปิดหน้าต่างแอป
+        sys.argv.append("gui")
     a = ap.parse_args()
     return a.fn(a) if a.cmd else cmd_status(a)  # ไม่ใส่คำสั่ง = status
 
