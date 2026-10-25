@@ -981,6 +981,23 @@ class FlashqTest(unittest.TestCase):
         self.addCleanup(srv.server_close)
         self.assertEqual(srv.socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF), 0)
 
+    def test_ui_send_ignores_client_disconnect(self):
+        """ui: เบราว์เซอร์ตัดการเชื่อมต่อกลางทาง (ConnectionResetError/BrokenPipe) ต้องเงียบ ไม่พ่น traceback · error อื่นยังต้องโผล่"""
+        mod = self.load_mod("flashq_send_reset")
+        srv, _ = mod.make_ui_server(0)
+        self.addCleanup(srv.server_close)
+        H = srv.RequestHandlerClass
+        for exc in (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            h = H.__new__(H)
+            h.send_response = h.send_header = lambda *a, **k: None
+            h.end_headers = lambda e=exc: (_ for _ in ()).throw(e())
+            h._send(200, {"ok": True})
+        h = H.__new__(H)
+        h.send_response = h.send_header = lambda *a, **k: None
+        h.end_headers = lambda: (_ for _ in ()).throw(ValueError("จริง"))
+        with self.assertRaises(ValueError):
+            h._send(200, {"ok": True})
+
     def test_ui_office_tab_and_script_syntax(self):
         """ui: หน้าเว็บมีแท็บออฟฟิศ · สคริปต์ในหน้าไม่มี syntax error (ตรวจด้วย node ถ้ามี)"""
         (self.home / "jobs").mkdir(parents=True)

@@ -5659,14 +5659,17 @@ def make_ui_server(port: int = 4097):
                 body = json.dumps(body, ensure_ascii=False)
             if isinstance(body, str):
                 body = body.encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.end_headers()
+                self.wfile.write(body)
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                pass  # เบราว์เซอร์ปิด/รีเฟรช/ยกเลิก request ก่อนรับคำตอบ — เรื่องปกติ ไม่ต้องพ่น traceback
 
         def _host_ok(self) -> bool:
             """กัน DNS rebinding: Host ต้องเป็น 127.0.0.1/localhost พอร์ตนี้ · Origin (ถ้ามี) ต้องตรงด้วย"""
