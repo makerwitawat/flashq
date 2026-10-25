@@ -21,6 +21,7 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 FLASHQ = "{{FLASHQ}}"
+FQ = "{{FLASHQ_RUN}}"  # คำสั่งเรียก flashq (python flashq.py หรือ flashq.exe)
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 OFF_SEC = 3600
 
@@ -111,7 +112,7 @@ def judge(path: Path, session: str, cfg: dict) -> str:
         size = image_size(path)
         if size and max(size) > max_px:
             return (f"ยามรูปภาพ (flashq): รูป {size[0]}x{size[1]} ใหญ่เกิน {max_px}px — รูปใหญ่กิน context และค้างทุก turn จนจบ session\n"
-                    f"→ ย่อก่อน: python {FLASHQ}/flashq.py shrink \"{path}\"  แล้ว Read ไฟล์ .tmp/shrink/{path.stem}.jpg แทน\n"
+                    f"→ ย่อก่อน: {FQ} shrink \"{path}\"  แล้ว Read ไฟล์ .tmp/shrink/{path.stem}.jpg แทน\n"
                     f"→ หรือให้ subagent (Agent tool · model haiku/sonnet) ดูรูปแล้วตอบเป็นข้อความสั้น ๆ\n"
                     f"→ จำเป็นต้องดูต้นฉบับจริง ๆ: สร้างไฟล์ {off} (ปิดยาม 60 นาที)")
     n = count_read(session)

@@ -25,17 +25,17 @@ description: >-
 
 ## 3. สั่งงาน
 ```
-python {{FLASHQ}}/flashq.py doc [ชุด] [--since <commit/tag>] [--project "<path>"]
+{{FLASHQ_RUN}} doc [ชุด] [--since <commit/tag>] [--project "<path>"]
 ```
 - ไม่ระบุ `--since` = เทียบโค้ดตั้งแต่ครั้งล่าสุดที่คุณ "รับ" ร่างของชุดนี้ · ไม่เคย = ให้ Flash ดูประวัติล่าสุดเอง
-- รันใน background (`run_in_background: true` คำสั่งเดียวตรง ๆ — ห้าม `&` · sleep · head/tail · ยาม `run_guard.py` บล็อก) · รอผล: `python {{FLASHQ}}/flashq.py wait <job>` (ไม่ต้อง sleep/poll)
+- รันใน background (`run_in_background: true` คำสั่งเดียวตรง ๆ — ห้าม `&` · sleep · head/tail · ยาม `run_guard.py` บล็อก) · รอผล: `{{FLASHQ_RUN}} wait <job>` (ไม่ต้อง sleep/poll)
 
 ## 4. ตรวจก่อนรายงานผู้ใช้ (ห้ามเชื่อสรุปของ Flash ตรง ๆ)
-1. `python {{FLASHQ}}/flashq.py log <job>` — คำตัดสินของ flashq + ไฟล์ที่เปลี่ยน
+1. `{{FLASHQ_RUN}} log <job>` — คำตัดสินของ flashq + ไฟล์ที่เปลี่ยน
 2. `git diff` ของโปรเจกต์ (ไฟล์ใหม่ดู `git status`) — **อ่านเอกสารที่แก้เทียบกับโค้ดจริง** · ข้อที่อ้างโค้ด เปิดไฟล์ที่อ้างตรวจเอง (flashq ตรวจแค่ว่าไฟล์/บรรทัดมีจริง ไม่ได้ตรวจว่าเนื้อหาถูก)
 3. รายงานผู้ใช้เป็นภาษาไทย: **แก้ไฟล์ไหน · ตรงกับโค้ดหรือไม่ (ถูก/ผิดตรงไหน) · ควรรับหรือทิ้ง**
 
 ## 5. ตัดสินร่าง (เฉพาะเมื่อผู้ใช้สั่ง — ห้ามตัดสินเอง)
-- รับ: `python {{FLASHQ}}/flashq.py doc-review <job> accept` — เก็บไฟล์ไว้ (ยังไม่ commit · ผู้ใช้ commit เอง) · รับได้เฉพาะ DRAFT
-- ทิ้ง: `python {{FLASHQ}}/flashq.py doc-review <job> discard` — ย้อน **เฉพาะไฟล์ที่ช่างเอกสารแตะ** (งานค้างอื่นของผู้ใช้ไม่ถูกแตะ) · ปฏิเสธถ้า HEAD เปลี่ยนแล้ว หรือไฟล์ถูกแก้ต่อหลังช่างเอกสารจบ (`--force` ยืนยันทับ)
+- รับ: `{{FLASHQ_RUN}} doc-review <job> accept` — เก็บไฟล์ไว้ (ยังไม่ commit · ผู้ใช้ commit เอง) · รับได้เฉพาะ DRAFT
+- ทิ้ง: `{{FLASHQ_RUN}} doc-review <job> discard` — ย้อน **เฉพาะไฟล์ที่ช่างเอกสารแตะ** (งานค้างอื่นของผู้ใช้ไม่ถูกแตะ) · ปฏิเสธถ้า HEAD เปลี่ยนแล้ว หรือไฟล์ถูกแก้ต่อหลังช่างเอกสารจบ (`--force` ยืนยันทับ)
 - หน้าเว็บ `flashq ui` มีปุ่มดู diff / รับ / ทิ้ง บนการ์ดงานเอกสาร

@@ -5,6 +5,6 @@ description: สลับบัญชี DeepSeek Flash ของ flash-worker �
 
 ผลจากสคริปต์ (รันแล้ว — **ห้ามรันซ้ำ**):
 
-!`python {{FLASHQ}}/flashq.py switch $ARGUMENTS`
+!`{{FLASHQ_RUN}} switch $ARGUMENTS`
 
 แสดงผลข้างบนให้ user เป็นไทยสั้น ๆ ตามที่สคริปต์พิมพ์จริง (ห้ามแต่งเพิ่ม) · มีบรรทัด `flash-worker: … → …` = เปลี่ยนแล้ว → เตือน "รีโหลด opencode desktop ก่อนสั่ง `/flash` ครั้งถัดไป"

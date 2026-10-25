@@ -17,6 +17,8 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 FLASHQ = "{{FLASHQ}}"
+FQ = "{{FLASHQ_RUN}}"  # คำสั่งเรียก flashq (python flashq.py หรือ flashq.exe)
+FLASHQ_EXE = "{{FLASHQ_EXE}}"  # ไม่ว่าง = ติดตั้งจาก exe
 STALE_SEC = 1800
 KEEP_DONE_SEC = 7 * 86400
 MAX_SHOW = 8
@@ -46,13 +48,13 @@ def advice(row: dict) -> str:
     st, plan = row.get("status", ""), row.get("plan", "")
     if row.get("kind") == "qa" and st in ("OK", "FAIL", "TIMEOUT"):  # ผลมาจาก exit code จริง ไม่ใช่คำพูดของโมเดล
         return (f"ผลทดสอบ (flashq รันเองและตัดสินจาก exit code) — รายงานทีละชุดว่าผ่าน/ไม่ผ่าน ห้ามเปลี่ยนคำตัดสิน · "
-                f"ไม่ผ่านให้ดู python {FLASHQ}/flashq.py log {row.get('job', '')} เทียบ log จริงก่อนเชื่อคำอธิบายของ Flash")
+                f"ไม่ผ่านให้ดู {FQ} log {row.get('job', '')} เทียบ log จริงก่อนเชื่อคำอธิบายของ Flash")
     if row.get("kind") == "doc" and st in ("OK", "FAIL", "TIMEOUT"):  # ผลมาจากด่านกลไกของ flashq (git diff/ไฟล์จริง) ไม่ใช่คำพูดของโมเดล
         job = row.get("job", "")
         if st == "OK":
             return (f"ร่างเอกสารผ่านด่านกลไกแล้ว แต่ยังไม่ถูกรับและไม่ได้ commit — ตรวจ git diff ของโปรเจกต์ เทียบกับโค้ดจริง (เปิดไฟล์ที่เอกสารอ้างถึงดูเอง) แล้วรายงานผู้ใช้ว่าถูก/ผิดตรงไหน · "
-                    f"ห้ามรับ/ทิ้ง/commit เองจนกว่าผู้ใช้สั่ง (รับ: python {FLASHQ}/flashq.py doc-review {job} accept · ทิ้ง: ... discard)")
-        return (f"ช่างเอกสารไม่ผ่านด่านกลไก (สาเหตุอยู่ต้นข้อความท้าย · ดูเต็มด้วย python {FLASHQ}/flashq.py log {job}) — บอกผู้ใช้สาเหตุเป็นภาษาคน · "
+                    f"ห้ามรับ/ทิ้ง/commit เองจนกว่าผู้ใช้สั่ง (รับ: {FQ} doc-review {job} accept · ทิ้ง: ... discard)")
+        return (f"ช่างเอกสารไม่ผ่านด่านกลไก (สาเหตุอยู่ต้นข้อความท้าย · ดูเต็มด้วย {FQ} log {job}) — บอกผู้ใช้สาเหตุเป็นภาษาคน · "
                 f"ถ้ามีไฟล์ค้าง (ไม่ได้ย้อนให้) ให้ดู git diff แล้วเสนอ discard · ห้ามสั่งซ้ำเองจนกว่าผู้ใช้สั่ง")
     if st == "OK":
         if row.get("kind") == "investigate":
@@ -62,7 +64,7 @@ def advice(row: dict) -> str:
         return "ถูกยกเลิกด้วยคำสั่ง cancel/ปุ่มยกเลิก (ไม่ใช่งานพัง) — ห้ามส่งซ้ำเองจนกว่าผู้ใช้สั่ง · ถ้ารันไปแล้วบางส่วนให้ดู git status ว่ามีไฟล์ค้างครึ่งทางไหม"
     if st == "QUEUE_TIMEOUT" or st == "BUSY":
         return "ยังไม่ได้รันเลย (คิวไม่ว่าง) — สั่งใหม่เมื่อคิวว่าง"
-    return f"ไม่สำเร็จ — ดูสาเหตุด้วย python {FLASHQ}/flashq.py log {row.get('job', '')} ก่อนสั่งซ้ำ แล้วบอกผู้ใช้สาเหตุ"
+    return f"ไม่สำเร็จ — ดูสาเหตุด้วย {FQ} log {row.get('job', '')} ก่อนสั่งซ้ำ แล้วบอกผู้ใช้สาเหตุ"
 
 
 def main() -> int:
@@ -76,7 +78,7 @@ def main() -> int:
             return 0
         if (HOME / "jobs").is_dir():  # งานที่ process ตายกลางคันไม่มีใครเขียน inbox → ให้ flashq ตรวจแล้วแจ้งแทน
             try:
-                subprocess.run([sys.executable, str(Path(FLASHQ) / "flashq.py"), "sweep"], timeout=8,
+                subprocess.run(([FLASHQ_EXE] if FLASHQ_EXE else [sys.executable, str(Path(FLASHQ) / "flashq.py")]) + ["sweep"], timeout=8,
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                creationflags=0x08000000 if os.name == "nt" else 0)
             except Exception:

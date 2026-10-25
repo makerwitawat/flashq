@@ -5,6 +5,6 @@ description: ดูคิวงาน flash กลาง (ทุกโปรเ�
 
 ผลจากสคริปต์ (รันแล้ว — **ห้ามรันซ้ำ**):
 
-!`python {{FLASHQ}}/flashq.py $ARGUMENTS`
+!`{{FLASHQ_RUN}} $ARGUMENTS`
 
 แสดงผลเป็นไทยสั้น ๆ ตามจริง · **ห้ามยกเลิกงาน (`cancel`) เองถ้า user ไม่ได้สั่ง**

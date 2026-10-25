@@ -1,7 +1,7 @@
 # แผน <เรื่อง> — ส่งงานให้ DeepSeek Flash
 
 > แม่แบบแผนกลาง (flashq) — Claude วางแผน+ตรวจ · DeepSeek ลงมือ · คัดลอกไปไว้ในโปรเจกต์ (เช่น `docs/plans/PLAN_FLASH_<เรื่อง>.md`) แล้ว push เข้า `<remote>/<main_branch>` ก่อนสั่ง
-> สร้าง <YYYY-MM-DD> · ส่งงาน: `python D:\MyCode\flashq\flashq.py run <ไฟล์นี้> T-01..T-NN` · base commit ตอนวางแผน: `<hash>`
+> สร้าง <YYYY-MM-DD> · ส่งงาน: `{{FLASHQ_RUN}} run <ไฟล์นี้> T-01..T-NN` · base commit ตอนวางแผน: `<hash>`
 
 ## 0. กติกาผู้ทำ (อ่านก่อนเริ่มทุกงาน)
 <!-- คิวกลางอ่าน 2 บรรทัดนี้เพื่อตัดสินว่ารันพร้อมงานอื่นได้ไหม (โหมด auto) — ผู้วางแผนเติมทุกครั้ง: ทุกไฟล์ที่ทุกงานในแผนจะแตะ คั่นด้วย , (glob ได้ เช่น Client/Src/UI/*.cpp)

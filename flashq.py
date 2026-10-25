@@ -53,16 +53,23 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
 FROZEN = bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()  # รันเป็น exe (PyInstaller/Nuitka)
-RES = Path(getattr(sys, "_MEIPASS", REPO)) if FROZEN else REPO  # โฟลเดอร์ไฟล์ที่แนบมากับ exe (ui.html, accounts.json ฯลฯ)
-
-APP_DIR = Path(sys.argv[0]).resolve().parent if FROZEN else REPO  # โฟลเดอร์ที่วาง exe (ไฟล์ตั้งค่าที่วางข้าง exe ใช้ก่อนของที่แนบในตัว)
+APP_DIR = Path(sys.argv[0]).resolve().parent if FROZEN else Path(__file__).resolve().parent  # โฟลเดอร์ที่วาง exe
+REPO = APP_DIR  # ต้นฉบับคำสั่ง/hook/แม่แบบ: ปกติ = checkout · exe = โฟลเดอร์ข้าง exe (claude/ opencode/ hooks/ templates/)
+RES = Path(getattr(sys, "_MEIPASS", REPO)) if FROZEN else REPO  # ไฟล์ที่ฝังในตัว exe (ui.html, accounts.json, ไอคอน)
+CLI_EXE = "flashq.exe"  # exe แบบ console สำหรับคำสั่ง (flashq-gui.exe เป็นแบบหน้าต่าง พิมพ์ผลออกจอไม่ได้)
 
 
 def self_argv() -> list[str]:
     """คำสั่งเรียกตัวเองเป็น subprocess (exe = ตัวมันเอง · ปกติ = python flashq.py)"""
     return [str(Path(sys.argv[0]).resolve())] if FROZEN else [sys.executable, str(REPO / "flashq.py")]
+
+
+def run_cmd(quote: bool = False) -> str:
+    """คำสั่งที่พิมพ์ให้ผู้ใช้/AI รัน flashq — ปกติ `python <repo>/flashq.py` · exe = path ของ flashq.exe ข้าง exe (ใส่ "" เสมอ)"""
+    if FROZEN:
+        return '"' + (APP_DIR / CLI_EXE).as_posix() + '"'
+    return f'python "{REPO / "flashq.py"}"' if quote else f"python {REPO / 'flashq.py'}"
 
 
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
@@ -4802,6 +4809,15 @@ def register_hook(settings: Path, event: str, matcher: str, command: str, key: s
     return f"ลงทะเบียน  hook {event}:{matcher} → {command} ใน {settings}"
 
 
+def fill_template(text: str, py: bool = False) -> str:
+    """แทนตัวแปรในแม่แบบที่ติดตั้ง: {{FLASHQ}} = โฟลเดอร์ต้นฉบับ · {{FLASHQ_RUN}} = คำสั่งรัน flashq · {{FLASHQ_EXE}} = path exe (ว่างถ้าไม่ใช่ exe)"""
+    run = '"' + (APP_DIR / CLI_EXE).as_posix() + '"' if FROZEN else f"python {REPO.as_posix()}/flashq.py"
+    exe = (APP_DIR / CLI_EXE).as_posix() if FROZEN else ""
+    if py:  # อยู่ในสตริง "..." ของ hook .py → escape เครื่องหมายคำพูดของ path
+        run = run.replace('"', '\\"')
+    return text.replace("{{FLASHQ_RUN}}", run).replace("{{FLASHQ_EXE}}", exe).replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
+
+
 def install_items(claude_home: Path):
     """(ปลายทาง, เนื้อหาที่ต้องติดตั้ง) ของทุกไฟล์ที่ install คัดลอก — install กับ install --check ใช้ชุดเดียวกัน"""
     pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command", "*.md"),
@@ -4813,7 +4829,7 @@ def install_items(claude_home: Path):
         if not src_dir.is_dir():
             continue
         for src in sorted(src_dir.glob(pat)):
-            text = src.read_text(encoding="utf-8").replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
+            text = fill_template(src.read_text(encoding="utf-8"), src.suffix == ".py")
             if src_dir == REPO / "opencode" / "agent":  # โมเดลที่ผู้ใช้เลือกไว้ (flashq models) ไม่ถูกต้นฉบับทับกลับเป็นค่าตั้งต้น
                 text = with_header_model(text, json_agent_model(src.stem))
             yield dst_dir / src.name, text
@@ -4875,7 +4891,7 @@ def check_installed(claude_home: Path) -> int:
         for p in items:
             print(f"{label}  {p}")
     if stale or missing:
-        print(f"INSTALL=STALE  ตรง {ok} · ล้าหลัง {len(stale)} · ยังไม่ได้ติดตั้ง {len(missing)} → python {REPO / 'flashq.py'} install (รันจาก checkout หลัก · ได้ผลใน session ใหม่)")
+        print(f"INSTALL=STALE  ตรง {ok} · ล้าหลัง {len(stale)} · ยังไม่ได้ติดตั้ง {len(missing)} → {run_cmd()} install (รันจาก checkout หลัก · ได้ผลใน session ใหม่)")
         return 1
     print(f"INSTALL=OK  ตรงต้นฉบับครบ {ok} ไฟล์" + (f" (ข้าม {len(foreign)} ไฟล์ของผู้ใช้เอง)" if foreign else ""))
     return 0
@@ -4907,7 +4923,11 @@ def cmd_install(a) -> int:
         dst.write_text(text, encoding="utf-8")
         print(f"ติดตั้ง     {dst}")
     guard = claude_home / "hooks" / "image_guard.py"
-    if getattr(a, "hooks", False):
+    want_hooks = getattr(a, "hooks", False)
+    if want_hooks and FROZEN and not shutil.which("python"):  # hook เป็นสคริปต์ .py ที่ settings.json สั่ง `python <hook>.py` → ไม่มี Python = ลงทะเบียนแล้วรันไม่ได้
+        print("ข้าม       --hooks: ไม่พบ python ใน PATH (hook ของ Claude Code เป็นสคริปต์ Python) — ติดตั้ง Python 3 แล้วรัน install --hooks ใหม่ · คำสั่ง /flash-* ใช้ได้ตามปกติ")
+        want_hooks = False
+    if want_hooks:
         if guard.exists():
             print(register_hook(claude_home / "settings.json", "PreToolUse", "Read", f'python "{guard.as_posix()}"', "image_guard.py"))
         else:
@@ -5005,7 +5025,7 @@ def cmd_init(a) -> int:
     tpl_dst = root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md"
     if tpl_src.exists() and not tpl_dst.exists():
         tpl_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(tpl_src, tpl_dst)
+        tpl_dst.write_text(fill_template(tpl_src.read_text(encoding="utf-8")), encoding="utf-8")
         print(f"คัดลอก     {tpl_dst.relative_to(root).as_posix()} (แม่แบบแผน — ตั้งชื่อแผนจริงเป็น PLAN_FLASH_<เรื่อง>.md)")
         todo.append("commit แม่แบบแผน")
 
@@ -5025,7 +5045,7 @@ def cmd_init(a) -> int:
         cmd_install(argparse.Namespace(force=False, hooks=False, models="skip"))
     elif need:
         print("ยังไม่ได้ติดตั้งคำสั่ง global: " + ", ".join(p.name for p in need))
-        todo.append(f"python {REPO / 'flashq.py'} install  (แล้วรีโหลด opencode desktop)")
+        todo.append(f"{run_cmd()} install  (แล้วรีโหลด opencode desktop)")
     else:
         print("พบ         คำสั่ง /flash /flash-plan /flash-check + agent flash-worker (global)")
     if proj_own:
@@ -5033,7 +5053,7 @@ def cmd_init(a) -> int:
 
     # 5) บัญชีโมเดล
     if not configured_model():
-        todo.append(f"ตั้งโมเดลของ flash-worker: python {REPO / 'flashq.py'} models  (เลือกจากรายการที่เครื่องนี้มี · หรือส่ง --model ตอน run)")
+        todo.append(f"ตั้งโมเดลของ flash-worker: {run_cmd()} models  (เลือกจากรายการที่เครื่องนี้มี · หรือส่ง --model ตอน run)")
 
     # 6) --commit: commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้างอยู่) · push เมื่ออยู่ branch หลักและมี remote
     if a.commit and is_git:
@@ -5059,7 +5079,7 @@ def cmd_init(a) -> int:
         elif _git(root, "remote"):
             todo.append(f"อยู่ branch '{branch}' ไม่ใช่ {new['main_branch']} → merge เข้า {new['main_branch']} แล้ว push เอง")
 
-    print("\nพร้อมใช้ · ทดสอบการเชื่อมต่อ: " + f"python {REPO / 'flashq.py'} run --message \"ตอบแค่คำว่า PONG\" --project \"{root}\"")
+    print("\nพร้อมใช้ · ทดสอบการเชื่อมต่อ: " + f"{run_cmd()} run --message \"ตอบแค่คำว่า PONG\" --project \"{root}\"")
     if todo:
         print("ขั้นต่อไป:")
         for i, t in enumerate(todo, 1):
@@ -5232,7 +5252,7 @@ def ui_state() -> dict:
         if st == "dead" and j.get("status") in ("queued", "running"):  # ไฟล์ยังบอก queued/running แต่ process flashq ตายแล้ว → ป้ายเตือน
             row.update(was=j.get("status"), pid=j.get("pid"), child_pid=j.get("child_pid") or 0,
                        child_alive=pid_alive(j.get("child_pid") or 0, j.get("child_pid_start") or 0),
-                       rerun=(f'python "{REPO / "flashq.py"}" run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
+                       rerun=(f'{run_cmd(True)} run {j["plan"]} {j.get("tasks", "")} --project "{j.get("project", "")}"'
                               if j.get("plan") else ""))
             dead.append(row)
         row["claude_session"] = j.get("claude_session") or ""  # session Claude Code ที่สั่งงานนี้ (ผู้ใช้ตามปัญหากลับไปถูก session)
@@ -5976,6 +5996,21 @@ def gui_set_icon(title: str) -> None:
         pass
 
 
+def hide_child_consoles() -> None:
+    """exe แบบหน้าต่างไม่มี console → process ลูกทุกตัว (git/opencode/node ฯลฯ) เปิดกล่องดำของตัวเองวูบหนึ่ง · ตั้ง CREATE_NO_WINDOW เป็นค่าเริ่มต้น
+    (ที่ระบุ creationflags เองอยู่แล้ว เช่น CREATE_NEW_CONSOLE ของการเปิดเทอร์มินัลให้ผู้ใช้ ไม่ถูกแตะ)"""
+    if os.name != "nt":
+        return
+    orig = subprocess.Popen.__init__
+
+    def init(self, *args, **kw):
+        if not kw.get("creationflags"):
+            kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+        orig(self, *args, **kw)
+
+    subprocess.Popen.__init__ = init
+
+
 def cmd_gui(a) -> int:
     """หน้าต่างแอป (WebView2 ผ่าน pywebview) แทนการเปิดเบราว์เซอร์ — server เดิมรันในเธรด · pywebview ต้องติดตั้งแยก (ไม่บังคับสำหรับคำสั่งอื่น)"""
     try:
@@ -5988,6 +6023,7 @@ def cmd_gui(a) -> int:
     except OSError as e:
         print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
         return 1
+    hide_child_consoles()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=ui_models, daemon=True).start()
     win = webview.create_window("flashq", f"http://127.0.0.1:{srv.server_address[1]}/", width=1280, height=840, min_size=(900, 600))
@@ -7220,20 +7256,20 @@ def claude_check_prompt(j: dict) -> str:
     st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()
     plan, jid = j.get("plan") or "", j["id"]
     if j.get("kind") == "doc":
-        return (f"ช่างเอกสาร flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` (ผลมาจากการตรวจด้วยกลไกของ flashq ไม่ใช่คำบอกของ AI) "
+        return (f"ช่างเอกสาร flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `{run_cmd()} log {jid}` (ผลมาจากการตรวจด้วยกลไกของ flashq ไม่ใช่คำบอกของ AI) "
                 f"แล้ว `git diff` ของโปรเจกต์ ตรวจว่าเอกสารที่แก้ตรงกับโค้ดจริง (เปิดไฟล์ที่เอกสารอ้างถึงเทียบเอง) แล้วรายงานผมเป็นภาษาไทย: แก้ไฟล์ไหน · ถูก/ผิดตรงไหน · ควรรับหรือทิ้ง "
                 f"(ห้าม commit/รับ/ทิ้งเองจนกว่าผมสั่ง)")
     if j.get("kind") == "qa":
-        return (f"นักทดสอบ flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` "
+        return (f"นักทดสอบ flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `{run_cmd()} log {jid}` "
                 f"(ผลมาจาก exit code ของคำสั่งทดสอบจริง ไม่ใช่คำบอกของ AI) แล้วรายงานผมเป็นภาษาไทย: ทดสอบอะไร · ผ่าน/ไม่ผ่านชุดไหน · ถ้าไม่ผ่านสาเหตุคืออะไรจากบรรทัดใน log "
                 f"(คำอธิบายของ Flash เป็นแค่ความเห็น ต้องเทียบ log เอง) · ผมต้องทำอะไรต่อ")
     if st == "ok" and j.get("kind") == "investigate":
-        return f"ผู้สืบ flashq job {jid} จบแล้ว: อ่านผลด้วย `python {REPO / 'flashq.py'} log {jid}` แล้วตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ จากนั้นสรุปให้ผม"
+        return f"ผู้สืบ flashq job {jid} จบแล้ว: อ่านผลด้วย `{run_cmd()} log {jid}` แล้วตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ จากนั้นสรุปให้ผม"
     if st == "ok" and plan:
         return f"/flash-check {plan}"
     if st == "ok":
         return f"งาน flashq job {jid} จบแล้ว: อ่าน git diff/log ของโปรเจกต์แล้วตรวจผลก่อนรายงานผม (บอกว่างานนี้ได้ผลงานอะไรแบบไหน)"
-    return (f"งาน flashq job {jid} จบด้วยสถานะ {st.upper()}: ดูสาเหตุด้วย `python {REPO / 'flashq.py'} log {jid}` "
+    return (f"งาน flashq job {jid} จบด้วยสถานะ {st.upper()}: ดูสาเหตุด้วย `{run_cmd()} log {jid}` "
             f"แล้วบอกผมเป็นภาษาไทยว่าเกิดอะไร และแนะนำทางแก้ (ยังไม่ต้องสั่งงานซ้ำจนกว่าผมจะตอบ)")
 
 
@@ -7853,7 +7889,7 @@ def main() -> int:
     gu = sp.add_parser("gui", help="หน้าต่างแอป (ไม่ใช้เบราว์เซอร์ · ต้องมี pywebview)")
     gu.add_argument("--port", type=int, default=0, help="0 = สุ่มพอร์ตว่าง")
     gu.set_defaults(fn=cmd_gui)
-    if FROZEN and len(sys.argv) == 1:  # ดับเบิลคลิก exe = เปิดหน้าต่างแอป
+    if FROZEN and len(sys.argv) == 1 and Path(sys.argv[0]).stem.endswith("gui"):  # ดับเบิลคลิก flashq-gui.exe = เปิดหน้าต่างแอป
         sys.argv.append("gui")
     a = ap.parse_args()
     return a.fn(a) if a.cmd else cmd_status(a)  # ไม่ใส่คำสั่ง = status

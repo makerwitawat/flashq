@@ -24,6 +24,7 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("FLASHQ_HOME") or (Path.home() / ".flashq"))
 FLASHQ = "{{FLASHQ}}"
+FQ = "{{FLASHQ_RUN}}"  # คำสั่งเรียก flashq (python flashq.py หรือ flashq.exe)
 SUBCMDS = {"run", "wait", "investigate", "verify", "qa", "doc", "goal"}
 WRAPPERS = ("flash_run.py",)
 OFF_SEC = 3600
@@ -222,9 +223,9 @@ def judge(command: str, background: bool, cfg: dict) -> tuple[str, str]:
 def block_text(reason: str) -> str:
     return (f"ยามส่งงาน flashq: คำสั่งนี้เสี่ยงที่จะ \"ไม่มีใครเฝ้างาน\" → บล็อก\n{reason}\n"
             "วิธีที่ถูก: เรียก Bash/PowerShell ด้วย run_in_background: true แล้วใส่คำสั่งตรง ๆ ตัวเดียว เช่น\n"
-            "  python " + FLASHQ + "/flashq.py run <แผน> T-01..T-NN --switch-on-quota 4\n"
+            "  " + FQ + " run <แผน> T-01..T-NN --switch-on-quota 4\n"
             "แล้วหยุดนิ่งรอแจ้งเตือนจากระบบ (ไม่ต้องใส่ & ไม่ต้อง sleep ไม่ต้องต่อ head) · อยากรู้ว่าติดคิวไหม = อ่านไฟล์ output ของ background task\n"
-            "งานที่ส่งไปแล้วและยังรออยู่: รัน `python " + FLASHQ + "/flashq.py wait <job>` ด้วย run_in_background: true\n"
+            "งานที่ส่งไปแล้วและยังรออยู่: รัน `" + FQ + " wait <job>` ด้วย run_in_background: true\n"
             "ถ้าคำสั่งนี้ไม่ใช่การส่งงานจริง (บล็อกผิด): บอกผู้ใช้ — ประวัติการบล็อกอยู่ที่ " + str(HOME / "run_guard.log") + " · ลองตัดสินคำสั่งเองได้ด้วย python <hooks>/run_guard.py test \"<คำสั่ง>\" [--bg]\n"
             "ปิดยามชั่วคราว 60 นาที (เฉพาะผู้ใช้สั่ง): สร้างไฟล์ " + str(HOME / "run_guard_off"))
 

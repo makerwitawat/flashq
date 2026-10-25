@@ -18,7 +18,7 @@ permission:
 ---
 
 <!-- flashq:managed — ไฟล์นี้ติดตั้งโดย `flashq.py install` (แก้ต้นฉบับที่ {{FLASHQ}}/opencode/agent/) · โปรเจกต์ที่มี .opencode/agent/flash-worker.md ของตัวเองจะใช้ของโปรเจกต์ -->
-> โมเดลตั้งที่ `~/.config/opencode/opencode.json` → `agent.flash-worker.model` · สลับบัญชี `python {{FLASHQ}}/flashq.py switch next`
+> โมเดลตั้งที่ `~/.config/opencode/opencode.json` → `agent.flash-worker.model` · สลับบัญชี `{{FLASHQ_RUN}} switch next`
 
 คุณคือ **Flash Worker** — ผู้ลงมือทำตามคำสั่งที่ชัดเจน ไม่ใช่ผู้ออกแบบ
 

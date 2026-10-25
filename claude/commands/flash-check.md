@@ -11,16 +11,16 @@ description: >-
 คุณ = **ผู้ตรวจ** · **ห้ามเชื่อรายงานของ DeepSeek โดยไม่มีหลักฐาน** · **ห้ามแก้โค้ด/เทสต์เองทุกกรณี แม้บรรทัดเดียว** — ผิดเท่าไรก็ออกเป็น `T-xxR` ให้ Flash ทำ (ข้ออ้างที่ห้ามใช้: "แก้เองเร็วกว่าเขียน T-xxR" · "Flash พลาด 2 รอบแล้ว ผมทำเองดีกว่า" → ครบ 2 รอบ = หยุดรายงาน user ตาม §4 · "ขอรันเทสต์ดูเองนิดเดียว" → ตัดสินจากหลักฐานใน §3 เท่านั้น) · ค่าโปรเจกต์จาก `.flash.json` (`main_branch`/`remote` ไม่ตั้ง = ตรวจจาก git: `git symbolic-ref --short refs/remotes/<remote>/HEAD` → `origin/main`/`origin/master` ที่มีจริง · โปรเจกต์ใหม่ให้รัน `flashq.py init`)
 
 ## 0. ผลจาก flashq
-- **ยังไม่มีบรรทัด `FLASH_RUN=`** (งานยังรัน/รอคิว · เพิ่งเปิด session ใหม่มา) → รัน `python {{FLASHQ}}/flashq.py wait <แผน>` **ใน background** (Bash `run_in_background: true` · timeout ยาว) แล้ว**หยุด**รอแจ้งเตือน — ห้าม sleep / poll / `status` วน (ทุกข้อความที่รอ = จ่าย context) · แจ้งแล้วอ่านบรรทัด `FLASH_RUN=` จากผลของ `wait`
+- **ยังไม่มีบรรทัด `FLASH_RUN=`** (งานยังรัน/รอคิว · เพิ่งเปิด session ใหม่มา) → รัน `{{FLASHQ_RUN}} wait <แผน>` **ใน background** (Bash `run_in_background: true` · timeout ยาว) แล้ว**หยุด**รอแจ้งเตือน — ห้าม sleep / poll / `status` วน (ทุกข้อความที่รอ = จ่าย context) · แจ้งแล้วอ่านบรรทัด `FLASH_RUN=` จากผลของ `wait`
 - **โมเดลผู้ตรวจ**: session นี้เป็น **Opus/Fable** → ห้ามตรวจเอง ส่ง subagent `flash-checker` (Agent tool · `subagent_type: "flash-checker"` · ติดตั้งโดย `flashq.py install`) ทำข้อ 1–3 + เติมช่อง "ตรวจ Claude"/เพิ่ม `T-xxR` ในแผน แล้ว agent หลักทำ §4 (commit แผน · สั่งรอบแก้ · merge/push) · brief ไทย = path แผน + งาน + บรรทัด `FLASH_RUN=` + path log · ไม่มี agent นี้ → ตรวจเองแต่ Grep ก่อน Read ทุกครั้ง · session เป็น **Sonnet** → ตรวจเองได้
 - `FLASH_RUN=OK` → ข้อ 1
 - `QUOTA` (สลับบัญชีครบแล้ว) → หยุด บอก user · `NOSTART` (ลองใหม่แล้ว) → หยุด บอก user
 - `FLASH_RUN=DENIED` → opencode ปฏิเสธสิทธิ์เอง (แตะไฟล์นอกโปรเจกต์ · บรรทัด `DENIED:` บอก path) งานไม่ได้ทำ **ไม่ต้องไล่หา commit/§4** → บอก user แก้สิทธิ์ตามทางแก้ที่ flashq พิมพ์ (`external_dirs` ใน `.flash.json` หรือ `permission.external_directory` ใน `~/.config/opencode/opencode.json`) แล้วส่งงานใหม่ · `OK` แต่มี `WARN: opencode ปฏิเสธสิทธิ์` = สำเร็จบางส่วน → ตรวจตามปกติแล้วบอก user ว่างานไหนขาดเพราะสิทธิ์
-- `BUSY` / `QUEUE_TIMEOUT` → มีงานอื่นในคิวกลาง ห้ามรันซ้อน บอก user (`python {{FLASHQ}}/flashq.py`)
-- `FAIL` / `TIMEOUT` → อ่าน §4 ของแผน + ท้าย log (path ในบรรทัด `START … log=` · `python {{FLASHQ}}/flashq.py log <job>`) แล้วตรวจงานที่ทำเสร็จตามปกติ
+- `BUSY` / `QUEUE_TIMEOUT` → มีงานอื่นในคิวกลาง ห้ามรันซ้อน บอก user (`{{FLASHQ_RUN}}`)
+- `FAIL` / `TIMEOUT` → อ่าน §4 ของแผน + ท้าย log (path ในบรรทัด `START … log=` · `{{FLASHQ_RUN}} log <job>`) แล้วตรวจงานที่ทำเสร็จตามปกติ
 
 ## 0.5 บอกหน้าออฟฟิศว่ากำลังตรวจ (ไม่บังคับ · ล้มเหลวให้ข้ามได้ ห้ามหยุดงานตรวจเพราะข้อนี้)
-- เริ่มตรวจ: `python {{FLASHQ}}/flashq.py review start <แผน> <T-xx...>` → ผู้ตรวจในหน้าออฟฟิศจะยืนประจำ "Claude กำลังตรวจ"
+- เริ่มตรวจ: `{{FLASHQ_RUN}} review start <แผน> <T-xx...>` → ผู้ตรวจในหน้าออฟฟิศจะยืนประจำ "Claude กำลังตรวจ"
 - ใช้ชื่อไฟล์แผน/ข้อความ ASCII เท่านั้น (ห้ามใส่ภาษาไทยใน argument — เทอร์มินัลบน Windows อาจเพี้ยน)
 - **`review done` (§4) ใช้ชื่อแผนเดียวกับ `review start` ทุกตัวอักษร** (ชื่อไฟล์แผนเต็ม เช่น `PLAN_X_FLASH.md`) — flashq ทนต่าง `.md`/โฟลเดอร์/ชื่อสั้นตรงท้ายชื่อเต็มได้ แต่ชื่อที่ไม่เกี่ยวกันจะไม่พบป้าย (แค่เตือนแล้วข้าม ป้ายค้างจน 90 นาที)
 
@@ -34,19 +34,19 @@ description: >-
 - งาน ⛔/🟡: ตัดสินว่าแผนผิด (แก้แผน) หรือ Flash ทำผิด
 
 ## 2.5 ผู้ตรวจอิสระ (ไม่บังคับ · ใช้ได้เมื่อมี agent `flash-verifier` จาก `flashq.py install`)
-- `python {{FLASHQ}}/flashq.py verify <แผน> <T-xx...> --auto` (background · อ่านอย่างเดียว · ไม่ชนงานอื่น) → ได้ `ผลตรวจ: PASS|FAIL|UNSURE` + ข้อค้นพบ + "ติดธงให้ Claude ดู"
+- `{{FLASHQ_RUN}} verify <แผน> <T-xx...> --auto` (background · อ่านอย่างเดียว · ไม่ชนงานอื่น) → ได้ `ผลตรวจ: PASS|FAIL|UNSURE` + ข้อค้นพบ + "ติดธงให้ Claude ดู"
 - **ผลผู้ตรวจเป็นข้อมูลประกอบ ไม่ใช่คำตัดสิน**: PASS ไม่ได้แปลว่าผ่าน (ผู้ตรวจ Flash เคยจับของจริงไม่ได้ในแผนจริง) · FAIL/UNSURE/ธง = เปิด diff ดูเอง · ข้อค้นพบทุกข้อต้องมี file:line ที่เปิดตรวจซ้ำได้ ไม่มี = ไม่เชื่อ
 
 ## 3. ยืนยันจาก "หลักฐานชี้ขาด" — **ห้าม build/รันเทสต์ซ้ำเอง**
 - อ่าน path ที่ DeepSeek จดใน §4 → บรรทัด/ค่าตรงกับแผน และเป็นค่าหลังแก้?
 - เวลาไฟล์ log ใหม่กว่า commit แก้โค้ด (`git log -1 --format=%ci <hash>`)
 - **งาน `แบบ: เทสต์ก่อน`**: ต้องมีทั้ง log แดงและเขียว · log แดงล้มด้วยข้อความที่แผนคาด (ไม่ใช่ compile error/import ไม่เจอ) · ลำดับเวลา **แดง < commit แก้โค้ด ≤ เขียว** (`Get-Item <log> | % LastWriteTime` เทียบ `git log -1 --format=%ci`) · `git show <hash>` ไม่ลดเงื่อนไขของเทสต์ที่แผนให้เขียน · ขาดข้อใด = ❌
-- **คำเดาในรายงาน**: Grep §4 ของแผน + `python {{FLASHQ}}/flashq.py log <job> | grep -nE "น่าจะ|ควรจะ|ไม่ได้รัน|ข้าม|should|probably|skip"` (ส่งผ่าน grep เสมอ ห้ามอ่าน output ของ `log` ทั้งก้อน) → เจอในงานที่รายงาน ✅ = เปิดหลักฐานงานนั้นละเอียดก่อนให้ผ่าน (ค้นครั้งเดียวทั้งชุด ไม่ต้องอ่าน log ทั้งไฟล์)
+- **คำเดาในรายงาน**: Grep §4 ของแผน + `{{FLASHQ_RUN}} log <job> | grep -nE "น่าจะ|ควรจะ|ไม่ได้รัน|ข้าม|should|probably|skip"` (ส่งผ่าน grep เสมอ ห้ามอ่าน output ของ `log` ทั้งก้อน) → เจอในงานที่รายงาน ✅ = เปิดหลักฐานงานนั้นละเอียดก่อนให้ผ่าน (ค้นครั้งเดียวทั้งชุด ไม่ต้องอ่าน log ทั้งไฟล์)
 - ขาด/ไม่ตรง/เก่ากว่า → `❌ หลักฐานไม่ครบ → T-xxR` (ไม่รันเอง)
 
 ## 4. บันทึก + ปิด
 - เติมช่อง "ตรวจ Claude" ใน §4: `✅ผ่าน` หรือ `❌ <เหตุผล> → T-xxR` · ไม่ผ่าน → เพิ่ม `T-xxR` (จุดเล็ก = ก่อน/หลังตรงตัว · ใหญ่ = สเปก ตาม `/flash-plan` §2 · ยืนยัน) · **ห้าม revert/reset เอง**
-- **วนอัตโนมัติ**: commit+push แผน → `python {{FLASHQ}}/flashq.py run <แผน> <T-xxR...> --switch-on-quota 4` ใน background (`run_in_background: true` ตรง ๆ ห้าม `&`/sleep) → `python {{FLASHQ}}/flashq.py wait <แผน>` ใน background (ไม่ poll) → แจ้งแล้ว `/flash-check` ซ้ำ (session Sonnet ทำต่อใน session เดิมได้ · Opus/Fable → subagent `flash-checker` อีกรอบ) · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
+- **วนอัตโนมัติ**: commit+push แผน → `{{FLASHQ_RUN}} run <แผน> <T-xxR...> --switch-on-quota 4` ใน background (`run_in_background: true` ตรง ๆ ห้าม `&`/sleep) → `{{FLASHQ_RUN}} wait <แผน>` ใน background (ไม่ poll) → แจ้งแล้ว `/flash-check` ซ้ำ (session Sonnet ทำต่อใน session เดิมได้ · Opus/Fable → subagent `flash-checker` อีกรอบ) · **สูงสุด 2 รอบต่อแผน** แล้วยังไม่ผ่าน = หยุด รายงาน
 - ผ่านทั้งชุด → ที่ checkout หลัก: `git fetch <remote> <main_branch>` → แยกทาง = `git merge --no-edit <remote>/<main_branch>` (**ห้าม rebase**) → `git push <remote> <main_branch>` · มีไฟล์ค้างของ session อื่นชน → หยุด รายงาน user · **merge ขัดแย้ง (conflict) → `git merge --abort` ทันที แล้วหยุดรายงาน user** (ไฟล์ที่ขัดแย้ง + commit ทั้งสองฝั่ง) · ห้ามแก้ conflict ในไฟล์โค้ดเอง
 - **รายงาน user (ภาษาไทยง่าย ๆ ไม่ใช้ศัพท์ภายใน — ห้ามตอบแค่ "ผ่านกี่งาน")** ตามหัวข้อนี้ทุกครั้ง ทุกสถานะ:
   1. **งานนี้คืออะไร** — 1 บรรทัด (ชื่อแผน + เป้าหมายเป็นภาษาคน)
@@ -55,7 +55,7 @@ description: >-
   4. **ถ้าไม่ผ่าน/ล้ม** — สาเหตุเป็นภาษาคน (1–2 ประโยค) + หลักฐานที่ชี้ (log/บรรทัด) + ทางแก้ที่แนะนำ
   5. **ต้องการให้ผู้ใช้ทำอะไร** — ตัดสินใจ/อนุมัติ/ไม่ต้องทำอะไร (ระบุให้ชัด)
   · ห้ามเขียนผลงานที่ไม่ได้เปิดตรวจจริง · ไม่รู้ว่าผลต่อผู้ใช้เป็นอย่างไร = บอกตรง ๆ ว่ายังไม่ได้ตรวจส่วนนั้น
-- ปิดป้ายผู้ตรวจ: `python {{FLASHQ}}/flashq.py review done <แผน> pass` (ผ่านทั้งชุด) หรือ `... fail` (มี ❌/T-xxR) — ต้องเรียกก่อนจบ session ทุกครั้ง ไม่งั้นป้ายค้างจน 90 นาทีแล้วหายเอง
+- ปิดป้ายผู้ตรวจ: `{{FLASHQ_RUN}} review done <แผน> pass` (ผ่านทั้งชุด) หรือ `... fail` (มี ❌/T-xxR) — ต้องเรียกก่อนจบ session ทุกครั้ง ไม่งั้นป้ายค้างจน 90 นาทีแล้วหายเอง
 
 ## 5. 1 แผน = 1 session
 - จบแผนแล้ว **ห้ามต่อเรื่องใหม่เองใน session นี้** · มีคิวงานที่ user สั่งไว้ → ถาม user: เปิด session ใหม่ด้วย `/flash-plan <เรื่องถัดไป>` (แนะนำ) / ต่อที่นี่ / หยุดก่อน

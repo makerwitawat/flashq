@@ -7,10 +7,10 @@ description: >-
 รันที่รากโปรเจกต์ปัจจุบัน (ไม่ต้องถามอะไร):
 
 ```
-python {{FLASHQ}}/flashq.py init --install --commit
+{{FLASHQ_RUN}} init --install --commit
 ```
 
 แล้วรายงานผลเป็นไทยสั้น ๆ: ค่าที่ตรวจเจอ (`main_branch` · `remote`) · commit/push สำเร็จไหม · ส่วน "ขั้นต่อไป" ที่เหลือ (เช่น ติดตั้ง opencode · ตั้งโมเดล flash-worker · อยู่ผิด branch)
 
 - ผลบอกว่า push ไม่ได้/อยู่ branch อื่น → บอก user ตรง ๆ ห้าม force push
-- สำเร็จทั้งหมด → ทดสอบต่อด้วย `python {{FLASHQ}}/flashq.py run --message "ตอบแค่คำว่า PONG"` ได้ถ้า user ต้องการ
+- สำเร็จทั้งหมด → ทดสอบต่อด้วย `{{FLASHQ_RUN}} run --message "ตอบแค่คำว่า PONG"` ได้ถ้า user ต้องการ
