@@ -230,6 +230,9 @@ body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1
 body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); align-items: start; }  /* การ์ดย่อไม่ถูกยืดสูงตามใบข้าง ๆ */
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }  /* คอลัมน์ไม่ขยายตามข้อความยาว (ไม่ล้นทับการ์ดข้าง ๆ) */
+.of-runs-bar { display: flex; align-items: center; gap: 0.4rem; margin-bottom: -0.3rem; font-size: 0.85rem; }
+.of-runs-bar[hidden] { display: none; }
+.of-runs-bar .sp { flex: 1; }
 .of-card.quiet { border-color: var(--quota); }
 /* ย่อการ์ด: เหลือหัว · ธง/ขั้น · แถบ · บรรทัดสรุปเดียว (% · ขั้น · เวลา · กำลังทำ · ⚠) */
 .of-mini { display: none; }
@@ -541,6 +544,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="ofGcount"></span></h2><span class="sp"></span><button data-compact="goals" title="ย่อการ์ดธง: เหลือหัวเรื่อง · รอบ · ผ่าน · ขั้นตอน (ซ่อนรายการเกณฑ์/ปุ่ม)">▤ ย่อ</button><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
     <div class="pb" id="ofGoals"></div>
   </section>
+  <div class="of-runs-bar" id="ofRunsBar" hidden><span class="muted">การ์ดงาน <b id="ofRunsN"></b> ช่อง</span><span class="sp"></span><button data-compact-all="1" title="ย่อการ์ดงานทุกช่องเหลือแถบสถานะ + บรรทัดสรุปเดียว">▤ ย่อทั้งหมด</button><button data-compact-all="0" title="ขยายการ์ดงานทุกช่องให้เห็นครบ">▦ ขยายทั้งหมด</button></div>
   <div class="of-cards" id="ofRuns"></div>
   <div class="of-two">
     <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
@@ -1712,6 +1716,18 @@ document.addEventListener("click", (e) => {
   const c = b.closest(".of-card"), on = !!m[id];
   c.classList.toggle("compact", on); b.textContent = on ? "▦ ขยาย" : "▤ ย่อ";
 });
+/* ปุ่มย่อ/ขยายการ์ดงานทุกช่องพร้อมกัน (กรณีงานเต็มหลายช่องแล้วหน้ายาว) */
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-compact-all]");
+  if (!b) return;
+  const on = b.dataset.compactAll === "1", m = on ? compactRuns() : {};
+  document.querySelectorAll("#ofRuns [data-compact-run]").forEach((x) => {
+    if (on) m[x.dataset.compactRun] = true;
+    const c = x.closest(".of-card");
+    c.classList.toggle("compact", on); x.textContent = on ? "▦ ขยาย" : "▤ ย่อ";
+  });
+  store.set("compactRunCards", m);
+});
 document.addEventListener("DOMContentLoaded", applyCompact);
 
 const median = (a) => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
@@ -2390,6 +2406,7 @@ function officeUpdate() {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
     $("ofRuns").innerHTML = m.runs.map(runCardHTML).join("");
+    $("ofRunsBar").hidden = m.runs.length < 2; setText("ofRunsN", m.runs.length);  // มี ≥2 ช่องถึงแสดงแถบย่อ/ขยายทั้งหมด
     applyCompact();  // ป้ายปุ่มย่อ/ขยายบนการ์ดที่สร้างใหม่
     $("ofQueue").innerHTML = queueHTML(m);
     $("ofRecent").innerHTML = recentHTML();
