@@ -148,9 +148,10 @@ python D:\MyCode\flashq\flashq.py qa [ชุด...] [--commit <sha>] [--project 
 
 ### ตรวจขอบเขตไฟล์ (scope) — กลไกล้วน ไม่เรียกโมเดล
 ```
-python D:\MyCode\flashq\flashq.py scope <แผน> [T-xx ...] [--project P]
+python D:\MyCode\flashq\flashq.py scope <แผน> [T-xx ...] [--project P] [--fill]
 ```
 - ไฟล์ที่ commit ของแต่ละงาน (hash ใน §4 ของแผน) แตะ ต้องอยู่ในรายการที่แผนอนุญาต (path ใน ` บนบรรทัดหัวงาน `- [x] **T-xx** …` + บรรทัด `ไฟล์:`/`แก้ไฟล์:` ใต้หัวงาน) · ไฟล์แผนเอง (ติ๊ก [x] + เติม §4) ผ่านเสมอ
+- §4 ไม่มี hash จริง (worker ใส่ hash ของ commit ตัวเองไม่ได้ จึงมักเหลือ `(HEAD)`) → flashq หา commit เอง: ① commit ในช่วง `head0..head1` ของงานที่ flashq รันเอง (จดใน job record) ② ถ้าไม่มี → ตั้งแต่ `base commit` ในหัวแผน (ต้องเจอ commit เดียว ไม่งั้น NOCOMMIT) · commit ต้องมี `T-xx` แบบเต็มคำในข้อความ/trailer `Flash-Task: T-xx` (T-01 ไม่ชน T-01R) · `--fill` เติม hash ที่หาได้ลงช่อง commit ของแถว §4 เมื่อทุกงานผ่าน (ไม่ commit ให้)
 - ผลต่องาน: `SCOPE T-xx OK|EXTRA|NOCOMMIT|NOFILES` · สุดท้าย `SCOPE_RESULT=PASS|FAIL` · exit 0 = PASS · 1 = ไม่ผ่าน · 2 = อ่านแผนไม่ได้/ไม่ใช่ git
 - กฎเฉพาะโปรเจกต์เป็นตัวเสริมใน `.flash.json`: `{"scope": {"always_ok": ["docs/plans/*.md"]}}` (glob ของไฟล์ที่แตะได้เสมอ) · ผู้ตรวจ (`flash-verifier`) รันคำสั่งนี้เป็นข้อแรก
 

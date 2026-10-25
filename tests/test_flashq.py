@@ -373,6 +373,71 @@ class FlashqTest(unittest.TestCase):
             self.assertIn("SCOPE_RESULT=PASS", out)
             self.assertEqual(subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", "nope.md", "--project", d], capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=60).returncode, 2)
 
+    def test_scope_finds_commit_when_plan_has_no_real_hash(self):
+        """§4 เขียน "(HEAD)" (worker ใส่ hash ของ commit ตัวเองไม่ได้) → หา commit จากข้อความ T-xx · T-01 ไม่ชน T-01R · กำกวม/ไม่เจอ = NOCOMMIT · ช่วงงานของ flashq แยกหลาย commit ได้ · --fill เติมลงแผน"""
+        import tempfile
+        plan_rel = "PLAN_Y.md"
+        plan = ("> base commit ตอนวางแผน: `{base}`\n\n- [x] **T-01** `src/a.cpp`\n- [x] **T-02** `src/b.cpp`\n- [x] **T-03** `src/c.cpp`\n- [x] **T-04** `src/d.cpp`\n\n"
+                "## §4 ผล\n| งาน | ผล | commit | หลักฐาน |\n|---|---|---|---|\n| T-01 | OK | (HEAD) | log |\n| T-02 | OK | (HEAD) | log |\n"
+                "| T-03 | OK | (HEAD) | log |\n| T-04 | OK | (HEAD) | log |\n")
+        with tempfile.TemporaryDirectory(prefix="scope2_") as d:
+            def git(*args):
+                r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", d, *args], capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                return r.stdout.strip()
+
+            def commit(rel, msg):
+                p = Path(d, *rel.split("/"))
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(msg + "\n", encoding="utf-8", newline="\n")
+                git("add", "--", rel)
+                git("commit", "-qm", msg)
+                return git("rev-parse", "HEAD")
+
+            def scope(*extra):
+                r = subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", plan_rel, *extra, "--project", d],
+                                   capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=60)
+                return r.returncode, r.stdout
+            git("init", "-q", "-b", "main")
+            base = commit("README.md", "base")
+            Path(d, plan_rel).write_text(plan.format(base=base[:10]), encoding="utf-8", newline="\n")
+            h1 = commit("src/a.cpp", "T-01 แก้ a\n\nFlash-Task: T-01")
+            commit("src/a.cpp", "T-01R แก้ซ้ำ a")  # ต้องไม่ถูกนับเป็นของ T-01
+            commit("src/b.cpp", "T-02 รอบแรก")
+            h2b = commit("src/b.cpp", "T-02 รอบสอง")  # ข้อความมี T-02 สอง commit → ไม่มีช่วงงานยืนยัน = กำกวม
+            h3a = commit("src/c.cpp", "T-03 ตอนที่ 1")
+            h3b = commit("src/c.cpp", "T-03 ตอนที่ 2")
+            code, out = scope("T-01")
+            self.assertEqual(code, 0, out)  # เจอ commit เดียว (T-01R ไม่ถูกนับ)
+            self.assertIn(f"SCOPE T-01 OK (§4 ไม่มี hash — หา commit จากข้อความ T-01: {h1[:8]})", out)
+            code, out = scope("T-02")
+            self.assertEqual(code, 1, out)
+            self.assertIn("NOCOMMIT", out)
+            self.assertIn("2 commit", out)
+            code, out = scope("T-04")  # ไม่มี commit ที่มี T-04
+            self.assertEqual(code, 1, out)
+            self.assertIn("หา commit ที่มี T-04 ในข้อความไม่เจอ", out)
+            code, out = scope("T-03")  # ไม่มีช่วงงาน + ข้อความตรง 2 commit = กำกวม
+            self.assertEqual(code, 1, out)
+            (self.home / "jobs").mkdir(parents=True, exist_ok=True)  # flashq จดช่วง HEAD ของงานไว้ → แยกหลาย commit ของงานเดียวได้
+            (self.home / "jobs" / "1_j.json").write_text(json.dumps({"id": "1_j", "project": d, "plan": plan_rel, "status": "ok", "created": "2026-01-01 00:00:00",
+                                                                     "head0": h2b, "head1": h3b}), encoding="utf-8")
+            code, out = scope("T-03")
+            self.assertEqual(code, 0, out)
+            self.assertIn(h3a[:8], out)
+            self.assertIn(h3b[:8], out)
+            code, out = scope("T-01", "T-03", "--fill")
+            self.assertEqual(code, 0, out)
+            self.assertIn("FILL เติม hash ลง §4 2 แถว", out)
+            text = Path(d, plan_rel).read_text(encoding="utf-8")
+            self.assertIn(f"| T-01 | OK | {h1[:10]} | log |", text)
+            self.assertIn(f"| T-03 | OK | {h3a[:10]}, {h3b[:10]} | log |", text)
+            self.assertIn("| T-02 | OK | (HEAD) | log |", text)  # งานที่ไม่ได้ตรวจไม่ถูกแตะ
+            (self.home / "jobs" / "1_j.json").unlink()
+            code, out = scope("T-01", "T-03")  # ใช้ hash จริงที่เติมแล้ว ไม่พึ่งข้อความ/ช่วงงานอีก
+            self.assertEqual(code, 0, out)
+            self.assertNotIn("หา commit จากข้อความ", out)
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)

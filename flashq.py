@@ -1775,7 +1775,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     no_progress = status == "OK" and job.get("plan") and not job.get("readonly") and job.get("kind") not in ("verify", "investigate") \
         and not job_progressed(root, head0, texts + task_out)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
-            "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
+            "head0": head0, "head1": _git(root, "rev-parse", "HEAD"), "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
             "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
 
 
@@ -2316,6 +2316,9 @@ def cmd_run(a) -> int:
                 cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
             res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env,
                            model_wait=float(cfg.get("model_wait_min") or 0))
+            if res.get("head0") and res.get("head1"):  # ช่วง commit ของงานนี้ (ทุกรอบรวมกัน) → flashq scope ใช้หา commit ของ T-xx โดยไม่พึ่งที่โมเดลจดใน §4
+                job["head0"] = job.get("head0") or res["head0"]
+                job["head1"] = res["head1"]
             if res.get("denied"):
                 job["denied"] = (job.get("denied") or []) + res["denied"][:20]
             if res.get("perm_denied"):
@@ -3525,9 +3528,55 @@ def scope_parse(text: str) -> tuple[dict[str, set[str]], dict[str, list[str]]]:
     return allow, hashes
 
 
+SCOPE_BASE_RE = re.compile(r"base commit[^`\n]*`([0-9a-fA-F]{7,40})`")  # หัวแผน: base commit ตอนวางแผน: `<hash>`
+
+
+def scope_find_commits(root: Path, t: str, plan: Path, text: str) -> tuple[list[str], str]:
+    """หา commit ของงาน t เมื่อ §4 ไม่มี hash จริง (worker commit พร้อมแก้แผน → ใส่ hash ของ commit ตัวเองไม่ได้ จึงเหลือ "(HEAD)")
+    คืน (hash เต็ม, แหล่ง): "job" = commit ในช่วง head0..head1 ของงานที่ flashq รันเอง (ละเอียดสุด) · "base" = ตั้งแต่ base commit ในหัวแผน (ต้องเจอ commit เดียวเท่านั้น)
+    commit ต้องมี T-xx แบบเต็มคำในข้อความ/trailer (T-01 ไม่ชน T-01R, T-010)"""
+    rx = re.compile(r"(?<![A-Za-z0-9-])" + re.escape(t) + r"(?![A-Za-z0-9])")
+    ranges = [f"{j['head0']}..{j['head1']}" for j in jobs() if j.get("head0") and j.get("head1") and j["head0"] != j["head1"] and not j.get("readonly")
+              and _pnorm(j.get("project", "")) == _pnorm(str(root)) and Path(str(j.get("plan") or "").replace("\\", "/")).name == plan.name]
+    m = SCOPE_BASE_RE.search(text)
+    base = _git(root, "rev-parse", "--verify", "-q", f"{m.group(1)}^{{commit}}") if m else ""
+    for src, specs in (("job", ranges), ("base", [f"{base}..HEAD"] if base else [])):
+        found: list[str] = []
+        for spec in specs:
+            r = run_timeout(["git", "-C", str(root), "log", "--reverse", "--format=%H%x00%B%x01", spec], 60)
+            if r.returncode != 0:  # ประวัติถูก rebase/amend → hash ในช่วงหาไม่เจอ → ลองแหล่งถัดไป
+                continue
+            for rec in r.stdout.split("\x01"):
+                h, _, msg = rec.strip().partition("\x00")
+                if h and rx.search(msg) and h not in found:
+                    found.append(h)
+        if found:
+            return found, src
+    return [], ""
+
+
+def scope_fill(plan: Path, filled: dict[str, list[str]]) -> int:
+    """เติม hash จริงลงช่อง commit ของแถว §4 (เฉพาะแถวที่มีอยู่แล้ว) · คงเข้ารหัส/BOM/ปลายบรรทัดเดิม · คืนจำนวนแถวที่แก้"""
+    raw = plan.read_bytes()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    lines = raw.decode("utf-8-sig").split("\n")
+    n = 0
+    for i, line in enumerate(lines):
+        r = SCOPE_ROW_RE.match(line.rstrip("\r"))
+        if r and r.group(1) in filled:
+            cr = "\r" if line.endswith("\r") else ""
+            body = line.rstrip("\r")
+            lines[i] = body[:r.start(3)] + " " + ", ".join(h[:10] for h in filled[r.group(1)]) + " " + body[r.end(3):] + cr
+            n += 1
+    if n:
+        plan.write_bytes((b"\xef\xbb\xbf" if bom else b"") + "\n".join(lines).encode("utf-8"))
+    return n
+
+
 def cmd_scope(a) -> int:
     """flashq scope <แผน> [T-xx...] — ไฟล์ที่ commit ของแต่ละงานแตะ ต้องอยู่ในรายการที่แผนอนุญาต
     ไฟล์แผนเอง (ติ๊ก [x] + เติม §4) ผ่านเสมอ · ไฟล์ที่โปรเจกต์ยกเว้นเพิ่ม → .flash.json scope.always_ok (glob)
+    §4 ไม่มี hash จริง → หา commit จากช่วงงานที่ flashq จดไว้/ข้อความ commit ที่มี T-xx (scope_find_commits) · --fill เติม hash ที่หาได้ลงแผน
     exit 0 = PASS · 1 = มีงานแตะเกิน/ไม่มี commit/ไม่ระบุ path · 2 = อ่านแผนไม่ได้"""
     start = Path(a.project or os.getcwd())
     root, is_git = project_root(start)
@@ -3552,11 +3601,19 @@ def cmd_scope(a) -> int:
     allow, hashes = scope_parse(text)
     wanted = [t for t in re.split(r"[,\s]+", " ".join(a.tasks)) if t] or sorted(set(allow) | set(hashes))
     bad = 0
+    found_by: dict[str, list[str]] = {}  # งานที่ §4 ไม่มี hash แต่หา commit เจอเอง
     for t in wanted:
         if t not in hashes:
-            print(f"SCOPE {t} NOCOMMIT ไม่มี hash ใน §4")
-            bad += 1
-            continue
+            hs, src = scope_find_commits(root, t, plan, text)
+            if not hs:
+                print(f"SCOPE {t} NOCOMMIT ไม่มี hash ใน §4 และหา commit ที่มี {t} ในข้อความไม่เจอ")
+                bad += 1
+                continue
+            if src == "base" and len(hs) > 1:  # ไม่มีช่วงงานจาก flashq ให้ยืนยัน → เดาจากข้อความอย่างเดียวต้องไม่กำกวม
+                print(f"SCOPE {t} NOCOMMIT ไม่มี hash ใน §4 และมี {len(hs)} commit ที่ข้อความมี {t} ({', '.join(h[:8] for h in hs)}) — ใส่ hash ที่ถูกลง §4")
+                bad += 1
+                continue
+            hashes[t], found_by[t] = hs, hs
         if not allow.get(t):
             print(f"SCOPE {t} NOFILES แผนไม่ระบุ path บนหัวงาน — ตรวจเองไม่ได้")
             bad += 1
@@ -3575,7 +3632,10 @@ def cmd_scope(a) -> int:
             print(f"SCOPE {t} EXTRA {len(ex)} ไฟล์: " + ", ".join(ex[:8]) + more)
             bad += 1
         else:
-            print(f"SCOPE {t} OK")
+            print(f"SCOPE {t} OK" + (f" (§4 ไม่มี hash — หา commit จากข้อความ {t}: {', '.join(h[:8] for h in found_by[t])})" if t in found_by else ""))
+    if getattr(a, "fill", False):  # เติมเฉพาะเมื่อทุกงานผ่าน — ไม่จดหลักฐานของงานที่ยังมีปัญหาลงแผน
+        n = scope_fill(plan, found_by) if found_by and not bad else 0
+        print(f"FILL เติม hash ลง §4 {n} แถว" if n else ("FILL ไม่เติม — ยังมีงานไม่ผ่าน" if found_by and bad else "FILL ไม่มีแถวต้องเติม"))
     print("SCOPE_RESULT=" + ("FAIL" if bad else "PASS"))
     return 1 if bad else 0
 
@@ -7613,6 +7673,7 @@ def main() -> int:
     sc.add_argument("plan")
     sc.add_argument("tasks", nargs="*", help="งานที่ตรวจ (ไม่ระบุ = ทุกงานในแผน)")
     sc.add_argument("--project", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
+    sc.add_argument("--fill", action="store_true", help="§4 ไม่มี hash จริง (เช่น HEAD) แต่หา commit เจอ และทุกงานผ่าน → เติม hash ลงช่อง commit ของแผน (ไม่ commit ให้)")
     sc.set_defaults(fn=cmd_scope)
     dc = sp.add_parser("doc", help="ช่างเอกสาร: Flash อัปเดตเอกสารให้ตรงกับโค้ดที่เปลี่ยน (แก้ไฟล์จริงเฉพาะ doc.presets.<ชื่อ>.paths · ตัดสินด้วยกลไก · ไม่ commit ให้ · รอคุณรับ/ทิ้ง)")
     dc.add_argument("doc_name", nargs="?", default="", metavar="ชุด", help="ชื่อชุดจาก .flash.json doc.presets (มีชุดเดียว = ไม่ต้องระบุ)")
