@@ -57,7 +57,7 @@ FROZEN = bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()  # �
 APP_DIR = Path(sys.argv[0]).resolve().parent if FROZEN else Path(__file__).resolve().parent  # โฟลเดอร์ที่วาง exe
 REPO = APP_DIR  # ต้นฉบับคำสั่ง/hook/แม่แบบ: ปกติ = checkout · exe = โฟลเดอร์ข้าง exe (claude/ opencode/ hooks/ templates/)
 RES = Path(getattr(sys, "_MEIPASS", REPO)) if FROZEN else REPO  # ไฟล์ที่ฝังในตัว exe (ui.html, accounts.json, ไอคอน)
-CLI_EXE = "flashq.exe"  # exe แบบ console สำหรับคำสั่ง (flashq-gui.exe เป็นแบบหน้าต่าง พิมพ์ผลออกจอไม่ได้)
+CLI_EXE = "flashq.exe" if os.name == "nt" else "flashq"  # exe แบบ console สำหรับคำสั่ง (flashq-gui.exe เป็นแบบหน้าต่าง พิมพ์ผลออกจอไม่ได้)
 
 
 def self_argv() -> list[str]:

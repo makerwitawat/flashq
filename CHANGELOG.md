@@ -2,6 +2,9 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-10-27
+- **GitHub Actions build ชุดแจกครบ 3 OS แล้วแนบ release เอง**: push tag `v*` → build บน Windows / macOS / Linux (`tools/build_release.py` + `.github/workflows/release.yml`) ได้ `flashq-<tag>-win.zip` · `-macos.tar.gz` · `-linux.tar.gz` แนบเข้า release (มี release อยู่แล้ว = แนบทับ ไม่แตะ notes) · กด Run workflow เองได้เพื่อแนบ tag เก่า · macOS/Linux ยังทดลอง (ฟีเจอร์ toast/ตัวเฝ้า shell ผูก Windows · exe ไม่ได้เซ็น) · `CLI_EXE` ไม่ใส่ `.exe` บนระบบที่ไม่ใช่ Windows
+
 ## 2026-10-25
 - **ชุดแจก exe ติดตั้งคำสั่ง /flash-* ได้เอง**: build ได้ `flashq-gui.exe` (หน้าต่างแอป · ซ่อน console ของ process ลูก) + `flashq.exe` (console) + โฟลเดอร์ต้นฉบับข้าง exe ใน `dist/` · `flashq.exe install` ใช้ได้โดยไม่ต้องมี Python (hook ต้องมี Python — ไม่มีจะข้ามให้) · แม่แบบใช้ตัวแปร `{{FLASHQ_RUN}}` (โหมดปกติยังเป็น `python flashq.py`) · แก้ path `D:\MyCode` ที่ฝังในแม่แบบแผน · คู่มือ `docs/INSTALL_EXE.md` · `build-exe.bat`
 - **`flashq gui` + build เป็น exe ไฟล์เดียว**: เปิดเป็นหน้าต่างแอป (WebView2 ผ่าน pywebview) ไม่ใช้เบราว์เซอร์ · ชื่อหน้าต่างตาม `<title>` ของหน้าเว็บ · ไอคอนสายฟ้า (`assets/flashq.ico`) · ดับเบิลคลิก exe = เปิด GUI · `tools/build_exe.ps1` (PyInstaller/Nuitka) วาง `accounts.json` ข้าง exe แก้ได้โดยไม่ build ใหม่ · งานย่อย (qa/doc/run/goal) เรียก exe ตัวเองแทน `python flashq.py`

@@ -1,0 +1,69 @@
+name: release
+
+# push tag v* = build ครบ 3 OS แล้วแนบเข้า release ของ tag นั้น (ไม่มี release อยู่ = สร้างให้พร้อมสรุปอัตโนมัติ · มีอยู่แล้ว = แนบไฟล์เพิ่ม/ทับ ไม่แตะ notes)
+# กดรันเองได้ (Actions → release → Run workflow): ใส่ tag ที่จะแนบ + ref ของโค้ดที่ใช้ build (ค่าเริ่มต้น master)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag ของ release ที่จะแนบไฟล์ (เช่น v0.1.0)"
+        required: true
+      ref:
+        description: "branch/tag/commit ที่ใช้ build"
+        default: master
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ติดตั้ง dependency สำหรับ build
+        run: python -m pip install pyinstaller pywebview
+      - name: build ชุดแจก
+        run: python tools/build_release.py "$TAG" --out dist-out
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flashq-${{ matrix.os }}
+          path: |
+            dist-out/*.zip
+            dist-out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: สร้าง/แนบ release
+        shell: bash
+        run: |
+          ls -l assets
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --title "flashq $TAG" --generate-notes
+          fi
