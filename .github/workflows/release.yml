@@ -39,6 +39,9 @@ jobs:
       - name: build ชุดแจก
         run: python tools/build_release.py "$TAG" --out dist-out
         shell: bash
+      - name: ทดสอบรันตัวที่ build จริง (help · install · ui)
+        run: python tools/smoke_release.py dist-out/flashq
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: flashq-${{ matrix.os }}
