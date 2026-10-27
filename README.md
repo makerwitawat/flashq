@@ -33,7 +33,7 @@ flowchart LR
 - **แจ้งผลกลับเอง** — inbox + toast ของ Windows + hook ที่แทรกผลเข้า session ของ Claude
 - **หน้าเว็บ dashboard** — ดูคิว log สด สถิติ และ "ออฟฟิศ" ฉากการ์ตูนที่โชว์ว่าใครกำลังทำอะไร (stdlib ล้วน ไม่โหลดอะไรจากเน็ต)
 - **วัด token และการประหยัด** — บอกว่า Flash ใช้ไปเท่าไร และประมาณว่าประหยัดเทียบกับให้ Claude ทำเองไปเท่าไร
-- **ไม่มี dependency** — Python stdlib อย่างเดียว
+- **ไม่มี dependency** — Python stdlib อย่างเดียว (ยกเว้น `flashq gui` ที่ต้องติดตั้ง `pywebview` หรือใช้ชุดแจก exe)
 
 ## เริ่มต้นใช้งาน
 
@@ -43,6 +43,8 @@ flowchart LR
 - [opencode](https://opencode.ai) ที่ตั้งค่าบัญชีโมเดลไว้แล้ว
 - [Claude Code](https://claude.com/claude-code) (ถ้าจะใช้คำสั่ง `/flash-*`)
 - Windows — toast, ตัวเฝ้า shell และ desktop launcher พัฒนาและทดสอบบน Windows
+
+> ไม่อยากติดตั้ง Python? ใช้ **ชุดแจก exe** (`flashq-gui.exe` ดับเบิลคลิกเปิดหน้าต่างแอป + `flashq.exe` สำหรับคำสั่ง) — วิธีติดตั้งดู [docs/INSTALL_EXE.md](docs/INSTALL_EXE.md)
 
 ### ติดตั้ง
 
@@ -54,7 +56,7 @@ python flashq.py install --hooks
 
 `install` คัดลอกคำสั่งและ agent ไปไว้ที่ `~/.claude/` และ `~/.config/opencode/` แบบ global ส่วน `--hooks` ลงทะเบียน hook ใน `~/.claude/settings.json` แล้วรีโหลด opencode / เปิด Claude Code session ใหม่
 
-> ติดตั้งจาก checkout หลักเสมอ — path ของ repo จะถูกฝังลงในไฟล์ที่ติดตั้ง
+> ติดตั้งจากที่อยู่จริงของ flashq เสมอ (checkout หรือโฟลเดอร์ชุดแจก exe) — path นั้นจะถูกฝังลงในไฟล์ที่ติดตั้ง ย้ายโฟลเดอร์ภายหลัง = รัน `install` ใหม่
 
 ### ตั้งค่าโปรเจกต์
 
@@ -80,13 +82,14 @@ python flashq.py
 
 หรือใน Claude Code: `/flash-plan <งานที่ต้องการ>` แล้วรอระบบแจ้งผล
 
-### เปิดหน้าเว็บ
+### เปิดหน้าเว็บ / หน้าต่างแอป
 
 ```bash
-python flashq.py ui
+python flashq.py ui     # เปิดในเบราว์เซอร์
+python flashq.py gui    # หน้าต่างแอป (WebView2 ผ่าน pywebview · pip install pywebview)
 ```
 
-เปิด `http://127.0.0.1:4097/` (bind เฉพาะ 127.0.0.1) หรือดับเบิลคลิก `flashq-ui.bat`
+`ui` เปิด `http://127.0.0.1:4097/` (bind เฉพาะ 127.0.0.1) หรือดับเบิลคลิก `flashq-ui.bat` · `gui` ใช้พอร์ตว่างเอง (`--port` กำหนดได้) ไม่ใช้เบราว์เซอร์ · ดับเบิลคลิก `flashq-gui.exe` ในชุดแจก exe = โหมดนี้
 
 ## คำสั่ง
 
@@ -103,6 +106,7 @@ python flashq.py ui
 | `usage <แผน>` · `usage --flash` | token ของ Claude ต่อแผน · token ของ Flash และยอดประหยัด |
 | `switch [next\|...]` · `config` | สลับบัญชีโมเดล · ดู/ตั้งค่า (`max_parallel`, `schedule`) |
 | `models` | แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วเลือกว่าบทบาทไหนใช้โมเดลอะไร (`--list` `--auto` `--set`) |
+| `ui` · `gui` | หน้าเว็บ dashboard ในเบราว์เซอร์ · หน้าต่างแอปแบบไม่ใช้เบราว์เซอร์ (`--port` · `gui` ต้องมี pywebview) |
 | `install` · `init` · `prune` · `shrink` | ติดตั้ง (ท้ายงานตรวจโมเดลให้) · ตั้งค่าโปรเจกต์ · ล้างประวัติเก่า · ย่อรูปก่อนให้ Claude อ่าน |
 
 ผลลัพธ์ของ `run` ลงท้ายด้วยบรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` และ `job=<id>` (exit 0 = OK)
@@ -161,6 +165,7 @@ python flashq.py config schedule auto      # จัดคิวอัตโน�
 |---|---|
 | [docs/REFERENCE.md](docs/REFERENCE.md) | คู่มืออ้างอิงฉบับเต็ม: ตัวจัดคิว · โหมดเป้าหมาย · qa/doc/verify/investigate · หน้าเว็บ · สิทธิ์ `DENIED` · ค่าตั้งทั้งหมด |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | โครงสร้างโค้ด · ไฟล์ข้อมูล · API ของหน้าเว็บ · ตัวแปรแวดล้อม |
+| [docs/INSTALL_EXE.md](docs/INSTALL_EXE.md) | ติดตั้งจากชุดแจก exe (`flashq-gui.exe` / `flashq.exe`) — ไม่ต้องมี Python |
 | [CHANGELOG.md](CHANGELOG.md) | สิ่งที่เปลี่ยนตามวัน |
 | [AGENTS.md](AGENTS.md) | กติกาสำหรับคน/AI ที่แก้ repo นี้ |
 | [templates/](templates) | แม่แบบ[แผน](templates/FLASH_PLAN_TEMPLATE.md)และ[เป้าหมาย](templates/GOAL_TEMPLATE.md) |

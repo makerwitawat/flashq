@@ -12,7 +12,7 @@ Claude Code (/flash-plan · /flash-check · /flash-goal · /flash-investigate ·
    │                                     ▼
    │                           opencode serve :4096 ──► DeepSeek Flash แก้โค้ด + commit ในโปรเจกต์
    ▼
-flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ logs/ goals/ reviews/ ทุก 3 วิ
+flashq ui :4097  (หรือ `flashq gui` = หน้าต่างแอป · server ใน flashq.py + ui.html)  ── อ่าน jobs/ logs/ goals/ reviews/ ทุก 3 วิ
 ```
 - ทุกคำสั่งเป็น process แยก · ประสานกันผ่านไฟล์ใน `~/.flashq` + file lock (`file_lock`) · ไม่มี daemon คิว — process ของ `run` แต่ละตัวรอช่องเอง (`acquire`)
 - เป้าหมาย (`goal`) ไม่รันงานเอง — Claude เป็นคนวน · flashq แค่ตรวจธง (`check`) ตัดสิน (`verify`) และคัดลอกสถานะไป `~/.flashq/goals/` ให้หน้าเว็บ
@@ -20,7 +20,8 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 ## ส่วนต่าง ๆ ใน `flashq.py` (เรียงตามไฟล์)
 | ส่วน | ฟังก์ชันหลัก |
 |---|---|
-| ค่าคงที่/ค่าตั้ง | `CONFIG_DEFAULTS` (config.json) · `DEFAULTS` (`.flash.json` ต่อโปรเจกต์ รวม timeout/stall/`variants` ต่อชนิดงาน) · `AGENT_KINDS` (verify/investigate = งานส่ง prompt ตรงให้ agent อ่านอย่างเดียว) · `variant_for` (ลำดับ `--variant` > `.flash.json` > `config.json` > `DEFAULTS`) |
+| ค่าคงที่/ค่าตั้ง | `CONFIG_DEFAULTS` (config.json) · `DEFAULTS` (`.flash.json` ต่อโปรเจกต์ รวม timeout/stall/`variants` ต่อชนิดงาน) · `AGENT_KINDS` (verify/investigate = งานส่ง prompt ตรงให้ agent อ่านอย่างเดียว) · `variant_for` (ลำดับ `--variant` > `.flash.json` > `config.json` > `DEFAULTS`) · `FROZEN`/`APP_DIR`/`REPO`/`RES` (โฟลเดอร์ของ checkout หรือของ exe) · `run_cmd` (คำสั่งรัน flashq ที่พิมพ์ให้ผู้ใช้/AI: `python <repo>/flashq.py` หรือ path ของ `flashq.exe`) |
+| ติดตั้ง/แม่แบบ | `install_items` (ชุดไฟล์ที่ install กับ `--check` ใช้ร่วมกัน) · `fill_template` แทน `{{FLASHQ}}`/`{{FLASHQ_RUN}}`/`{{FLASHQ_EXE}}` (install + `init` คัดลอกแม่แบบแผน) · `record_install` (รุ่นที่ติดตั้ง → `installed.json` + หัวข้อ CHANGELOG) · `check_installed` (`INSTALL=OK`/`STALE`) · `cmd_install` |
 | process/ไฟล์ | `pid_alive` (เทียบเวลาเริ่มกัน pid ซ้ำ) · `kill_tree` · `write_json`/`read_json` · `file_lock` |
 | โปรเจกต์/git | `project_root` · `detect_remote` · `detect_main_branch` · `project_cfg` |
 | คิว/ช่อง | `jobs` · `save_job` · `take_slot` · `acquire` · `release` · `request_run_now` |
@@ -35,7 +36,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | แจ้งผลกลับ Claude | `notify_job` (งานจบ → `~/.flashq/inbox/` + toast Windows) · `sweep_dead`/`cmd_sweep` (แจ้งงาน process ตาย ครั้งเดียวต่องาน) · hook `hooks/inbox_notify.py` (อ่าน inbox ตอนผู้ใช้พิมพ์ข้อความ แล้วแทรกผล+คำแนะนำเข้า session) |
 | CLI อื่น | `cmd_wait` · `cmd_shrink` · `cmd_list` · `cmd_status` · `diagnose_job`/`cmd_why` · `cmd_log` · `cancel_job` · `cmd_config` · `cmd_runnow` · `switch_account` · `cmd_models`/`run_models` (+ `machine_models` · `pick_model` · `set_agent_model` · `ensure_models` ที่ install เรียก) · `cmd_install` · `cmd_init` · `cmd_review` · `cmd_prune` |
 | ข้อมูลหน้าเว็บ | `ui_state` (ทุกอย่างที่ `/api/state` ส่ง) · `plan_trail` (งานที่เกี่ยวกับแผนเดียวกัน) · `job_stats` · `ui_reviews` · `log_tail` |
-| server | `make_ui_server` · `cmd_ui` |
+| server | `make_ui_server` · `cmd_ui` (เบราว์เซอร์) · `cmd_gui` (หน้าต่างแอปผ่าน pywebview · `hide_child_consoles` ซ่อน console ของ process ลูก · `gui_set_icon`) |
 | เป้าหมาย | `goal_parse` · `goal_lint` · `goal_publish` · `goal_phase` (ขั้น/รอบที่กำลังทำ) · `ui_goals` · `goal_changed_files` · `goal_human` · `transcript_state`/`claude_activity` (อ่าน transcript ของ Claude Code) · `cmd_goal` |
 
 ## ไฟล์ข้อมูล (`~/.flashq` หรือ `FLASHQ_HOME`)
@@ -52,6 +53,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 | `goals/<gid>.json` | สำเนาสถานะเป้าหมาย: `items` (G-xx) `rounds` (เพิ่มเฉพาะตอน verify) `rounds_max` `hours` `started` `owner` (session Claude Code) |
 | `reviews/rv_*.json` | ป้าย Claude ตรวจ: `plan_name` `tasks` `status` (reviewing/pass/fail) `started` `finished` |
 | `ui.log` · `live_server.pid/.log` | log ของหน้าเว็บ · server opencode ที่ flashq เปิดให้ |
+| `installed.json` · `seen/<session>.json` | รุ่นที่ `install` ติดตั้งล่าสุด (`rev` hash เนื้อไฟล์ชุดติดตั้ง · `at` · `news` = หัวข้อ CHANGELOG) · รุ่นที่แต่ละ session เคยเห็นแล้ว (hook `whatsnew.py` — ไม่เปลี่ยน = ไม่พิมพ์อะไร) |
 
 ในโปรเจกต์: `.flash.json` · แผน `docs/plans/PLAN_*FLASH*.md` · เป้าหมาย `GOAL_*.md` · สถานะธง `.tmp/flashq-goal/` (base commit + ลายนิ้วมือเกณฑ์)
 
@@ -65,7 +67,7 @@ flashq ui :4097  (server ใน flashq.py + ui.html)  ── อ่าน jobs/ 
 - สองมุมมอง: แดชบอร์ด และ 🏢 ออฟฟิศ (`sceneSVG` วาดฉาก SVG · `deskSVG` ต่อช่อง · `loungeSVG` ห้องพัก/โซฟา (สถานะนั่ง-หลับ-ไปทำงานคำนวณใน `officeModel` → `m.lounge`) · การ์ดงาน `runCardHTML` · แถบขั้น `goalStepsHTML`/`runGoalHTML`/`planTrailHTML`)
 - การ์ด "🪙 token ของ Flash · ประหยัด" (`flashUsageHTML` · ดึง `/api/flash_usage` แยกจากรอบ refresh 3 วิ) และช่องที่ 5 "ประหยัดเทียบ Claude" ในแถบสรุปบนสุดของหน้า office ใช้ข้อมูลชุดเดียวกัน
 - โหมดสั่งงาน "เอกสาร": เลือกได้แค่ชื่อชุดจาก `doc_presets` · การ์ดงานเอกสารแสดงคำตัดสิน (`DOC_ICON`) + ปุ่มดู diff (`openDocDiff` · `#docDiffDlg`) / รับ / ทิ้ง
-- ค่าที่จำในเบราว์เซอร์ผ่าน `store` (localStorage ห่อ try/catch): มุมมอง · ขนาดฟอนต์ · แผงพับ · ย่อการ์ด (`compactRuns`/`compactGoals`) · เสียง
+- ค่าที่จำในเบราว์เซอร์ผ่าน `store` (localStorage ห่อ try/catch): มุมมอง · ขนาดฟอนต์ · แผงพับ · ย่อการ์ด (`compactRuns`/`compactGoals`) · เสียง · ธีม (`theme2` = ตามระบบ/ตามเวลา/สว่าง/มืด · `themeHours` = ช่วงมืดที่ตั้งเอง)
 
 ## ตัวแปรแวดล้อม
 | ตัวแปร | ใช้ทำอะไร |
