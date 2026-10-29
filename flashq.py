@@ -4897,6 +4897,50 @@ def check_installed(claude_home: Path) -> int:
     return 0
 
 
+SETUP_FILE = HOME / "setup.json"  # วิซาร์ดตั้งค่าครั้งแรกในหน้าเว็บ: {"done": true, "at": เวลา} — ไม่มีไฟล์ = ยังไม่เคยทำจนจบ
+SETUP_HOOK_KEYS = ("image_guard.py", "inbox_notify.py", "run_guard.py", "delegate_guard.py", "whatsnew.py")
+
+
+def setup_status() -> dict:
+    """สถานะสำหรับวิซาร์ดตั้งค่าครั้งแรก (อ่านอย่างเดียว): opencode · ไฟล์ที่ install ติดตั้ง · hook · โมเดลของบทบาท · เคยทำจนจบหรือยัง"""
+    claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
+    ok = stale = missing = foreign = 0
+    for dst, text in install_items(claude_home):
+        if not dst.exists():
+            missing += 1
+            continue
+        old = dst.read_text(encoding="utf-8", errors="replace")
+        if old == text:
+            ok += 1
+        elif "flashq:managed" not in old:
+            foreign += 1
+        else:
+            stale += 1
+    st = claude_home / "settings.json"
+    st_text = st.read_text(encoding="utf-8", errors="replace") if st.exists() else ""
+    oc = opencode_cmd()
+    models, note = ui_models() if oc else ([], "ไม่พบ opencode")
+    bad = models_problems(models) if models else []
+    py = bool(shutil.which("python") or shutil.which("python3")) or not FROZEN
+    install = {"ok": missing == 0 and stale == 0, "same": ok, "stale": stale, "missing": missing, "foreign": foreign}
+    done = bool(read_json(SETUP_FILE).get("done"))
+    return {"done": done, "opencode": {"ok": bool(oc), "path": oc[-1] if oc else ""},
+            "claude_home": {"path": str(claude_home), "exists": claude_home.is_dir()},
+            "install": install, "hooks": {k: k in st_text for k in SETUP_HOOK_KEYS}, "python": py,
+            "models": {"ok": bool(models) and not bad, "bad": bad, "count": len(models), "note": note},
+            "needed": not (bool(oc) and install["ok"] and bool(models) and not bad)}
+
+
+def setup_capture(fn, ns: argparse.Namespace) -> dict:
+    """รัน cmd_* ที่พิมพ์ผลลง stdout แล้วเก็บข้อความกลับให้หน้าเว็บแสดง"""
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = fn(ns)
+    return {"ok": rc == 0, "rc": rc, "output": buf.getvalue().strip()}
+
+
 def cmd_install(a) -> int:
     """คัดลอก opencode/{command,agent}/*.md ไป ~/.config/opencode/ · claude/{commands,agents}/*.md + hooks/*.py ไป ~/.claude/
     (แทน {{FLASHQ}} ด้วย path repo นี้) · ไฟล์ที่ flashq ติดตั้งเองทับได้เลย (ต้นฉบับอยู่ใน git ของ flashq ไม่ต้องสำรอง)
@@ -5747,6 +5791,8 @@ def make_ui_server(port: int = 4097):
             if u.path == "/api/models":  # โมเดลที่เครื่องนี้มี (เหมือน flashq models) + โมเดลของแต่ละบทบาท · ให้ตัวแก้บัญชีเลือก
                 models, note = ui_models(q.get("refresh", ["0"])[0] == "1")
                 return self._send(200, {"models": models, "providers": provider_rows(models), "note": note, "tail": recommended_tail(), "roles": role_rows()})
+            if u.path == "/api/setup":  # วิซาร์ดตั้งค่าครั้งแรก — สถานะเครื่อง (อ่านอย่างเดียว)
+                return self._send(200, setup_status())
             if u.path == "/api/flash_usage":  # สรุป token/USD ของ Flash + ประมาณการประหยัดเทียบ Claude (อ่านอย่างเดียว · แคช 30 วินาที)
                 try:
                     days = min(max(float(q.get("days", ["30"])[0]), 1), 3650)
@@ -5913,6 +5959,17 @@ def make_ui_server(port: int = 4097):
             if path == "/api/accounts":  # แก้รายการบัญชีสลับโมเดล (เพิ่ม/แก้/ลบ/ย้าย/คืนค่า repo)
                 ok, msg = edit_accounts(str(body.get("action") or ""), body)
                 return self._send(200 if ok else 400, {"ok": ok, "message": msg})
+            if path == "/api/setup_install":  # วิซาร์ด: ติดตั้งคำสั่ง/agent/hook แบบ global (เหมือน flashq install · ไม่ทับไฟล์ของผู้ใช้เอง)
+                res = setup_capture(cmd_install, argparse.Namespace(force=False, hooks=bool(body.get("hooks")), check=False, models="skip"))
+                return self._send(200, {**res, "status": setup_status()})
+            if path == "/api/setup_init":  # วิซาร์ด: ตั้งค่าโปรเจกต์ (เหมือน flashq init · ไม่ commit/push ให้)
+                proj = str(body.get("project") or "").strip()
+                if not proj or not Path(proj).is_absolute() or not Path(proj).is_dir():
+                    return self._send(400, {"ok": False, "output": "ต้องเป็น path เต็มของโฟลเดอร์ที่มีอยู่จริง"})
+                return self._send(200, setup_capture(cmd_init, argparse.Namespace(project=proj, force=False, install=False, commit=False)))
+            if path == "/api/setup_done":  # วิซาร์ด: จบแล้ว (ไม่เด้งเองอีก)
+                write_json(SETUP_FILE, {"done": bool(body.get("done", True)), "at": time.time()})
+                return self._send(200, {"ok": True})
             if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
                 role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
                 model = str(body.get("model") or "").strip()

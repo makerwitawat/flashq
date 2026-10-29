@@ -117,6 +117,12 @@ dialog.wz[open] { animation: ask-in .16s ease-out; }
 .wz-st.on i { background: var(--accent); border-color: var(--accent); color: #fff; }
 .wz-st.done i { background: color-mix(in srgb, var(--ok) 20%, var(--panel)); border-color: var(--ok); }
 .wz-st:disabled { opacity: .45; cursor: default; }
+#setupDlg { width: min(40rem, calc(100vw - 2rem)); }
+.su-row { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
+.su-row:last-child { border-bottom: 0; }
+.su-row > span { width: 1.4rem; text-align: center; flex: none; }
+.su-out { white-space: pre-wrap; max-height: 12rem; overflow: auto; background: var(--code); padding: 0.5rem; border-radius: 6px; margin: 0; font-size: 0.85em; }
+.su-lang { display: flex; gap: 0.5rem; }
 .wz-sep { color: var(--muted); }
 .wz-list { display: grid; gap: 0.35rem; max-height: min(48vh, 22rem); overflow: auto; padding-right: 0.15rem; }
 .wz-item { text-align: left; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.65rem; border: 1px solid var(--line); border-radius: 0.45rem; background: var(--panel); color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
@@ -401,6 +407,8 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <button id="zoomOut">A−</button><button id="zoomReset">100%</button><button id="zoomIn">A+</button>
   </span>
   <button id="themeBtn" title="สลับธีม">ธีม: ตามระบบ</button>
+  <button id="langBtn" title="Language / ภาษา">🌐 TH</button>
+  <button id="setupBtn" title="วิซาร์ดตั้งค่าครั้งแรก: ตรวจเครื่อง · ติดตั้งคำสั่ง · เลือกโมเดล · ตั้งค่าโปรเจกต์">🧭 ตั้งค่า</button>
 </header>
 <div id="stale" hidden>⚠ server รีสตาร์ตแล้ว — token ของหน้านี้ใช้ไม่ได้ ปุ่มสั่งงานจะขึ้น "ไม่ได้รับอนุญาต" · กด <b>Ctrl+F5</b> เพื่อโหลดหน้าใหม่ <button type="button" onclick="location.reload()">โหลดหน้าใหม่</button></div>
 <div id="backdrop"></div>
@@ -636,6 +644,14 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
     <div id="wzFoot" class="wz-foot"></div>
   </div>
 </dialog>
+<dialog id="setupDlg" class="wz" aria-labelledby="suTitle">
+  <div class="wz-box">
+    <div class="wz-h"><h2 id="suTitle">flashq setup</h2><button type="button" class="ico" id="suX" title="ปิด">✕</button></div>
+    <div id="suSteps" class="wz-steps"></div>
+    <div id="suBody"></div>
+    <div id="suFoot" class="row" style="justify-content:flex-end"></div>
+  </div>
+</dialog>
 <dialog id="docDiffDlg">
   <form method="dialog">
     <h2>ดู diff ของช่างเอกสาร</h2>
@@ -741,6 +757,1206 @@ async function copyText(text, label) {
   catch (e) { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
   toast(label || `คัดลอกแล้ว: ${text}`);
 }
+
+/* ---------- ภาษา (th/en) ---------- ข้อความต้นฉบับเป็นไทย · โหมด en แปลตอนแสดงผลโดยแทนที่ "ท่อนไทย" ที่ตรงกับพจนานุกรม (ท่อนที่ไม่มีในพจนานุกรมคงเป็นไทย) */
+const LANG = (() => { const v = store.get("lang", null); return v === "en" || v === "th" ? v : (/^th/i.test(navigator.language || "") ? "th" : "en"); })();
+$("langBtn").textContent = "🌐 " + LANG.toUpperCase();
+$("langBtn").onclick = () => { store.set("lang", LANG === "en" ? "th" : "en"); location.reload(); };
+if (LANG === "en") {
+  const EN = {};
+  `กด|click
+กดดูท้าย|click to see the end
+กรอก|fill in
+กรองบรรทัด|filter lines
+กรองสถานะ|filter by status
+กรองโปรเจกต์|filter by project
+กรอบ|frame
+กลับมาเอง|comes back by itself
+กลับมาแสดงเอง|shows again by itself
+กลับรายการ|reverse list
+กันชนตอน|collision guard on
+กันอดตาย|anti-starvation
+กับ|with
+กาง|expand
+การ์ดงาน|job cards
+การ์ดเพื่อไปดู|card to go and see it
+กำลังขอช่อง|requesting a slot
+กำลังค้น|searching
+กำลังจะเริ่ม|about to start
+กำลังตรวจ|checking
+กำลังตรวจผล|checking the result
+กำลังตรวจผลเอกสาร|checking the document result
+กำลังตรวจแผนนี้|checking this plan
+กำลังตรวจใหม่|re-checking
+กำลังตรวจไฟล์ที่แผนจะแตะ|checking files the plan will touch
+กำลังทำ|working
+กำลังทำต่อ|continuing
+กำลังทำรอบ|working on round
+กำลังทำรอบนี้|working on this round
+กำลังบันทึก|saving
+กำลังรัน|running
+กำลังวน|looping
+กำลังสั่ง|sending the command
+กำลังส่ง|sending
+กำลังอ่าน|reading
+กำลังโหลด|loading
+กำลังโหลดรายการจาก|loading the list from
+กำลังโหลดรายการโมเดล|loading the model list
+ก่อน|before
+ก่อนงานนี้|before this job
+ก่อนสั่งซ้ำ|before re-submitting
+ก้มหน้า|head down
+ขนาด|size
+ขนาดตัวอักษร|font size
+ขยับ|moved
+ขยาย|expand
+ขยายการ์ดงานทุกช่องให้เห็นครบ|expand every slot's job card to show everything
+ขยายการ์ดนี้|expand this card
+ขยายทั้งหมด|expand all
+ขยายเต็มจอ|full screen
+ของ|of
+ของงานทั่วไป|of a normal job
+ของงานนี้|of this job
+ของงานนี้ไม่มีรอบที่โมเดลตอบจบเลย|this job has no round where the model finished a reply
+ของช่างเอกสาร|of the doc writer
+ของธงนี้ยังรันอยู่|of this flag are still running
+ของหน้านี้ใช้ไม่ได้ ปุ่มสั่งงานจะขึ้น|of this page is invalid; action buttons will show
+ของเป้าหมาย|of the goal
+ของเป้าหมายนี้ชัด ๆ|of this goal specifically
+ของโปรเจกต์ เช่น|of the project, e.g.
+ขอบล่าง|bottom edge
+ขั้นตอน|steps
+ข้อ|item
+ข้อความ|message
+ข้อความ ก่อน|text before
+ข้อความตอบกลับบอกรายการ|the reply message lists
+ข้อความทดสอบ|test message
+ข้อความท้าย|trailing message
+ข้อที่คุณต้องตรวจเองตอนจบ|items you must check yourself at the end
+ข้อมูลเก่ายังน้อย|not much past data yet
+ข้ามงานที่|skips jobs that
+ข้ามงานที่ชน|skips conflicting jobs
+ข้ามด่านตรวจแผนพิการ|skip the broken-plan check
+ข้ามได้|can be skipped
+ข้ามได้เมื่อมั่นใจว่าแผนถูก|can be skipped when sure the plan is right
+คน|person
+คนตรวจ|checker
+คนละโปรเจกต์|different projects
+คนละโปรเจกต์ หรือไฟล์ไม่ซ้อน|different projects or no overlapping files
+ครบเวลาแล้ว ยามจะยืนยันอีกครั้งก่อนฆ่า|time is up; the guard will confirm once more before killing
+ครั้ง|times
+ครั้งถัดไป|next time
+ครั้งที่|time no.
+ครั้งโดยไม่มีงานใหม่|times with no new work
+ครั้งในรอบนี้|times in this round
+คร่าว|rough
+คร่าวมาก|very rough
+คลิกขวา|right-click
+คลิกขวาเพื่อตั้งช่วงเวลา|right-click to set the time range
+คลิกงานใดก็ได้เพื่อดู|click any job to view
+คลิกตัวละคร|click a character
+คลิกที่เก้าอี้เพื่อรับทราบ หรือดูแผงเตือนในแดชบอร์ด|click the chair to acknowledge, or see the alert panel on the dashboard
+คลิกเพื่อรับทราบ|click to acknowledge
+คลิกเพื่อสลับ|click to switch
+ความคิด|thinking
+ความคืบหน้าโดยประมาณ|estimated progress
+ความเคลื่อนไหว|activity
+คัดลอก|copy
+คัดลอกคำสั่ง|copy command
+คัดลอกคำสั่งทำต่อ|copy the resume command
+คัดลอกแล้ว|copied
+คาดการณ์|forecast
+คาดว่าเสร็จทั้งหมด|all expected to finish
+คาดว่าใช้|expected to take
+คำสั่ง|command
+คำสั่งนิ่ง|command idle
+คำสั่งยังทำงาน|command still running
+คิด|think
+คิดจาก|computed from
+คิว|queue
+คิวกลาง|central queue
+คิวจริงอาจเร็ว|the real queue may be faster
+คิวที่|queue
+คิวรอ|waiting queue
+คิวไม่ว่าง|queue busy
+คืนค่า|restore
+คืนค่าตั้งต้นของ|restore defaults of
+คุณดู|you review
+คุณสั่งเลิกธงนี้|you cancelled this flag
+คุณให้|you set
+คุณให้บางข้อไม่ผ่าน|you failed some items
+คู่ขนาน|parallel
+ค่า|value
+ค่ากลางต่อ|median per
+ค่ากลางต่องาน|median per job
+ค่าปกติของ|default of
+ค่าเริ่มต้น|default
+ค่าโปรเจกต์|project setting
+ค้นหา แผน|search plan
+ค้นหาผู้ให้บริการ|search providers
+ค้นหาโมเดล|search models
+ค้นหาใน|search in
+ค้นหาในไฟล์|search in files
+ค้นหาไฟล์|search files
+ค้นใน|search in
+ฆ่าคำสั่งค้าง|killed stuck commands
+ฆ่าคำสั่งค้างแล้ว|killed the stuck command
+ฆ่าคำสั่งค้างแล้ว งานทำต่อ|killed the stuck command; the job continues
+ฆ่าคำสั่งค้างไปแล้ว|already killed the stuck command
+ฆ่าเฉพาะคำสั่งนั้น|kills only that command
+งาน|jobs
+งาน คาดว่าใช้|jobs, expected to take
+งาน ใน|jobs in
+งานกำลังทำ|job running
+งานของโปรเจกต์นี้|jobs of this project
+งานค้างอื่นของคุณไม่ถูกแตะ|your other pending jobs are untouched
+งานจบ|job finished
+งานจะถูกเอาออกจากคิว|the job will be removed from the queue
+งานจากโค้ดใหม่จะไม่สลับซ้ำถ้างานอื่นสลับไปแล้ว|jobs from new code won't switch again if another job already switched
+งานทำต่อ|job continues
+งานที่|jobs that
+งานที่กำลังทำจะไหลสด|running jobs stream live
+งานที่ถูกแซงรอเกิน|jobs overtaken for longer than
+งานที่รอคิวจะเริ่มเพิ่มทันทีถ้ามีช่องว่าง|queued jobs start immediately if a slot is free
+งานที่ส่งแล้วไม่เข้าคิว|jobs submitted but not queued
+งานที่ไม่ชนกัน|non-conflicting jobs
+งานนั้นทำต่อปกติ|that job continues normally
+งานนั้นเป็นรอบหนึ่งของเป้าหมาย|that job is one round of a goal
+งานนี้|this job
+งานนี้จะเริ่มเลย|this job will start right away
+งานนี้ส่งด้วยโค้ดรุ่นก่อน|this job was submitted by older code
+งานนี้เป็นรอบหนึ่งของเป้าหมาย|this job is one round of a goal
+งานนี้ได้ช่องเพิ่มทันที|this job gets an extra slot immediately
+งานนี้ไม่มีระบบกันสลับบัญชีซ้ำ|this job has no repeat-switch protection
+งานรอคิว|queued jobs
+งานรออยู่|jobs waiting
+งานอยู่ที่ผู้ช่วยย่อย|the work is with a sub-agent
+งานโปรเจกต์เดียวกันจะแก้|jobs in the same project edit
+งานไม่มีข้อมูล|jobs without data
+จดแผนงาน|jot down the job plan
+จบ|done
+จบเองก่อน|finishes on its own first
+จบแล้วตรวจ|check after finishing
+จริง ๆ|actually
+จริง ๆ มักใช้น้อยกว่า|usually uses less in reality
+จะฆ่า|will kill
+จะตรวจเอง|will check itself
+จะตั้งเป็น|will be set to
+จะถูกหยุดกลางคัน งานที่ทำไปแล้วบางส่วนอาจค้างครึ่งทาง|will be stopped midway; work already done may be left half-finished
+จะปฏิเสธ|will refuse
+จะมี|will have
+จะมืดในช่วงนี้ สว่างช่วงที่เหลือ|dark during this range, light the rest of the time
+จะลบ|will delete
+จะอ่าน|will read
+จะเริ่มพร้อมกันเอง และอาจแซงงานที่ชนซึ่งรออยู่ก่อน|will start together by itself and may overtake earlier conflicting jobs
+จะแปลงเหตุนี้เป็นเกณฑ์ที่วัดได้ แล้ววนรอบใหม่|will turn this reason into measurable criteria and start a new round
+จะแสดงในหน้าเว็บแทน|will be shown on the web page instead
+จัดการบัญชีโมเดล|Manage model accounts
+จัดคิว|schedule
+จับได้|detected
+จาก|from
+จากแผน|from the plan
+จากแผนไม่ได้|cannot from the plan
+จำนวนงาน|number of jobs
+จำนวนงานที่รันพร้อมกันได้|number of jobs that can run at once
+จำนวนวันต้อง|number of days must be
+จึงไม่มี|so there is no
+จ่าย|paid
+จ่ายจริง|actually paid
+ฉลอง|celebrate
+ชนกับ|conflicts with
+ชนิดงาน|job type
+ชม|hr
+ชั่วโมง|hours
+ชั่วโมงจบ|end hour
+ชั่วโมงเริ่ม|start hour
+ชื่อบัญชี|account name
+ชื่อย่อของบัญชี|account short name
+ชื่อโมเดล|model name
+ชื่อโมเดลของ|model name of
+ชุดกรมท่า หมวกยาม ถือไฟฉาย|navy uniform, guard cap, flashlight
+ชุดทดสอบ|test suites
+ชุดทดสอบของโปรเจกต์|the project's test suites
+ชุดเอกสาร|doc presets
+ชุดเอกสารของโปรเจกต์|the project's doc presets
+ชูมือ|raising a hand
+ช่วงเวลาที่สรุป|summary period
+ช่วงเวลาธีมมืด|dark theme hours
+ช่อง|slot
+ช่องพิเศษครั้งเดียว ไม่เปลี่ยนค่าพร้อมกัน|one-off extra slot; does not change the concurrency setting
+ช่องว่าง|free slot
+ช่างเอกสาร|doc writer
+ช่างเอกสารกำลังแก้|the doc writer is editing
+ช่างเอกสารกำลังแก้ไฟล์|the doc writer is editing files
+ช้ากว่านี้ได้|may be slower than this
+ช้ากว่าปกติมาก ลองดู|much slower than usual; take a look
+ซ่อน|hide
+ซ่อนการ์ด|hide card
+ซ่อนการ์ดธงที่ยกเลิกนี้|hide this cancelled flag card
+ซ่อนรายการเกณฑ์|hide criteria list
+ดินสอ นั่งโต๊ะตอนมีงาน|pencil; sits at the desk when there is work
+ดึง|pull
+ดู|view
+ดูกล่อง|see the box
+ดูความคืบหน้าที่ปุ่ม|see progress on the button
+ดูทางแก้ในกล่อง|see the fix in the box
+ดูที่การ์ดของแต่ละงาน|see each job's card
+ดูรายการไฟล์|view file list
+ดูว่าคำสั่งที่|check whether the command
+ดูสด|live view
+ดูสาเหตุ|see the cause
+ดูแผนงาน|view the job plan
+ด่านตรวจเจอจุดผิดในแผน|the check found problems in the plan
+ด่านตรวจแผนพิการ|broken-plan check
+ตกลง|OK
+ตกแต่งอย่างเดียว ไม่มีผลกับสถานะงาน|decoration only; no effect on job status
+ตรง|match
+ตรวจ|check
+ตรวจ และไม่มีผู้สืบก่อนหน้า|check, and no earlier investigator
+ตรวจก่อน|check first
+ตรวจก่อนรัน|check before running
+ตรวจชื่อให้แน่ใจก่อนบันทึก|verify the name before saving
+ตรวจซ้ำอีก|re-check again
+ตรวจซ้ำโดยไม่มีงานใหม่|re-checks with no new work
+ตรวจดูเอง|check yourself
+ตรวจผล|check result
+ตรวจผลเอกสาร|check document result
+ตรวจผ่าน|check passed
+ตรวจผ่านแล้ว|check passed
+ตรวจมา|checked for
+ตรวจล่าสุด|last checked
+ตรวจว่า|checks whether
+ตรวจสาเหตุ|check cause
+ตรวจอย่างเดียว|check only
+ตรวจอย่างเดียว หรือ|check only, or
+ตรวจเป้าหมายนี้ใหม่|re-check this goal
+ตรวจเรื่องนี้ใหม่|re-check this
+ตรวจเอง|check it yourself
+ตรวจเองก่อน|check yourself first
+ตรวจแล้ว|checked
+ตรวจใน|check in
+ตรวจใหม่|re-check
+ตรวจไฟล์ซ้อนก่อน|check overlapping files first
+ตรวจไฟล์ไม่ได้|cannot check files
+ตรวจไม่ผ่าน|check failed
+ตรวจไม่ได้|cannot check
+ตอนนี้|now
+ตอนนี้ทำอยู่|currently working on
+ตอบ|reply
+ตอบแค่คำว่า|reply with just
+ตัดบรรทัด|wrap lines
+ตัว|item
+ตัวท้ายของ|the last item of
+ตัวอักษร ตัวเลข|letters, digits
+ตัวเลขจึงต่ำกว่าจริง|so the number is lower than reality
+ตั้งช่วงเวลาของโหมดตามเวลา|set the hours for time-based mode
+ตั้งตามชนิดงานใน|set per job type in
+ตั้งธง|set flag
+ตั้งธงแล้ว|flag set
+ตั้งเป็น|set to
+ตั้งโมเดลนี้|set this model
+ตั้งใน|set in
+ตั้งไว้ใน|configured in
+ตามที่ช่างเอกสารแก้|as edited by the doc writer
+ตามปัญหาที่ต้นทางได้เลย|you can chase the problem at its source
+ตามระบบ|System
+ตามลำดับ|in order
+ตามเวลา|By time
+ตามแผน|By plan
+ตาย|dead
+ตายทั้งหมดในครั้งเดียว|all dead ones at once
+ตายแล้ว|dead
+ติดขัด|stuck
+ติดเบรก|braked
+ติดเบรก ต้องให้คุณตัดสิน|braked; needs your decision
+ติ๊กเพื่อไม่เรียกโมเดลเลย|tick to not call the model at all
+ต่อไป|next
+ต้นทาง|source
+ต้อง|must
+ต้องตั้งชื่อย่อ|a short name is required
+ต้องรับทราบ|needs acknowledgement
+ต้องไม่ว่าง|must not be empty
+ถัดไป|next
+ถามเซิร์ฟเวอร์ว่า|ask the server whether
+ถามไม่ได้|cannot ask
+ถึงก่อน|arrived first
+ถึงตาคุณ|your turn
+ถึงตาคุณตรวจ|your turn to check
+ถือกาแฟ|holding coffee
+ถือป้าย|holding a sign
+ถือแว่นขยาย|holding a magnifying glass
+ถูกปฏิเสธสิทธิ์|permission denied
+ถ้า|if
+ถ้าทิ้ง ส่วนที่คุณแก้ต่อหลังช่างเอกสารจบจะหายไปด้วย|if discarded, edits you made after the doc writer finished are lost too
+ถ้าปิดไปให้รัน|if it was closed, run
+ถ้าพร้อมกันเป็น|if running together as
+ถ้ายังไม่จบภายใน|if not finished by
+ถ้าเป็น|if it is
+ทดสอบ|test
+ทั้งคู่ถือแว่นขยาย|both hold magnifying glasses
+ทั้งแผน|whole plan
+ทางแก้|fix
+ทำ|do
+ทำ ตัวเลขนี้ยังไม่ขยับ|working; this number has not moved
+ทำงาน|working
+ทำงานในรอบนั้น|worked in that round
+ทำตามแผน|follow the plan
+ทำต่อ|continue
+ทำเอง|do it yourself
+ทำใน|do in
+ทิ้ง|discard
+ทิ้ง ที่การ์ดงาน|discard on the job card
+ทิ้งทับ|discard and overwrite
+ทิ้งทับเลย|just discard and overwrite
+ทิ้งร่าง|discard draft
+ทิ้งร่างเอกสารนี้|discard this document draft
+ทิ้งแล้ว|discarded
+ทีละงานแบบเดิม|one job at a time as before
+ที่|at
+ที่ตรวจอาจปิดไปแล้ว|the checker may be closed
+ที่นั่งของ ผู้ตรวจ|checker's seat
+ที่ยังใช้วางแผน|still used for planning
+ที่รันอยู่ไม่ถูกหยุดให้|running ones are not stopped
+ที่หักมาจากผล|deducted from the results
+ที่อ้างถึงแผนนี้|that refer to this plan
+ที่เคยรันไว้เท่านั้น|that were run before only
+ที่เปิดไว้|that are open
+ที่แล้ว|ago
+ที่แสดง|shown
+ที่ไม่เคยรันคำสั่งนี้ไม่ถูกนับ ตัวเลขประหยัดจึงเป็นค่าประมาณที่ค่อนข้างสูง|that never ran this command are not counted, so the savings figure is a fairly high estimate
+ทุก|every
+ทุกคนว่าง|everyone is free
+ทุกคนไปทำงาน|everyone is at work
+ทุกงานใช้บัญชี|all jobs use account
+ทุกชุด|all suites
+ทุกสถานะ|all statuses
+ทุกโปรเจกต์|all projects
+ท้ายรอบ|end of round
+ท้ายแต่ละรอบ|end of each round
+ธงขึ้นสูงตามจำนวนเกณฑ์ที่ผ่าน|the flag rises with the number of criteria passed
+ธงที่โต๊ะ|flag at the desk
+ธงสูงตามเกณฑ์ที่ผ่าน|flag height follows criteria passed
+ธงเขียวโบก|green flag waving
+ธงเหลือง|yellow flag
+ธงแดงครึ่งเสา|red flag at half mast
+ธีม|Theme
+นอนที่เก้าอี้มุมซ้ายล่าง|sleeps on the chair in the bottom-left corner
+นักทดสอบ|tester
+นักทดสอบกำลังรัน|the tester is running
+นักทดสอบรันคำสั่งทดสอบเองโดยตรง ไม่ผ่านโมเดล จึงไม่มี|the tester runs test commands directly, not through a model, so there is no
+นับจาก|counted from
+นับตั้งแต่เปิดหน้านี้|counted since this page was opened
+นับรอบเมื่อรัน|counts a round when running
+นับเป็นรอบใหม่ของงบรอบ|counts as a new round of the round budget
+นับเมื่อ|counted when
+นั่งพัก|resting
+นั่งพักที่โซฟา|resting on the sofa
+นั่งพักที่โซฟา พร้อมเฝ้า|resting on the sofa, ready to watch
+นั่งพักที่โซฟา รองานตรวจ|resting on the sofa, waiting for a check job
+นั่งพักที่โซฟา รองานทดสอบ|resting on the sofa, waiting for a test job
+นั่งพักที่โซฟา รองานสืบ|resting on the sofa, waiting for an investigation
+นั่งพักที่โซฟา รองานเอกสาร|resting on the sofa, waiting for a doc job
+นั่งพักรองาน|resting, waiting for a job
+นั่งโต๊ะ|at the desk
+นั้นดู|then see
+นั้นปิดไปแล้ว กด|is closed; click
+นั้นแล้วสั่ง|then run
+นาที|min
+นาทีจะหลับ|min until it sleeps
+นานผิดปกติ|unusually long
+นิ่ง|idle
+นิ่งนาน|idle for long
+นิ่งสนิท|completely idle
+นี้|this
+นี้ในแอป|this in the app
+บทบาท|role
+บรรทัด|lines
+บรรทัดสรุปเดียว|one-line summary
+บรีฟ|brief
+บอกรายการ|lists
+บังคับให้เริ่มทันทีในช่องพิเศษ|force start now in an extra slot
+บัญชี|account
+บันทึก|save
+บันทึกการแก้ไข|save changes
+บันทึกว่าไม่ผ่าน|record as failed
+บันทึกเองตั้งแต่|recorded by itself since
+ปกติ|normal
+ปกติของบางชุดทดสอบ|normal for some test suites
+ปกติถ้ามีชุดไม่ผ่าน|normally if a suite fails
+ปฏิเสธสิทธิ์|permission denied
+ปฏิเสธสิทธิ์ งานไม่ได้ทำ|permission denied; the job was not done
+ประตู|gate
+ประมาณ|about
+ประมาณการ|estimate
+ประมาณการสมมติใช้|an assumed estimate using
+ประมาณคร่าว|rough estimate
+ประมาณจากงานทุกโปรเจกต์|estimated from jobs of all projects
+ประมาณจากงานเดิมที่เคยจบ|estimated from previously finished jobs
+ประมาณจากประวัติ|estimated from history
+ประมาณไม่ได้|cannot estimate
+ประวัติ|History
+ประวัติยังอยู่|history is kept
+ประหยัด|saved
+ประหยัดเทียบ|saved vs
+ปล่อยไป|let go
+ปัจจุบัน|current
+ปิด|Close
+ปิดการหายเอง|auto-clear off
+ปิดไปแล้ว|already closed
+ปุ่ม|button
+ปุ่มลัด|shortcuts
+ป้ายจาก|badge from
+ป้ายนี้จะหายเองเมื่อพ้นเวลาที่ตั้งไว้ด้วย|this badge also disappears by itself after the configured time
+ป้ายหน้างานเขียนว่า|the sign at the workstation reads
+ป้ายหายเองเมื่อพ้น|badge disappears after
+ป้ายหายเองใน|badge disappears in
+ผล|result
+ผลตรวจ|check result
+ผลตรวจรอบนี้|check result of this round
+ผลล่าสุด|latest result
+ผิดพลาด|error
+ผู้ช่วยย่อย|sub-agent
+ผู้ตรวจ|checker
+ผู้ตรวจกำลังตรวจ|the checker is checking
+ผู้ตรวจประจำออฟฟิศ|the office checker
+ผู้ตรวจใส่เสื้อกาวน์ขาว|the checker wears a white lab coat
+ผู้สืบ|investigator
+ผู้สืบกำลังสืบต้นตอ|the investigator is tracing the root cause
+ผู้สืบก่อนแผนนี้|investigator before this plan
+ผู้ให้บริการ|provider
+ผู้ให้บริการนี้ไม่มีโมเดลในรายการ|this provider has no models in the list
+ผ่าน|pass
+ผ่านครบ|all passed
+ผ่านชูมือ|passed, raising a hand
+ผ่านแล้ว|passed
+ผ่านไป|elapsed
+พบ|found
+พร้อมกัน|concurrently
+พร้อมพิมพ์|ready to type
+พอมีงานที่จบ|once there are finished jobs
+พักแป๊บ|taking a short break
+พับ|collapse
+พิจารณายกเลิกธง|consider cancelling the flag
+พิมพ์|type
+พิมพ์ชื่อโมเดลเอง|type the model name yourself
+พิมพ์เฉพาะส่วนหลังชื่อผู้ให้บริการ|type only the part after the provider name
+พิมพ์เช่น|type e.g.
+พิมพ์เพื่อเลือก|type to choose
+พิมพ์ให้ตรง|type exactly
+พิเศษ|extra
+พื้นไม้ ผนัง หน้าต่าง|wooden floor, walls, windows
+พูดถึง|mention
+ภายใน|within
+มักค้างตั้งแต่ส่งคำขอ|often stuck since sending the request
+มักใช้น้อยกว่า|usually uses less
+มา|for
+มากับ|comes with
+มาจากประวัติงานที่ผ่านมา|comes from past job history
+มาอธิบายสาเหตุ|to explain the cause
+มี|has
+มีคำสั่ง|has commands
+มีงานตรวจรันอยู่จะยืนประจำและบอกช่องที่กำลังตรวจ|when a check job is running it stands by and shows which slot it is checking
+มีช่องพิเศษ|has an extra slot
+มีทุกตัวที่|has every one that
+มืด|Dark
+มืดช่วง|dark during
+มืดตั้งแต่|dark from
+มือถือเลื่อนฉากแนวนอนได้|on mobile the scene scrolls horizontally
+ม่าน ชั้นหนังสือ ไวท์บอร์ด รูปภาพ ตู้น้ำ ต้นไม้|curtains, bookshelf, whiteboard, pictures, water cooler, plants
+ยกเลิก|Cancel
+ยกเลิกงาน|cancel job
+ยกเลิกงานในคิว|cancel queued job
+ยกเลิกธง|cancel flag
+ยกเลิกธงนี้|cancel this flag
+ยกเลิกแล้ว|cancelled
+ยกเลิกโดย|cancelled by
+ยกเลิกโดยคุณ|cancelled by you
+ยังขยับ|still moving
+ยังทำงานอยู่|still running
+ยังทำงานอยู่ไหม และค้างที่อะไร|whether it is still running and what it is stuck on
+ยังนับอยู่|still counting
+ยังประมาณเวลาที่เหลือไม่ได้|cannot estimate remaining time yet
+ยังประมาณไม่ได้|cannot estimate yet
+ยังรอคิว|still queued
+ยังเปิดอยู่|still open
+ยังเปิดอยู่ไหม|is it still open
+ยังไม่|not yet
+ยังไม่ตั้ง|not set
+ยังไม่ทราบเวลาเริ่ม|start time unknown
+ยังไม่ผ่าน|not passed yet
+ยังไม่มี|none yet
+ยังไม่มีข้อมูล|no data yet
+ยังไม่มีงาน|no jobs yet
+ยังไม่มีงานที่กำลังทำ|no running jobs
+ยังไม่มีงานที่จบ|no finished jobs yet
+ยังไม่มีงานที่มีข้อมูล|no jobs with data yet
+ยังไม่มีบัญชี|no accounts yet
+ยังไม่มีประวัติให้ประมาณ|no history to estimate from yet
+ยังไม่มีวันนี้|none today
+ยังไม่รวม|not included yet
+ยังไม่รู้ว่า|do not know yet whether
+ยังไม่เคยรัน|never run
+ยังไม่เริ่มเพราะชนไฟล์|not started because of a file conflict
+ยังไม่เรียกเครื่องมือ|no tool called yet
+ยังไม่ได้ตรวจ|not checked yet
+ยังไม่ได้ตรวจรอบแรก|first round not checked yet
+ยังไม่ได้ตั้ง|not configured
+ยังไม่ได้เริ่มทำ|not started yet
+ยาม|guard
+ยามเฝ้า|watch guard
+ยืนต่อแถวด้านซ้าย|stands in line on the left
+ยืนยัน|confirm
+ยืนยันจะรันพร้อมกัน|confirm running together
+ย่อ|collapse
+ย่อการ์ดงานทุกช่องเหลือแถบสถานะ|collapse every job card to its status bar
+ย่อการ์ดธง|collapse flag card
+ย่อทั้งหมด|collapse all
+ย้อนกลับ|undo
+ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะ|reverts only files the doc writer touched
+ย้อนเฉพาะไฟล์ที่ช่างเอกสารแตะกลับสถานะก่อนรัน|reverts only the files the doc writer touched to their pre-run state
+ย้อนไฟล์ให้แล้ว|files reverted
+ย้ายงานที่ถือช่อง|moves the job holding the slot
+ย้ายไปประวัติ|move to history
+ย้ายไปประวัติเป็นสถานะ|move to history as status
+รวม|total
+รหัส|code
+รอ|wait
+รอคิว|Queued
+รอคิวนานเกิน|queued too long
+รอคิวเกินเวลา|queue timeout
+รอคุณ|waiting for you
+รอคุณตรวจ|waiting for your review
+รอคุณตัดสิน|awaiting your decision
+รองานใหม่|waiting for new work
+รอจบแล้ว|after it finishes
+รอตรวจ|awaiting check
+รอนานสุด|longest wait
+รอบ|round
+รอบถัดไป|next round
+รอบที่|round
+รอบหนึ่งของเป้าหมาย|one round of the goal
+รอบแก้|fix round
+รอบแรกของแผนนี้|first round of this plan
+รอมาแล้ว|waited
+รอไว้|kept waiting
+ระดับความคิด|thinking level
+ระดับความคิดของโมเดล|model thinking level
+ระยะเวลา|duration
+ระหว่าง|between
+รัน|run
+รันคำสั่ง|run command
+รันคำสั่งตรง|run command directly
+รันชุดทดสอบของโปรเจกต์|run the project's test suites
+รันชุดทดสอบเอง|runs the test suites itself
+รันยังทำงานอยู่ไหม|is the run still working
+รันอยู่จะยืนเฝ้าที่ช่องนั้น ว่างจะไปนั่งที่โซฟา|stands guard at that slot while running, and sits on the sofa when idle
+รันเกณฑ์ทุกข้อ|run every criterion
+รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที|run every criterion; takes several minutes
+รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที การ์ดจะอัปเดตเอง|run every criterion; takes several minutes; the card updates by itself
+รันเลย|Run now
+รันแผนนี้มาแล้ว|has run this plan
+รันแยก|run separately
+รับ|accept
+รับทราบ|Acknowledge
+รับทราบงานที่|acknowledge jobs that
+รับทราบทั้งหมด|acknowledge all
+รับร่าง|accept draft
+รับร่างเอกสารนี้|accept this document draft
+รับแล้ว|accepted
+ราคาโดยประมาณ|approximate price
+รายการอื่น|other items
+ราว|about
+รีสตาร์ตแล้ว|restarted
+รุ่น|version
+ลดการเคลื่อนไหว|reduce motion
+ลดครึ่งเสา|lowered to half mast
+ลดธง|lower the flag
+ลบ|delete
+ลบถาวร|delete permanently
+ลบบัญชี|delete account
+ลบรายการบัญชีของเครื่องนี้ทิ้ง แล้วใช้|delete this machine's account list and use
+ลบออกจากรายการสลับของเครื่องนี้เท่านั้น|removes it from this machine's switch list only
+ลบเฉพาะสำเนาการ์ดใน|deletes only the card copy in
+ลบเฉพาะสำเนาใน|deletes only the copy in
+ลองตามข้อ|try following item
+ลากมุมขวาล่างของประวัติ|drag the bottom-right corner of the history
+ลำดับ|order
+ลำดับสลับตอนโควตาหมด|switch order when quota runs out
+ลูกกำพร้าถือ|orphan holding
+ล็อกหัวคิว|lock to head of queue
+ล็อกอินไว้|logged in
+ล็อกเป็นหัวคิว|locked as head of queue
+ล่าสุด|latest
+ล้ม|failed
+ล้มเหลว|failed
+ล้างประวัติ|clear history
+วงล้อ|wheel
+วงล้อเมาส์|mouse wheel
+วนต่อ หรือกด|continue the loop or click
+วัดได้|measurable
+วัน|days
+วัน จะถูกลบและกู้คืนไม่ได้|days will be deleted and cannot be recovered
+วันถัดไป|next day
+วันนี้|today
+วันนี้จบแล้ว|finished today
+วันล่าสุด|latest day
+วางแผน|plan
+วิ|s
+วิธีรันเลย|how Run now works
+วิธีอ่านภาพ|how to read the picture
+วินาที แล้วเป็นโต๊ะว่าง|seconds, then the desk is empty
+วิเคราะห์สาเหตุที่ไม่ผ่าน|analyze why it failed
+ว่าง|free
+ว่างจะไปนั่งที่โซฟา|goes to sit on the sofa when free
+ว่างเกิน|idle too long
+สงสัย|suspect
+สงสัยแต่จบเองทัน ปล่อยไป|suspected but finished in time, let go
+สด|live
+สดของงานนั้น|live view of that job
+สถานะ|status
+สถานะในโปรเจกต์ยังอยู่|project status is kept
+สถิติ|Stats
+สมมติ|assumed
+สรุป|Summary
+สรุปจากการ์ด|summary from the cards
+สลับธีม|toggle theme
+สลับบัญชีเมื่อ|switch account on
+สลับมุมมอง|switch view
+สลับไปบัญชีถัดไป|switch to the next account
+สว่าง|Light
+สว่างช่วงที่เหลือ|light the rest of the time
+สองงานกินโควตาพร้อมกัน และถ้า|two jobs eat quota at once, and if
+สักครั้งจะประมาณเวลาได้|once, the time can be estimated
+สัดส่วนคิดจาก|proportion computed from
+สั่งงานจาก|run from
+สั่งงานนี้จาก|run this job from
+สั่งซ้ำ|Retry
+สั่งตรวจเรื่องนี้ใหม่|ask for a re-check of this
+สั่งล่าสุด|last ordered
+สำเร็จ|succeeded
+สิ่งที่ให้คืน|what to return
+สีเสื้อ|shirt color
+สืบ|Investigate
+ส่งงานนี้เข้าคิวอีกครั้ง|put this job in the queue again
+ส่งงานเดิมเข้าคิวอีกครั้ง|put the same job in the queue again
+ส่งงานแล้วไม่เข้าคิว|job sent but not queued
+ส่งงานใหม่|New job
+ส่งงานใหม่ ได้เลย|you can submit a new job
+ส่งงานใหม่เข้าคิว|submit a new job to the queue
+ส่งรอบถัดไป|send the next round
+ส่งเข้าคิว|Submit to queue
+ส่งเมื่อ|submitted at
+ส่งโดยข้ามด่าน|submitted skipping the check
+ส่งใหม่แบบข้ามด่านตรวจแผน|resubmit skipping the plan check
+ส่งใหม่โดยข้ามด่านตรวจแผน|resubmit skipping the plan check
+ส่งไม่สำเร็จ|submit failed
+หน้าต่าง|window
+หน้าเว็บรันคำสั่งที่ไม่ได้ตั้งไว้ไม่ได้|the web page cannot run commands that were not configured
+หน้าเว็บเลือกได้แค่ชื่อชุดที่ตั้งไว้|the web page can only pick preset names that are configured
+หน้าเว็บแสดงผลผิดพลาด|the web page failed to render
+หมดเวลา|timed out
+หมวกนักสืบ|detective hat
+หยุด|stop
+หยุดงาน|stop job
+หยุดงานที่กำลังทำ|stop the running job
+หยุดงานนี้|stop this job
+หยุดนับ|stopped counting
+หยุดเพราะเบรก|stopped by the brake
+หรือ|or
+หรือกด|or click
+หรือข้อความ|or text
+หรือไม่|or not
+หลักขยับ|main log moved
+หลักเงียบ|main log idle
+หลับ|asleep
+หักค่า|deducts
+หัวคิวก่อนเสมอ|head of queue always first
+หาไม่เจอ|not found
+ห้องทำงาน|workroom
+ห้องพัก|lounge
+อธิบายตอนล้ม|explain on failure
+อธิบายสาเหตุ|explain the cause
+อนุญาตคำสั่งที่หน้าต่างนั้น|allow the command in that window
+อนุมัติ|approve
+ออกจากเต็มจอ|exit full screen
+ออฟฟิศ|Office
+ออฟฟิศว่าง|office empty
+อัตโนมัติ|automatic
+อัปเดต|Updated
+อัปเดตด้วย|update too
+อาการ|symptom
+อาจยังทำงานอยู่|may still be running
+อาจเกี่ยวข้อง|may be related
+อาจเป็นของ|may belong to
+อีก|more
+อื่น|other
+อื่น ๆ|others
+อ่าน|read
+อ่านบทบาทไม่ได้|cannot read the role
+อ่านบริบท|read context
+อ่านสถานะจากไฟล์ ทำต่อได้เลย|read state from the file and continue right away
+อ่านอย่างเดียว|read-only
+อ่านอย่างเดียว ไม่ชนงานอื่น|read-only, does not conflict with other jobs
+อ่านเหตุเบรกแล้วเสนอทางแก้|read the brake reason and propose a fix
+อ่านไฟล์|read file
+เกณฑ์|criteria
+เกณฑ์ที่เครื่องตรวจ|criteria checked by machine
+เกณฑ์ผ่านครบ|all criteria passed
+เกินที่คาด|over the expected
+เกินที่คาดไว้|over what was expected
+เก็บ|keep
+เก็บการ์ดเป้าหมายนี้|put away this goal card
+เก็บไฟล์ไว้ใน|keeps the files in
+เก็บไว้|keep
+เก่า|old
+เก่ากว่า|older than
+เขียน|write
+เขียนบรรทัด|write a line
+เขียนบรรทัดสถานะในไฟล์|write a status line in the file
+เขียนแผน|write a plan
+เขียนไฟล์|write file
+เข้าใจแล้วว่ามีไฟล์ซ้อน|I understand there are overlapping files
+เคยตรวจแล้ว|checked before
+เคยรันแผนนี้|has run this plan
+เครื่องตรวจผ่านหมด เหลือข้อที่ต้องดูเอง|the machine checks all passed; only items needing manual review remain
+เครื่องนี้ไม่พบโมเดลนี้ในรายการของ|this machine does not find this model in the list of
+เครื่องนี้ไม่มีโมเดลนี้|this machine does not have this model
+เครื่องไม่มีแอป|this machine does not have the app
+เคลื่อนไหว|activity
+เงียบ|quiet
+เงียบมา|quiet for
+เจอข้อผิดพลาด|found an error
+เจอหลายที่|found in several places
+เจ้า|owner
+เฉพาะ|only
+เฉพาะตอน|only when
+เฉลี่ย|average
+เชื่อมต่อ|connect
+เช่น|e.g.
+เช่น ตัวอักษรเล็กไป อ่านไม่ออกบนจอ|e.g. text too small to read on screen
+เซิร์ฟเวอร์|server
+เดาจากเวลา|guessed from time
+เดิม|original
+เดียวกัน|same
+เดียวกันพร้อมกัน|same at once
+เต็ม|full
+เต็มทุกช่อง|all slots full
+เทสต์ของงานหนึ่งอาจเห็นไฟล์ที่อีกงานแก้ค้างครึ่งทาง|one job's tests may see files another job left half-edited
+เทียบกับงานที่กำลังทำ|compared with the running job
+เทียบกับเวลาที่เคยใช้|compared with past times
+เทียบรุ่นแรกในตาราง|compared with the first model in the table
+เท่ากัน|equal
+เท่ากัน ตามตารางราคาในตัว|equal, per the built-in price table
+เท่านั้น|only
+เนคไท|necktie
+เบรก|brake
+เบราว์เซอร์ไม่อนุญาตแจ้งเตือน|the browser does not allow notifications
+เบาะว่างเขียน|the empty seat shows
+เปลี่ยน|change
+เปิด|Open
+เปิดจัดคิวอัตโนมัติ|enable auto scheduling
+เปิดตัวช่วย|open helper
+เปิดหน้าต่าง|open window
+เปิดอัตโนมัติ|opens automatically
+เปิดเว็บ|open web
+เปิดใน|open in
+เปิดในแอป|open in the app
+เป็นความเห็น ไม่เปลี่ยนผล|an opinion only; does not change the result
+เป้าหมาย|goal
+เป้าหมายผ่านครบ|goal fully passed
+เป้าหมายรอคุณตรวจ|goal awaiting your review
+เป้าหมายหยุด|goal stopped
+เฝ้าอยู่ ตัดเองถ้าโปรเซสนิ่งสนิท|watching; cuts it off itself if the process is completely idle
+เพราะอะไร|why
+เพิ่งจบ|just finished
+เพิ่ม|add
+เพิ่มบัญชี|add account
+เพิ่มบัญชีใหม่|add a new account
+เพื่อดูวิธีตั้ง|to see how to set it
+เพื่อตั้ง|to set
+เพื่อปรับความสูง|to adjust the height
+เพื่อรันคิว|to run the queue
+เพื่อโหลดหน้าใหม่|to reload the page
+เพื่อให้นับครบ|so it counts fully
+เริ่ม|start
+เริ่มงาน|start job
+เริ่มงานที่ไม่ชนกับงานที่กำลังทำเอง|starts jobs that do not conflict with running ones by itself
+เริ่มได้เลย|can start right away
+เรียกผู้ช่วย|called a sub-agent
+เรียกใช้เครื่องมือแล้ว|tool called
+เรียบร้อย|done
+เรื่อง|topic
+เลขช่องอยู่ที่โต๊ะ|the slot number is at the desk
+เลิกธงนี้|drop this flag
+เลือกจากที่เคยรัน หรือพิมพ์เอง|pick from past runs or type it yourself
+เลือกชุดเอกสารก่อน|pick a doc preset first
+เลือกผู้ให้บริการ|choose a provider
+เลือกโมเดลของ|choose the model of
+เลือกได้ชุดเดียว|only one can be chosen
+เลื่อนดูทั้งฉากได้|scroll to see the whole scene
+เลื่อนตาม|scroll along
+เล่นเสียงเมื่องานจบ|play a sound when a job finishes
+เวลา|time
+เวลาที่คาดคำนวณจากลำดับคิว|expected time computed from queue order
+เวลาที่คาดว่าจะเริ่ม|expected start time
+เวลาที่ประมาณ|estimated time
+เวลาผ่านไป|time elapsed
+เวลาว่างนับจากที่เปิดหน้านี้ ถ้าไม่เคยเห็นมีงาน|idle time counted since this page opened, if no job was ever seen
+เสร็จ|done
+เสร็จราว|done around
+เสร็จแล้ว|finished
+เสร็จแล้ว ไม่ต้องทำอะไรต่อ|finished; nothing more to do
+เสาธง|flagpole
+เสาธงเป้าหมาย|goal flagpole
+เสียง|Sound
+เสียงเมื่อผ่าน|sound on pass
+เสื้อกันเปื้อนสีทรายถือคลิปบอร์ด|sand-colored apron, holding a clipboard
+เสื้อกาวน์เขียวมิ้นต์ถือขวดทดลอง|mint-green lab coat, holding a flask
+เหตุที่เลิก เช่น ทำออกมาแย่ลงเรื่อย ๆ จะออกแบบใหม่|reason for dropping, e.g. results keep getting worse, will redesign
+เหมือน|same as
+เหลือ|remaining
+เหลือหัวเรื่อง|leaves only the title
+เหลือแถบสถานะ|leaves only the status bar
+เอกสาร|Docs
+เอง|itself
+เองได้|can do it itself
+เอาการ์ดออก|remove the card
+เอาออกจากแผงและเสาธง|removes it from the panel and flagpole
+แก้|edit
+แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้|editing here creates this machine's own file
+แก้ต้นเหตุแล้วกด|fix the cause then click
+แก้บัญชี และโมเดลของแต่ละบทบาท|edit accounts and each role's model
+แก้รอบ|fix round
+แก้เสร็จกด ดู|when done editing click View
+แก้เอง|edit it yourself
+แก้ไข|edit
+แก้ไขบัญชี|edit account
+แก้ไขรายการ|edit list
+แก้ไฟล์|edit files
+แก้ไฟล์เฉพาะที่ชุดอนุญาต|edits only files the preset allows
+แก้ไฟล์เอกสาร|edit document files
+แก้ไฟล์เอกสารจริง รอคุณรับ|edit real document files, awaiting your accept
+แจ้งเตือน|Notify
+แจ้งเตือนเมื่องานจบ|notify when a job finishes
+แดชบอร์ด|Dashboard
+แต่งตัวต่างจากคนงาน|dressed differently from the workers
+แต่ไม่กันไฟล์ครึ่งแก้|but does not guard half-edited files
+แถบม่วงใต้โต๊ะ|purple bar under the desk
+แถบล่างสุด|bottom bar
+แถบเลื่อน|scroll bar
+แถบใต้โต๊ะ|bar under the desk
+แทน|instead
+แท็บ|tab
+แนะนำ|recommended
+แบบ|mode
+แบบอ่านอย่างเดียว ไล่หาต้นตอบั๊ก|read-only, hunts for the root cause of a bug
+แปลงเหตุเป็นเกณฑ์ที่วัดได้แล้ววนรอบใหม่|turn the reason into measurable criteria and loop a new round
+แผน|plan
+แผนพิการ|broken plan
+แผนสั่ง|the plan says
+แผนสั่งให้รอ|the plan says to wait
+แผนแก้ซ้ำ|re-fix plan
+แผนแก้ซ้ำรอบ|re-fix plan round
+และประวัติยังอยู่ครบ|and the history is kept in full
+และสถานะในโปรเจกต์ยังอยู่ครบ|and the project status is kept in full
+และสองค่าต้องไม่เท่ากัน|and the two values must differ
+แล้ว|already
+แล้ว ยังทำอยู่|already, still working
+แล้วกด|then click
+แล้วงานนี้เข้าช่อง|then this job enters a slot
+แล้วรีเฟรชหน้า|then refresh the page
+แล้ววางคำสั่งนี้|then paste this command
+แล้วสลับบัญชี จะกระทบทุกงานที่รันอยู่|then switching accounts affects every running job
+แว่น|glasses
+แสดง|show
+แสดงที่โต๊ะเดิม|shown at the same desk
+แอป|app
+โควตาหมด|quota exhausted
+โควตาหมด พักก่อน|quota exhausted, pausing
+โควตาเดียวกัน|same quota
+โซฟา|sofa
+โต๊ะมีคีย์บอร์ด เมาส์ แก้วกาแฟ เอกสาร ไฟสถานะจอ เก้าอี้มีล้อ|desk with keyboard, mouse, coffee mug, documents, a status light on the monitor, rolling chair
+โต๊ะว่าง|empty desk
+โปรเจกต์|project
+โปรเจกต์ต้องตั้ง|the project must set
+โปรเจกต์นี้ยังไม่ได้ตั้ง|this project has not set this up
+โปรเจกต์เดียวกัน|same project
+โปรเจกต์เดียวกันสีเดียวกัน|same project, same color
+โปรเจกต์เดียวกันใช้|the same project uses
+โปรเซส|process
+โปรเซสขยับอยู่|process is moving
+โปรเซสนิ่ง|process idle
+โปรเซสนิ่งมา|process idle for
+โฟลเดอร์|folder
+โมดูลที่น่าจะเกี่ยว|likely related modules
+โมเดล|model
+โมเดลกำลังคิด|the model is thinking
+โมเดลของบทบาท|model of the role
+โมเดลของแต่ละบทบาท|model of each role
+โมเดลยังไม่ตอบรอบไหนเลย|the model has not replied in any round
+โมเดลเดิม|original model
+โมเดลใหม่|new model
+โหมด|mode
+โหลด|load
+โหลดรายการโมเดลใหม่|reload the model list
+โหลดสรุป|load summary
+โหลดหน้าใหม่|Reload page
+โหลดแล้ว|loaded
+ใครไม่มีงานจะมานั่งที่โซฟา|anyone without work comes to sit on the sofa
+ใช้|use
+ใช้ค่าตั้งต้นใน|use the defaults in
+ใช้ชื่อนี้|use this name
+ใช้ช่อง|uses a slot
+ใช้ตัวเลือกตามที่ใช้ครั้งล่าสุดในฟอร์มส่งงาน|uses the options last used in the submit form
+ใช้บัญชี|use account
+ใช้รายการของเครื่องนี้|use this machine's list
+ใช้อยู่|in use
+ใช้เมื่อมั่นใจว่าแผนถูก|use when sure the plan is right
+ใช้เวลา|takes
+ใช้แล้วในบัญชี|already used in the account
+ใช้โควตา|uses quota
+ใช้ได้บนเครื่องนี้ ไม่ว่าจะตั้งไว้ใน|usable on this machine, whether set in
+ใช้ได้เมื่อเครื่องนี้มีโมเดลนั้นจริง|usable when this machine really has that model
+ใต้หัวไฟล์|under the file header
+ใน|in
+ในงานที่สั่ง|in the ordered job
+ในนั้นเป็น|in there is
+ในมุมมองแดชบอร์ด|in the dashboard view
+ในรอบนี้|in this round
+ในรายการงาน|in the job list
+ในหน้าต่าง|in the window
+ในแผนไม่มีจริง|does not exist in the plan
+ในแอปเพื่อเริ่ม|in the app to start
+ในโฟลเดอร์นั้น|in that folder
+ใส่เหตุสั้น ๆ ก่อน|add a short reason first
+ใส่แว่น|wearing glasses
+ใส่โค้ทเบจ|wearing a beige coat
+ใหม่|new
+ใหม่ แล้วรีเฟรชหน้า|again, then refresh the page
+ใหม่ที่โปรเจกต์|new at the project
+ใหม่ที่โฟลเดอร์โปรเจกต์ พร้อมข้อความตรวจผลงานนี้|new at the project folder with a message to review this job
+ใหม่ในแอป|new in the app
+ให้|to
+ให้งานนี้ได้ช่องเพิ่มทันที รันพร้อมงานที่กำลังทำ|gives this job an extra slot immediately, running alongside the running jobs
+ให้ตัดสินเอง|let it decide
+ให้ทำต่อ|let it continue
+ให้นับ|let it count
+ให้รันพร้อมกันได้|allow running together
+ให้เปิด|let it open
+ไปช่องเลขอื่น|to another slot number
+ไปดู|go and see
+ไปทำงาน|go to work
+ไปทำงานแล้วเบาะว่าง|went to work, the seat is empty
+ไฟล์|files
+ไฟล์ซ้อน|overlapping files
+ไฟล์ถูกแก้ต่อแล้ว|the file was edited afterwards
+ไฟล์ที่งานนี้จะแตะ|files this job will touch
+ไฟล์ที่เก่ากว่า|older files
+ไฟล์นอกขอบเขตที่|files outside the scope that
+ไฟล์นั้นเอง|that file itself
+ไฟล์เป้าหมาย|target file
+ไฟล์เอกสารจะอยู่ใน|the document files will be in
+ไฟล์แผน|plan file
+ไม่|not
+ไม่ขยับ|not moving
+ไม่ฆ่าทั้งงาน|does not kill the whole job
+ไม่จำค่าไว้ ต้องติ๊กทุกครั้ง|the value is not remembered; tick it every time
+ไม่ตรวจ|no check
+ไม่ตอบ|no reply
+ไม่ติ๊กเลย|none ticked
+ไม่ถอยโค้ดให้|does not roll back code
+ไม่ถึง|less than
+ไม่ทิ้ง|do not discard
+ไม่นับรอบ|not counted as a round
+ไม่นับรอบ แค่อัปเดตผล|not counted as a round; only updates the result
+ไม่ผ่าน|failed
+ไม่ผ่าน ที่แต่ละข้อ|failed on each item
+ไม่ผ่านหน้าเสีย|failed at the front
+ไม่พบ|not found
+ไม่พบชื่อ|name not found
+ไม่พบฐานข้อมูลของ|database not found for
+ไม่พบผู้ให้บริการที่ตรงกับ|no provider matches
+ไม่พบโมเดลที่ตรงกับ|no model matches
+ไม่พบในเครื่อง|not found on this machine
+ไม่มี|none
+ไม่มีคิวรอ|no queue waiting
+ไม่มีงาน|no jobs
+ไม่มีงานค้าง|no pending jobs
+ไม่มีงานที่กำลังทำ|no running jobs
+ไม่มีงานรอคิว|no queued jobs
+ไม่มีงานในคิว|no jobs in the queue
+ไม่มีงานใหม่ตั้งแต่รอบก่อน|no new work since the previous round
+ไม่มีจริง|does not exist
+ไม่มีชื่อ|no name
+ไม่มีธง|no flag
+ไม่มีประวัติที่ตรงเงื่อนไข|no history matches the filter
+ไม่มีผู้สืบในโปรเจกต์นี้ก่อนแผนนี้|no investigator in this project before this plan
+ไม่มีรายการบัญชี|no account list
+ไม่มีอะไรให้ลบ|nothing to delete
+ไม่มีแอป|no app
+ไม่มีใครนั่งโซฟา|nobody on the sofa
+ไม่มีใน|not in
+ไม่มีไฟล์|no files
+ไม่มีไฟล์ซ้อน|no overlapping files
+ไม่รวมการรอเพราะไฟล์ชนกัน ซึ่งอาจทำให้ช้ากว่านี้|excludes waiting caused by file conflicts, which may make it slower
+ไม่ลบ|do not delete
+ไม่วนต่อ|do not loop on
+ไม่สั่ง|do not command
+ไม่ส่ง|do not send
+ไม่หยุดให้เอง กดยกเลิกงานที่โต๊ะ|does not stop by itself; click cancel job at the desk
+ไม่อยู่แล้ว|no longer exists
+ไม่เกิน|no more than
+ไม่เกี่ยวกับโซฟาห้องพัก|unrelated to the lounge sofa
+ไม่เจอ|not found
+ไม่เบรก|no brake
+ไม่เริ่มทำงาน|did not start working
+ไม่เห็นข้อความที่ต้องเห็น|did not see the expected message
+ไม่แตะ|does not touch
+ไม่แตะงานที่รอคิว|does not touch queued jobs
+ไม่แตะไฟล์ใน|does not touch files in
+ไม่ใช่ค่ารับประกัน|not a guaranteed value
+ไม่ใช่รอบของเป้าหมาย|not a round of a goal
+ไม่ใช่รอบของเป้าหมาย ไม่มีธง|not a round of a goal; no flag
+ไม่ให้|not to
+ไม่ได้|cannot
+ไม่ได้มาจากงาน|did not come from a job
+ไม่ได้รับอนุญาต|not authorized
+ไหนทำ|which is doing it
+ไอคอนข้างเลข|the icon next to the number
+ตั้งค่า|Setup
+วิซาร์ดตั้งค่าครั้งแรก|first-run setup wizard
+ตรวจเครื่อง|check this machine
+ติดตั้งคำสั่ง|install commands
+เลือกโมเดล|choose models
+ตั้งค่าโปรเจกต์|set up a project
+ติดตั้ง|installed
+เหมือนเดิม|unchanged
+ข้าม|skipped
+หมายเหตุ|note
+สร้าง|created
+ต้องเป็น path เต็มของโฟลเดอร์ที่มีอยู่จริง|must be the full path of an existing folder
+ไม่ได้มาจาก|not from
+รุ่นที่ติดตั้ง|installed revision`.split("\n").forEach((l) => { const i = l.indexOf("|"); if (i > 0) EN[l.slice(0, i)] = l.slice(i + 1); });
+  const RUN = /[ก-๙][ก-๙ ]*[ก-๙]|[ก-๙]/g, ATTRS = ["title", "placeholder", "aria-label"], SKIP = new Set(["SCRIPT", "STYLE", "TEXTAREA", "TITLE"]);
+  const trText = (s) => s.replace(/: (ปิด|เปิด)(?![ก-๙])/g, (m, a) => ": " + (a === "ปิด" ? "Off" : "On"))
+    .replace(RUN, (run) => EN[run] ?? (run.includes(" ") ? run.split(" ").map((w) => EN[w] ?? w).join(" ") : run));
+  const trAttr = (el) => ATTRS.forEach((a) => { const o = el.getAttribute(a); if (o) { const v = trText(o); if (v !== o) el.setAttribute(a, v); } });
+  const trNode = (n) => {
+    if (n.nodeType === 3) {
+      const p = n.parentNode;
+      if (!p || SKIP.has(p.nodeName) || (p.closest && p.closest("#log"))) return;
+      const v = trText(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v;
+    } else if (n.nodeType === 1 && !SKIP.has(n.nodeName) && n.id !== "log" && !(n.closest && n.closest("#log"))) {
+      trAttr(n); n.childNodes.forEach(trNode);
+    }
+  };
+  document.documentElement.lang = "en";
+  trNode(document.body);
+  new MutationObserver((ms) => ms.forEach((m) => {
+    if (m.type === "characterData") trNode(m.target);
+    else if (m.type === "attributes") trAttr(m.target);
+    else m.addedNodes.forEach(trNode);
+  })).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS });
+}
+
+/* ---------- วิซาร์ดตั้งค่าครั้งแรก ---------- ข้อความใช้ T(ไทย, อังกฤษ) ตรงนี้เลย (ไม่ผ่านพจนานุกรมแปล) */
+const T = (th, en) => (LANG === "en" ? en : th);
+const su = { step: 1, st: null, hooks: true, busy: false, out: "", initOut: "", project: "" };
+const suStore = { get() { try { return sessionStorage.getItem("flashq.suSkip"); } catch (e) { return null; } }, set(v) { try { sessionStorage.setItem("flashq.suSkip", v); } catch (e) {} } };
+async function suLoad() {
+  try { su.st = await (await fetch("/api/setup")).json(); } catch (e) { su.st = null; }
+}
+function suOpen(step = 1) {
+  su.step = step; su.out = su.initOut = "";
+  const d = $("setupDlg"); if (!d.open) d.showModal();
+  suRender();
+  suLoad().then(suRender);
+}
+function suRow(ok, title, hint) {
+  return `<div class="su-row"><span>${ok === null ? "⏳" : ok === "warn" ? "⚠️" : ok ? "✅" : "❌"}</span><div><b>${title}</b>${hint ? `<div class="muted" style="font-size:0.88em">${hint}</div>` : ""}</div></div>`;
+}
+function suRender() {
+  const st = su.st, n = su.step, names = [T("ยินดีต้อนรับ", "Welcome"), T("ตรวจเครื่อง", "Check"), T("ติดตั้ง", "Install"), T("โมเดล", "Models"), T("โปรเจกต์", "Project")];
+  $("suTitle").textContent = T("ตั้งค่า flashq ครั้งแรก", "flashq first-run setup");
+  $("suX").title = T("ปิด", "Close");
+  $("suSteps").innerHTML = names.map((nm, i) => `<button type="button" class="wz-st${i + 1 === n ? " on" : i + 1 < n ? " done" : ""}" data-sustep="${i + 1}"><i>${i + 1 < n ? "✓" : i + 1}</i>${nm}</button>`).join("");
+  let h = "";
+  if (n === 1) {
+    h = `<p>${T("flashq คือคิวกลางที่ส่งงานให้ DeepSeek Flash (ผ่าน opencode) ทำตามแผน แล้วให้ Claude ตรวจผล — วิซาร์ดนี้พาตั้งค่าให้ใช้งานได้ภายในไม่กี่ขั้น", "flashq is a central queue that sends plan-driven work to DeepSeek Flash (through opencode) and lets Claude check the result. This wizard gets you set up in a few steps.")}</p>
+      <p><b>${T("ภาษา", "Language")}</b></p><div class="su-lang">
+      <button type="button" data-sulang="th"${LANG === "th" ? ' class="primary"' : ""}>ไทย</button><button type="button" data-sulang="en"${LANG === "en" ? ' class="primary"' : ""}>English</button></div>
+      <p class="muted" style="font-size:0.88em">${T("เปลี่ยนภาษาได้ทุกเมื่อที่ปุ่ม 🌐 มุมบนขวา · เปิดวิซาร์ดนี้ใหม่ได้ที่ปุ่ม 🧭", "Change it any time with the 🌐 button at the top · reopen this wizard with the 🧭 button.")}</p>`;
+  } else if (!st) {
+    h = `<p>${T("กำลังตรวจเครื่อง…", "Checking this machine…")}</p>`;
+  } else if (n === 2) {
+    const i = st.install, hk = Object.values(st.hooks).filter(Boolean).length, hn = Object.keys(st.hooks).length;
+    h = suRow(st.opencode.ok, "opencode", st.opencode.ok ? esc(st.opencode.path)
+        : T('ไม่พบใน PATH — ติดตั้ง <a href="https://opencode.ai" target="_blank" rel="noopener">opencode</a> ก่อน แล้วรีสตาร์ต flashq ui', 'Not found in PATH — install <a href="https://opencode.ai" target="_blank" rel="noopener">opencode</a> first, then restart flashq ui'))
+      + suRow(st.claude_home.exists ? true : "warn", T("โฟลเดอร์ Claude Code", "Claude Code folder"), esc(st.claude_home.path) + (st.claude_home.exists ? "" : T(" — ยังไม่มี (ติดตั้งแล้วจะสร้างให้ · ถ้าไม่ใช้ Claude Code ก็ข้ามได้)", " — does not exist yet (install will create it; ignore it if you do not use Claude Code)")))
+      + suRow(i.ok, T("คำสั่ง /flash-* และ agent", "/flash-* commands and agents"), T(`ตรงต้นฉบับ ${i.same} · ล้าหลัง ${i.stale} · ยังไม่ติดตั้ง ${i.missing}${i.foreign ? ` · ข้ามไฟล์ของคุณเอง ${i.foreign}` : ""}`, `up to date ${i.same} · stale ${i.stale} · missing ${i.missing}${i.foreign ? ` · your own files skipped ${i.foreign}` : ""}`))
+      + suRow(hk === hn ? true : "warn", T("hook ป้องกัน (ไม่บังคับ แต่แนะนำ)", "Guard hooks (optional, recommended)"), T(`ลงทะเบียนแล้ว ${hk}/${hn}`, `registered ${hk}/${hn}`) + (st.python ? "" : T(" — ไม่พบ python ใน PATH hook จะรันไม่ได้", " — python not found in PATH, hooks cannot run")))
+      + suRow(st.models.ok, T("โมเดลของทุกบทบาท", "Models for every role"), st.models.count ? (st.models.ok ? T(`ใช้ได้ทุกบทบาท (เครื่องนี้มี ${st.models.count} โมเดล)`, `all roles usable (${st.models.count} models on this machine)`) : T(`ยังไม่ตั้ง/ใช้ไม่ได้: ${esc(st.models.bad.join(", "))}`, `not set or unusable: ${esc(st.models.bad.join(", "))}`)) : esc(st.models.note || T("อ่านรายการโมเดลไม่ได้", "could not read the model list")));
+  } else if (n === 3) {
+    const i = st.install;
+    h = `<p>${T("ติดตั้งคำสั่งและ agent ไปที่ <code>~/.claude/</code> กับ <code>~/.config/opencode/</code> (ไฟล์ของคุณเองที่ชื่อซ้ำจะไม่ถูกทับ)", "Copies the commands and agents into <code>~/.claude/</code> and <code>~/.config/opencode/</code> (your own files with the same name are never overwritten).")}</p>
+      <label><input type="checkbox" id="suHooks"${su.hooks ? " checked" : ""}> ${T("ลงทะเบียน hook ป้องกันใน <code>~/.claude/settings.json</code> (แนะนำ)", "Register the guard hooks in <code>~/.claude/settings.json</code> (recommended)")}</label>
+      ${suRow(i.ok, T("สถานะตอนนี้", "Current state"), T(`ตรงต้นฉบับ ${i.same} · ล้าหลัง ${i.stale} · ยังไม่ติดตั้ง ${i.missing}`, `up to date ${i.same} · stale ${i.stale} · missing ${i.missing}`))}
+      ${su.out ? `<pre class="su-out mono">${esc(su.out)}</pre>` : ""}
+      <p class="muted" style="font-size:0.88em">${T("ได้ผลใน session ใหม่ของ Claude Code / หลังรีโหลด opencode desktop", "Takes effect in a new Claude Code session / after reloading opencode desktop.")}</p>`;
+  } else if (n === 4) {
+    const m = st.models;
+    h = suRow(m.ok, T("โมเดลของแต่ละบทบาท", "Model of each role"), m.count ? (m.ok ? T("ทุกบทบาทมีโมเดลที่ใช้ได้บนเครื่องนี้", "every role has a model that works on this machine") : T(`ต้องตั้ง: ${esc(m.bad.join(", "))}`, `needs setting: ${esc(m.bad.join(", "))}`)) : esc(m.note || T("อ่านรายการโมเดลไม่ได้ — ตรวจว่า opencode ใช้งานได้", "could not read the model list — check that opencode works")))
+      + `<div class="row" style="margin-top:0.5rem"><button type="button" class="primary" data-suact="accounts">${T("เปิดตัวจัดการบัญชีและโมเดล", "Open the account & model manager")}</button><button type="button" data-suact="recheck">${T("ตรวจอีกครั้ง", "Re-check")}</button></div>
+      <p class="muted" style="font-size:0.88em">${T("เลือกผู้ให้บริการ/โมเดลที่ล็อกอินไว้ใน opencode แล้วตั้งให้แต่ละบทบาท (ผู้ทำ · ผู้ตรวจ · ผู้สืบ · นักทดสอบ · ช่างเอกสาร) · ข้ามได้ แล้วมาตั้งทีหลัง", "Pick a provider/model you are logged into in opencode and assign it to each role (worker, checker, investigator, tester, doc writer). You can skip this and set it later.")}</p>`;
+  } else {
+    h = `<p>${T("ตั้งค่าโปรเจกต์แรก: สร้าง <code>.flash.json</code> · <code>.gitignore</code> (.tmp/) · แม่แบบแผน — ไม่ commit/push ให้", "Set up your first project: creates <code>.flash.json</code>, a <code>.tmp/</code> entry in <code>.gitignore</code> and the plan template — nothing is committed or pushed.")}</p>
+      <label class="field"><span>${T("โปรเจกต์ (path เต็ม)", "Project (full path)")}</span><input id="suProj" list="projList" value="${esc(su.project)}" placeholder="D:\\MyCode\\..." autocomplete="off"></label>
+      <div class="row"><button type="button" class="primary" data-suact="init"${su.busy ? " disabled" : ""}>${T("ตั้งค่าโปรเจกต์นี้", "Set up this project")}</button></div>
+      ${su.initOut ? `<pre class="su-out mono">${esc(su.initOut)}</pre>` : ""}
+      <p class="muted" style="font-size:0.88em">${T("ข้ามได้ — ทำทีหลังด้วย <code>flashq init</code> ในโฟลเดอร์โปรเจกต์ · เริ่มส่งงานที่ปุ่ม ＋ ส่งงานใหม่ หรือ <code>/flash-plan</code> ใน Claude Code", "Skippable — do it later with <code>flashq init</code> in the project folder. Send work with the ＋ New job button or <code>/flash-plan</code> in Claude Code.")}</p>`;
+  }
+  $("suBody").innerHTML = h;
+  $("suFoot").innerHTML = `<button type="button" data-suact="skip">${T("ข้ามไปก่อน", "Skip for now")}</button>`
+    + (n > 1 ? `<button type="button" data-suact="back">${T("ย้อนกลับ", "Back")}</button>` : "")
+    + (n < 5 ? `<button type="button" class="primary" data-suact="${n === 3 ? "install" : "next"}"${su.busy ? " disabled" : ""}>${n === 3 ? T("ติดตั้งตอนนี้", "Install now") : T("ถัดไป", "Next")}</button>`
+      : `<button type="button" class="primary" data-suact="finish">${T("เสร็จสิ้น", "Finish")}</button>`);
+}
+async function suAct(act) {
+  if (act === "skip") { suStore.set("1"); return $("setupDlg").close(); }
+  if (act === "back") { su.step = Math.max(1, su.step - 1); return suRender(); }
+  if (act === "next") { su.step = Math.min(5, su.step + 1); return suRender(); }
+  if (act === "recheck") { await suLoad(); return suRender(); }
+  if (act === "accounts") return wzOpen();
+  if (act === "install") {
+    su.hooks = !!($("suHooks") || {}).checked; su.busy = true; su.out = T("กำลังติดตั้ง…", "Installing…"); suRender();
+    const r = await post("/api/setup_install", { hooks: su.hooks });
+    su.busy = false; su.out = r.output || r.message || ""; if (r.status) su.st = r.status; suRender();
+    if (r.ok) toast(T("ติดตั้งแล้ว", "Installed"));
+    return;
+  }
+  if (act === "init") {
+    su.project = $("suProj").value.trim(); su.busy = true; su.initOut = T("กำลังตั้งค่า…", "Setting up…"); suRender();
+    const r = await post("/api/setup_init", { project: su.project });
+    su.busy = false; su.initOut = r.output || r.message || ""; suRender();
+    return;
+  }
+  if (act === "finish") { await post("/api/setup_done", { done: true }); $("setupDlg").close(); toast(T("ตั้งค่าเสร็จแล้ว — เริ่มส่งงานได้เลย", "Setup complete — you can start sending jobs")); }
+}
+$("setupDlg").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  if (b.id === "suX") { suStore.set("1"); return $("setupDlg").close(); }
+  if (b.dataset.sustep) { su.step = +b.dataset.sustep; return suRender(); }
+  if (b.dataset.sulang) { if (b.dataset.sulang !== LANG) { store.set("lang", b.dataset.sulang); try { sessionStorage.setItem("flashq.suResume", "2"); } catch (e) {} location.reload(); } return; }
+  if (b.dataset.suact) suAct(b.dataset.suact);
+});
+$("setupBtn").onclick = () => suOpen(1);
+(async () => {
+  let resume = null; try { resume = sessionStorage.getItem("flashq.suResume"); sessionStorage.removeItem("flashq.suResume"); } catch (e) {}
+  if (resume) return suOpen(+resume || 2);
+  if (suStore.get()) return;
+  await suLoad();
+  if (su.st && !su.st.done && su.st.needed) suOpen(1);
+})();
 
 /* ---------- zoom + layout ---------- */
 const ZOOMS = [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2, 2.4];

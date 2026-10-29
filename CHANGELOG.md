@@ -2,6 +2,10 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-10-29
+- **ui: สลับภาษาไทย/อังกฤษได้ (ปุ่ม 🌐 มุมบนขวา)**: ข้อความต้นฉบับยังเป็นไทย — โหมด English แปลตอนแสดงผลด้วยพจนานุกรมใน `ui.html` (ท่อนที่ไม่มีในพจนานุกรม เช่น ข้อความจาก server/ชื่องานของผู้ใช้ คงเป็นไทย) · เบราว์เซอร์ที่ภาษาไม่ใช่ไทยเริ่มเป็น English เอง · ชื่อแท็บ/หน้าต่างไม่แปล
+- **ui: วิซาร์ดตั้งค่าครั้งแรก (ปุ่ม 🧭)**: 5 ขั้น — ภาษา · ตรวจเครื่อง (opencode / คำสั่ง / hook / โมเดล) · ติดตั้งคำสั่ง+hook · เลือกโมเดลของแต่ละบทบาท (เปิดตัวจัดการบัญชีเดิม) · ตั้งค่าโปรเจกต์แรก (`init`) · เด้งเองเมื่อเครื่องยังตั้งไม่ครบและยังไม่เคยกดเสร็จสิ้น (กดข้ามได้ต่อ session) · endpoint ใหม่ `/api/setup` `/api/setup_install` `/api/setup_init` `/api/setup_done`
+
 ## 2026-10-27
 - **GitHub Actions build ชุดแจกครบ 3 OS แล้วแนบ release เอง**: push tag `v*` → build บน Windows / macOS / Linux (`tools/build_release.py` + `.github/workflows/release.yml`) ได้ `flashq-<tag>-win.zip` · `-macos.tar.gz` · `-linux.tar.gz` แนบเข้า release (มี release อยู่แล้ว = แนบทับ ไม่แตะ notes) · กด Run workflow เองได้เพื่อแนบ tag เก่า · macOS/Linux ยังทดลอง (ฟีเจอร์ toast/ตัวเฝ้า shell ผูก Windows · exe ไม่ได้เซ็น) · `CLI_EXE` ไม่ใส่ `.exe` บนระบบที่ไม่ใช่ Windows
 

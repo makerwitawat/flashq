@@ -777,6 +777,53 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ข้าม", r.stdout)
 
+    def test_ui_setup_wizard_endpoints(self):
+        """ui: วิซาร์ดตั้งค่าครั้งแรก — /api/setup บอกสถานะ (ยังไม่ติดตั้ง = needed) · setup_install ติดตั้งลง claude home ชั่วคราว · setup_init สร้าง .flash.json · setup_done จำไว้ · ต้องมี token · path ผิด = 400"""
+        claude = self.tmp / "claude_home_wiz"
+        self.env["FLASHQ_CLAUDE_HOME"] = str(claude)
+        base = self.start_ui()
+        page = self.http(base + "/")[1]
+        token = re.search(r'const TOKEN = "([^"]+)"', page).group(1)
+        self.assertIn('id="setupDlg"', page)
+        self.assertIn('id="langBtn"', page)
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": token}
+
+        def post(path, **kw):
+            code, body = self.http(base + path, json.dumps(kw).encode(), hdr)
+            return code, json.loads(body)
+
+        st = json.loads(self.http(base + "/api/setup")[1])
+        self.assertFalse(st["done"])
+        self.assertTrue(st["needed"])
+        self.assertGreater(st["install"]["missing"], 0)
+        self.assertFalse(claude.exists(), "/api/setup ต้องอ่านอย่างเดียว")
+        self.assertEqual(self.http(base + "/api/setup_install", b"{}", {"Content-Type": "application/json"})[0], 403)  # ไม่มี token
+
+        code, d = post("/api/setup_install", hooks=False)
+        self.assertEqual(code, 200, d)
+        self.assertEqual(d["status"]["install"]["missing"], 0)
+        self.assertTrue((claude / "commands" / "flash-plan.md").exists())
+        self.assertFalse(any(d["status"]["hooks"].values()), "ไม่ติ๊ก hooks = ไม่ลงทะเบียน")
+
+        code, d = post("/api/setup_init", project="relative/path")
+        self.assertEqual(code, 400, d)
+        proj = self.tmp / "wiz_proj"
+        proj.mkdir()
+        code, d = post("/api/setup_init", project=str(proj))
+        self.assertEqual(code, 200, d)
+        self.assertTrue((proj / ".flash.json").exists())
+
+        self.assertEqual(post("/api/setup_done", done=True)[0], 200)
+        self.assertTrue(json.loads(self.http(base + "/api/setup")[1])["done"])
+
+    def test_ui_english_dictionary_has_no_conflicts(self):
+        """ui: พจนานุกรมแปลอังกฤษต้องไม่มีคีย์ซ้ำ (คีย์ซ้ำ = ตัวหลังทับตัวแรกเงียบ ๆ) และทุกบรรทัดมีรูป ไทย|English"""
+        html = (REPO / "ui.html").read_text(encoding="utf-8")
+        body = re.search(r"const EN = \{\};\s*`(.*?)`", html, re.S).group(1).strip().split("\n")
+        keys = [l.split("|", 1)[0] for l in body]
+        self.assertTrue(all("|" in l and l.split("|", 1)[1].strip() for l in body))
+        self.assertEqual([k for k in set(keys) if keys.count(k) > 1], [])
+
     def test_run_guard_hook(self):
         """ยามส่งงาน: คำสั่งส่งงานต้อง run_in_background จริง · `&` · sleep · nohup · Start-Process · ต่อท่อ head/tail = บล็อก (exit 2) · ถูกวิธี = ผ่านพร้อมคำเตือน · คำสั่งอื่น/--help/ปิดยาม = เงียบ"""
         guard = REPO / "hooks" / "run_guard.py"
