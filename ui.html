@@ -1918,7 +1918,8 @@ function suRender() {
   $("suBody").innerHTML = h;
   $("suFoot").innerHTML = `<button type="button" data-suact="skip">${T("ข้ามไปก่อน", "Skip for now")}</button>`
     + (n > 1 ? `<button type="button" data-suact="back">${T("ย้อนกลับ", "Back")}</button>` : "")
-    + (n < 5 ? `<button type="button" class="primary" data-suact="${n === 3 ? "install" : "next"}"${su.busy ? " disabled" : ""}>${n === 3 ? T("ติดตั้งตอนนี้", "Install now") : T("ถัดไป", "Next")}</button>`
+    + (n === 3 ? `<button type="button"${su.st.install.ok ? "" : ' class="primary"'} data-suact="install"${su.busy ? " disabled" : ""}>${su.st.install.ok ? T("ติดตั้งซ้ำ", "Reinstall") : T("ติดตั้งตอนนี้", "Install now")}</button>` : "")
+    + (n < 5 ? `<button type="button"${n === 3 && !su.st.install.ok ? "" : ' class="primary"'} data-suact="next"${su.busy ? " disabled" : ""}>${T("ถัดไป", "Next")}</button>`
       : `<button type="button" class="primary" data-suact="finish">${T("เสร็จสิ้น", "Finish")}</button>`);
 }
 async function suAct(act) {
