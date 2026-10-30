@@ -885,12 +885,13 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
             time.sleep(0.5)
             continue
         ids = ", ".join(h.get("id", "?") for h in held) or "-"
+        ids_named = ", ".join(h.get("id", "?") + (f" ({Path(h['project']).name})" if h.get("project") else "") for h in held) or "-"
         if no_wait:
             print(f"FLASH_RUN=BUSY มีงานอื่นทำอยู่ job={ids} (ช่อง {len(held)}/{limit})", flush=True)
             return "busy"
         pos = len(ahead) + 1
         if (pos, len(held), limit, reason) != last:
-            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids} · ช่อง {len(held)}/{limit})"
+            print(f"QUEUED ตำแหน่ง {pos} (กำลังทำ: {ids_named} · ช่อง {len(held)}/{limit})"
                   + (f" · {reason}" if reason else "") + " — รอคิว…", flush=True)
             last = (pos, len(held), limit, reason)
             if not queued_hint:
@@ -6068,6 +6069,9 @@ def hide_child_consoles() -> None:
     subprocess.Popen.__init__ = init
 
 
+GUI_PORT = 4098
+
+
 def cmd_gui(a) -> int:
     """หน้าต่างแอป (WebView2 ผ่าน pywebview) แทนการเปิดเบราว์เซอร์ — server เดิมรันในเธรด · pywebview ต้องติดตั้งแยก (ไม่บังคับสำหรับคำสั่งอื่น)"""
     try:
@@ -6078,8 +6082,10 @@ def cmd_gui(a) -> int:
     try:
         srv, _ = make_ui_server(a.port)
     except OSError as e:
-        print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
-        return 1
+        if a.port != GUI_PORT:
+            print(f"FAIL: เปิดพอร์ต {a.port} ไม่ได้ ({e}) — ลอง --port อื่น")
+            return 1
+        srv, _ = make_ui_server(0)  # พอร์ตประจำถูกใช้อยู่ (เช่น เปิดแอปซ้อน) → สุ่มพอร์ต ค่าที่ตั้งไว้ในหน้าจอจะไม่ตามมา
     hide_child_consoles()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=ui_models, daemon=True).start()
@@ -6099,7 +6105,10 @@ def cmd_gui(a) -> int:
             time.sleep(1)
 
     win.events.shown += lambda: threading.Thread(target=on_shown, daemon=True).start()
-    webview.start(debug=False)  # ปิดหน้าต่าง = จบโปรแกรม
+    try:  # เก็บ localStorage ลงดิสก์ (ภาษา/ขนาดฟอนต์/ธีม) · origin ต้องคงที่ด้วย (GUI_PORT) ไม่งั้นค่าหาย
+        webview.start(debug=False, private_mode=False, storage_path=str(HOME / "webview"))  # ปิดหน้าต่าง = จบโปรแกรม
+    except TypeError:  # pywebview รุ่นเก่าไม่มีพารามิเตอร์นี้
+        webview.start(debug=False)
     srv.shutdown()
     srv.server_close()
     return 0
@@ -7944,7 +7953,7 @@ def main() -> int:
     ui.add_argument("--no-open", action="store_true", help="ไม่เปิดเบราว์เซอร์ให้")
     ui.set_defaults(fn=cmd_ui)
     gu = sp.add_parser("gui", help="หน้าต่างแอป (ไม่ใช้เบราว์เซอร์ · ต้องมี pywebview)")
-    gu.add_argument("--port", type=int, default=0, help="0 = สุ่มพอร์ตว่าง")
+    gu.add_argument("--port", type=int, default=GUI_PORT, help=f"พอร์ตประจำของหน้าต่างแอป ({GUI_PORT} · คงที่เพื่อให้จำค่าที่ตั้งไว้ได้ · ถูกใช้อยู่จะสุ่มให้) · 0 = สุ่มพอร์ตว่าง")
     gu.set_defaults(fn=cmd_gui)
     if FROZEN and len(sys.argv) == 1 and Path(sys.argv[0]).stem.endswith("gui"):  # ดับเบิลคลิก flashq-gui.exe = เปิดหน้าต่างแอป
         sys.argv.append("gui")
