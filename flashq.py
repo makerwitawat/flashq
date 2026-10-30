@@ -5806,14 +5806,19 @@ def make_ui_server(port: int = 4097):
             return self._send(404, {"error": "ไม่พบ"})
 
         def do_POST(self):
+            # อ่าน body ทิ้งก่อนตอบ 403 — ถ้าปิดการเชื่อมต่อทั้งที่ body ยังค้างรับ Windows จะส่ง RST ทำให้ฝั่งเรียกอ่านคำตอบไม่ได้ (ConnectionResetError)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(min(n, 65536)) if n > 0 else b""
+            except (ValueError, OSError):
+                n, raw = 0, b""
             if not self._host_ok():
                 return self._host_denied()
             if not secrets.compare_digest(self.headers.get("X-Flashq-Token", "").encode("utf-8"), token.encode("utf-8")):
                 return self._send(403, {"error": "ไม่ได้รับอนุญาต: token ของหน้านี้หมดอายุ (server รีสตาร์ตหรือเปิดหน้าไว้นานเกินไป) — "
                                                  "รีเฟรชหน้า (Ctrl+F5) แล้วกดอีกครั้ง · ถ้ายังไม่ได้ ตรวจว่าไม่มี flashq ui ซ้อนอยู่หลายพอร์ต", "code": "token"})
             try:
-                n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+                body = json.loads(raw or b"{}")
             except ValueError:
                 return self._send(400, {"error": "body ต้องเป็น JSON"})
             path = urlparse(self.path).path
