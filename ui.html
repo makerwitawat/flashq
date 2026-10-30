@@ -241,7 +241,9 @@ kbd { font: 0.8rem Consolas, monospace; border: 1px solid var(--line); border-ra
 .of-body { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .of-colL, .of-colR { display: grid; gap: 1rem; min-width: 0; align-content: start; }
 body[data-of="2"] .of-body { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
-body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; align-self: start; max-height: calc(100vh - 4.9rem); overflow-y: auto; overscroll-behavior: contain; }  /* ฉากออฟฟิศตามหน้าจอ เมื่อคอลัมน์ขวายาว · สูงเกินจอ (ฉาก+วิธีอ่านภาพ) = เลื่อนในคอลัมน์ซ้ายเอง */
+body[data-of="2"] .of-colL { position: sticky; top: 4.2rem; align-self: start; max-height: calc(100vh - 4.9rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+body[data-of="2"] .of-colL:hover { scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }  /* แถบเลื่อนซ้อนในคอลัมน์ซ้าย: เบาและบางมาก โผล่ตอนชี้เท่านั้น ไม่แย่งสายตาจากแถบของหน้าหลัก */
+/* ฉากออฟฟิศตามหน้าจอ เมื่อคอลัมน์ขวายาว · สูงเกินจอ (ฉาก+วิธีอ่านภาพ) = เลื่อนในคอลัมน์ซ้ายเอง */
 body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: minmax(0, 1fr); }
 .of-cards { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); align-items: start; }  /* การ์ดย่อไม่ถูกยืดสูงตามใบข้าง ๆ */
 .of-card { background: var(--panel); border: 1px solid var(--line); border-radius: 0.55rem; padding: 0.6rem 0.8rem; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }  /* คอลัมน์ไม่ขยายตามข้อความยาว (ไม่ล้นทับการ์ดข้าง ๆ) */
