@@ -6624,7 +6624,7 @@ def usage_summary(stem: str, sessions: list[dict], project: str, since_days: flo
 
 def fmt_tok(n) -> str:
     n = int(n or 0)
-    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k" if n >= 1000 else str(n)
+    return f"{n / 1e6:,.1f}M" if n >= 1e6 else f"{n / 1e3:,.0f}k" if n >= 1000 else f"{n:,}"
 
 
 def usage_brief(stem: str) -> dict:
@@ -6713,18 +6713,18 @@ def cmd_usage(a) -> int:
             continue
         write_json(USAGE_DIR / f"{stem}.json", u)
         t = u["total"]
-        print(f"\n== {stem} · {u['sessions']} session · Claude ใช้ ~{fmt_tok(t['tokens'])} token (~${t['usd']:.2f} โดยประมาณ)")
+        print(f"\n== {stem} · {u['sessions']} session · Claude ใช้ ~{fmt_tok(t['tokens'])} token (~${t['usd']:,.2f} โดยประมาณ)")
         print(f"{'ขั้น':<10}{'session':>8}{'in ใหม่':>10}{'cache เขียน':>12}{'cache อ่าน':>12}{'out':>9}{'~USD':>9}{'%':>5}")
         for k, th in USAGE_PHASES:
             bp = u["by_phase"].get(k)
             if bp:
                 print(f"{th:<10}{bp['sessions']:>8}{fmt_tok(bp['in']):>10}{fmt_tok(bp['cache_write']):>12}{fmt_tok(bp['cache_read']):>12}{fmt_tok(bp['out']):>9}{bp['usd']:>9.2f}{bp['pct']:>4}%")
         print(f"{'รวม':<10}{u['sessions']:>8}{fmt_tok(t['in']):>10}{fmt_tok(t['cache_write']):>12}{fmt_tok(t['cache_read']):>12}{fmt_tok(t['out']):>9}{t['usd']:>9.2f}")
-        print("โมเดล: " + " · ".join(f"{m} {bm['sessions']} session {bm['calls']} ครั้ง ~${bm['usd']:.2f}" for m, bm in sorted(u["by_model"].items())))
+        print("โมเดล: " + " · ".join(f"{m} {bm['sessions']} session {bm['calls']} ครั้ง ~${bm['usd']:,.2f}" for m, bm in sorted(u["by_model"].items())))
         if u["unknown_price"]:
             print(f"  (ไม่รู้ราคาของ {', '.join(u['unknown_price'])} → ตั้งใน {CONFIG} ช่อง prices)")
         for r in u["session_list"]:
-            print(f"  {r['id'][:8]} {ph_th[r['phase']]:<8} {r['first'][:16].replace('T', ' ')} {fmt_tok(r['tokens']):>7} ~${r['usd']:.2f} [{' '.join(r['flags']) or '-'}] {r['title'][:50]}")
+            print(f"  {r['id'][:8]} {ph_th[r['phase']]:<8} {r['first'][:16].replace('T', ' ')} {fmt_tok(r['tokens']):>7} ~${r['usd']:,.2f} [{' '.join(r['flags']) or '-'}] {r['title'][:50]}")
             if r["id"] not in seen_sessions:
                 seen_sessions.add(r["id"])
                 for k in USAGE_KEYS + ("usd",):
@@ -6734,7 +6734,7 @@ def cmd_usage(a) -> int:
         if not stems:
             print("ไม่พบ session ที่พูดถึงแผน PLAN_* ในช่วงนี้")
             rc = 1
-        print(f"\nรวมทั้งโปรเจกต์ (session ไม่ซ้ำ {len(seen_sessions)}): in ใหม่ {fmt_tok(grand['in'] + grand['cache_write'])} · cache อ่าน {fmt_tok(grand['cache_read'])} · out {fmt_tok(grand['out'])} · ~${grand['usd']:.2f}")
+        print(f"\nรวมทั้งโปรเจกต์ (session ไม่ซ้ำ {len(seen_sessions)}): in ใหม่ {fmt_tok(grand['in'] + grand['cache_write'])} · cache อ่าน {fmt_tok(grand['cache_read'])} · out {fmt_tok(grand['out'])} · ~${grand['usd']:,.2f}")
     print(f"(ราคาโดยประมาณจากตารางในตัว · ทับได้ที่ {CONFIG} ช่อง prices · บันทึกผลไว้ที่ {USAGE_DIR})")
     return rc
 
@@ -6966,16 +6966,16 @@ def cmd_usage_flash(a) -> int:
     print(f"Flash ใน {a.since:g} วันล่าสุด{(' · โปรเจกต์ ' + proj) if proj else ''}: {s['jobs']} งาน"
           + (f" (อีก {s['jobs_no_data']} งานไม่มีข้อมูล token)" if s["jobs_no_data"] else ""))
     print(f"token ~{fmt_tok(t['tokens'])}: in ใหม่ {fmt_tok(t['in'])} · cache เขียน {fmt_tok(t['cache_write'])} · cache อ่าน {fmt_tok(t['cache_read'])} · out {fmt_tok(t['out'])}"
-          f" · ค่าใช้จ่ายจริงของ Flash ${t['usd']:.2f}")
-    print(f"  ในนั้นเป็น subagent {sb['sessions']} session ~{fmt_tok(sb['tokens'])} token ${sb['usd']:.2f}" if sb["included"]
+          f" · ค่าใช้จ่ายจริงของ Flash ${t['usd']:,.2f}")
+    print(f"  ในนั้นเป็น subagent {sb['sessions']} session ~{fmt_tok(sb['tokens'])} token ${sb['usd']:,.2f}" if sb["included"]
           else f"  (ไม่พบ {OC_DB} → ยังไม่รวม token ของ subagent ตัวเลขจึงต่ำกว่าจริง)")
     for title, key in (("วัน", "by_day"), ("โปรเจกต์", "by_project"), ("ชนิดงาน", "by_kind"), ("โมเดล", "by_model")):
         if s[key]:
-            print(f"{title}: " + " · ".join(f"{g['name']} {g['jobs']} งาน {fmt_tok(g['tokens'])} ${g['usd']:.2f}" for g in s[key]))
+            print(f"{title}: " + " · ".join(f"{g['name']} {g['jobs']} งาน {fmt_tok(g['tokens'])} ${g['usd']:,.2f}" for g in s[key]))
     ov = s["claude_overhead"]
-    print(f"Claude ที่ยังใช้วางแผน/ตรวจ (จากผล flashq usage ที่เคยรัน {ov['sessions']} session): ~${ov['usd']:.2f}")
+    print(f"Claude ที่ยังใช้วางแผน/ตรวจ (จากผล flashq usage ที่เคยรัน {ov['sessions']} session): ~${ov['usd']:,.2f}")
     for c in s["compare"]:
-        print(f"  ถ้า {c['model']} ทำเอง ~${c['equiv_usd']:.2f} → ประหยัด ~${c['saved_net']:.2f} ({c['pct_net']}%) [ก่อนหักค่า Claude ที่ยังใช้ ~${c['saved_gross']:.2f}]")
+        print(f"  ถ้า {c['model']} ทำเอง ~${c['equiv_usd']:,.2f} → ประหยัด ~${c['saved_net']:,.2f} ({c['pct_net']}%) [ก่อนหักค่า Claude ที่ยังใช้ ~${c['saved_gross']:,.2f}]")
     print("(ประมาณการ: สมมติ Claude ใช้ token เท่ากัน ซึ่งปกติ Claude ใช้น้อยกว่า · ราคาจากตารางในตัว ทับได้ที่ config.json ช่อง prices / flash_compare)")
     best = s["compare"][0] if s["compare"] else {}
     print(f"USAGE_FLASH jobs={s['jobs']} tokens={t['tokens']} usd={t['usd']:.2f} claude_equiv={best.get('equiv_usd', 0):.2f} saved_net={best.get('saved_net', 0):.2f}")

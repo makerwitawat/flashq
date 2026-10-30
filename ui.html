@@ -3469,14 +3469,15 @@ const TRAIL_ICON = { ok: "✅", fail: "❌", denied: "🚫", quota: "⛔", timeo
 const USAGE_PHASES = [["plan", "วางแผน"], ["check", "ตรวจ"], ["fix", "รอบแก้"], ["goal", "เป้าหมาย"], ["other", "อื่น ๆ"]];
 function usageLineHTML(u) {
   if (!u || !u.sessions) return "";
-  const tok = u.tokens >= 1e6 ? (u.tokens / 1e6).toFixed(1) + "M" : Math.round(u.tokens / 1e3) + "k";
+  const tok = u.tokens >= 1e6 ? fmtNum(u.tokens / 1e6, 1) + "M" : fmtNum(u.tokens / 1e3) + "k";
   const pct = USAGE_PHASES.filter(([k]) => (u.pct || {})[k]).map(([k, t]) => `${t} ${u.pct[k]}%`).join(" · ");
   const tip = `นับจาก transcript ของ Claude Code ที่อ้างถึงแผนนี้ (${u.sessions} session${u.plans > 1 ? ` · ${u.plans} แผน` : ""}) · ราคาโดยประมาณ · สัดส่วนคิดจาก ${u.pct_by === "usd" ? "USD" : "token"} · อัปเดตด้วย flashq usage <แผน>` + (u.at ? ` · ล่าสุด ${u.at}` : "");
-  return `<div class="of-line muted of-full" title="${esc(tip)}">🪙 Claude ใช้ ~${tok} token (~$${Number(u.usd || 0).toFixed(2)})${pct ? " · " + esc(pct) : ""}</div>`;
+  return `<div class="of-line muted of-full" title="${esc(tip)}">🪙 Claude ใช้ ~${tok} token (~${usd(u.usd)})${pct ? " · " + esc(pct) : ""}</div>`;
 }
 /* สรุป token ของ Flash (log งานที่รันผ่าน flashq + subagent ใน opencode.db) + ประมาณการประหยัดเทียบ Claude — ดึงจาก /api/flash_usage ไม่ผูกกับรอบ refresh 3 วินาที */
-const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0);
-const usd = (n) => "$" + Number(n || 0).toFixed(2);
+const fmtNum = (n, d = 0) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });  // คั่นหลักพันด้วยจุลภาค (7,803.5M · $2,581.27)
+const fmtTok = (n) => n >= 1e6 ? fmtNum(n / 1e6, 1) + "M" : n >= 1e3 ? fmtNum(n / 1e3) + "k" : fmtNum(n);
+const usd = (n) => "$" + fmtNum(n, 2);
 function flashUsageHTML(s) {
   const t = s.total || {};
   if (!s.jobs) return `<div class="empty">ยังไม่มีงานที่มีข้อมูล token ใน ${s.since_days} วันล่าสุด</div>`;
