@@ -215,15 +215,15 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | `80ec2cf` | แดง `.tmp/T-01.red.log` → `AssertionError: 'GOAL_ACK=FAIL' not found in ''` · เขียว `.tmp/T-01.green.log` → `1 passed, 183 deselected in 4.32s` · reg `.tmp/T-01.reg.log` → `2 passed, 182 deselected in 16.91s` | |
-| T-02 | ✅แก้ | `745da37` | แดง `.tmp/T-02.red.log` → `AssertionError: 'GOAL_CHECK=FAIL' not found in ''` · เขียว `.tmp/T-02.green.log` → `1 passed, 184 deselected in 3.98s` · reg `.tmp/T-02.reg.log` → `2 passed, 183 deselected in 14.97s` | |
-| T-03 | ✅แก้ | `a015901` | แดง `.tmp/T-03.red.log` → `AssertionError: 'goal ack docs/plans/GOAL_x.md' not found` · เขียว `.tmp/T-03.green.log` → `1 passed, 185 deselected in 1.85s` · reg `.tmp/T-03.reg.log` → `1 passed, 185 deselected in 9.53s` | |
-| T-04 | ✅แก้ | `f076521` | `.tmp/T-04.node.log` = 0 ไบต์ · `.tmp/T-04.log` → `1 passed, 185 deselected in 0.15s` · `git show --stat HEAD` = `ui.html | 2 +-` 1 ไฟล์ | |
-| T-05 | ✅แก้ | `48a8997` | แดง `.tmp/T-05.red.log` → `AssertionError: 0 != 1` · เขียว `.tmp/T-05.green.log` → `1 passed, 186 deselected in 2.67s` · reg `.tmp/T-05.reg.log` → `4 passed, 183 deselected in 21.61s` | |
-| T-06 | ✅แก้ | `061f7cf` | แดง `.tmp/T-06.red.log` → `AssertionError: 'review' != 'plan'` (`1 failed, 187 deselected`) · เขียว `.tmp/T-06.green.log` → `1 passed, 187 deselected in 2.48s` · reg `.tmp/T-06.reg.log` → `1 passed, 187 deselected in 7.46s` | |
-| T-07 | ✅แก้ | `b168217` | `.tmp/T-07.log` → `2 passed, 186 deselected in 12.69s` · `git show HEAD` มี `stdin=subprocess.DEVNULL` + `p.wait(timeout=15)` ใน `goal_run_cmd` | |
-| T-08 | ✅แก้ | `2e33021` | `.tmp/T-08.log` → `claude/commands/flash-goal.md:63:... \`{{FLASHQ_RUN}} status\`` + `5 passed, 183 deselected in 6.86s` | |
-| T-09 | ✅แก้ | `5b785d1` | `.tmp/T-09.log` ขึ้น `3 files changed` (ไฟล์งาน 2 + แผนที่ agent หลักติ๊กค้าง) → scoped diff `2 files changed, 3 insertions(+), 1 deletion(-)` · `git grep -n "goal ack"` = `CHANGELOG.md:6` + `docs/REFERENCE.md:112` | |
+| T-01 | ✅แก้ | `80ec2cf` | แดง `.tmp/T-01.red.log` → `AssertionError: 'GOAL_ACK=FAIL' not found in ''` · เขียว `.tmp/T-01.green.log` → `1 passed, 183 deselected in 4.32s` · reg `.tmp/T-01.reg.log` → `2 passed, 182 deselected in 16.91s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-02 | ✅แก้ | `745da37` | แดง `.tmp/T-02.red.log` → `AssertionError: 'GOAL_CHECK=FAIL' not found in ''` · เขียว `.tmp/T-02.green.log` → `1 passed, 184 deselected in 3.98s` · reg `.tmp/T-02.reg.log` → `2 passed, 183 deselected in 14.97s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-03 | ✅แก้ | `a015901` | แดง `.tmp/T-03.red.log` → `AssertionError: 'goal ack docs/plans/GOAL_x.md' not found` · เขียว `.tmp/T-03.green.log` → `1 passed, 185 deselected in 1.85s` · reg `.tmp/T-03.reg.log` → `1 passed, 185 deselected in 9.53s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-04 | ✅แก้ | `f076521` | `.tmp/T-04.node.log` = 0 ไบต์ · `.tmp/T-04.log` → `1 passed, 185 deselected in 0.15s` · `git show --stat HEAD` = `ui.html | 2 +-` 1 ไฟล์ | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-05 | ✅แก้ | `48a8997` | แดง `.tmp/T-05.red.log` → `AssertionError: 0 != 1` · เขียว `.tmp/T-05.green.log` → `1 passed, 186 deselected in 2.67s` · reg `.tmp/T-05.reg.log` → `4 passed, 183 deselected in 21.61s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-06 | ✅แก้ | `061f7cf` | แดง `.tmp/T-06.red.log` → `AssertionError: 'review' != 'plan'` (`1 failed, 187 deselected`) · เขียว `.tmp/T-06.green.log` → `1 passed, 187 deselected in 2.48s` · reg `.tmp/T-06.reg.log` → `1 passed, 187 deselected in 7.46s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-07 | ✅แก้ | `b168217` | `.tmp/T-07.log` → `2 passed, 186 deselected in 12.69s` · `git show HEAD` มี `stdin=subprocess.DEVNULL` + `p.wait(timeout=15)` ใน `goal_run_cmd` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-08 | ✅แก้ | `2e33021` | `.tmp/T-08.log` → `claude/commands/flash-goal.md:63:... \`{{FLASHQ_RUN}} status\`` + `5 passed, 183 deselected in 6.86s` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
+| T-09 | ✅แก้ | `5b785d1` | `.tmp/T-09.log` ขึ้น `3 files changed` (ไฟล์งาน 2 + แผนที่ agent หลักติ๊กค้าง) → scoped diff `2 files changed, 3 insertions(+), 1 deletion(-)` · `git grep -n "goal ack"` = `CHANGELOG.md:6` + `docs/REFERENCE.md:112` | ✅ผ่าน (diff ตรงสเปก แตะเฉพาะไฟล์ของงาน · แดง→เขียวตามหลักฐาน) |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - การ์ด STOP `ui.html:2225` ยังบอก "แก้ต้นเหตุแล้วกด 🔄 ตรวจใหม่" (ไม่พูดถึง ack/extend) — ต้องเพิ่มวลีใหม่ + พจนานุกรม EN · ทำรอบหน้า
