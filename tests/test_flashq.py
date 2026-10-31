@@ -2719,6 +2719,22 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_status_shows_brakes_and_way_out(self):
+        """goal verify/status พิมพ์เหตุเบรกทุกข้อ + บรรทัดทางออกที่ใช้ได้จริง (ack/extend/reset)"""
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n")
+        self.goal_repo(body)
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md").stdout)
+        (self.proj / "other.py").write_text("x\n", encoding="utf-8")  # ไม่ commit = ไฟล์นอกขอบเขต
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("เบรก: แก้ไฟล์นอกขอบเขต goal-files: other.py", r.stdout, r.stdout)
+        self.assertIn("goal ack docs/plans/GOAL_x.md", r.stdout, r.stdout)
+        s = self.run_q("goal", "status", "docs/plans/GOAL_x.md")
+        self.assertIn("เบรก: แก้ไฟล์นอกขอบเขต goal-files: other.py", s.stdout, s.stdout)
+        self.assertIn("goal ack docs/plans/GOAL_x.md", s.stdout, s.stdout)
+        self.assertIn("ทางออก", s.stdout, s.stdout)
+
     def test_goal_extend_budget_keeps_history(self):
         """goal check --extend/--extend-hours: user ต่องบหลัง STOP ครบงบ → ตรวจต่อได้ · base/เวลาเริ่ม/รอบเดิมคงไว้ · ใช้คู่ --reset ไม่ได้"""
         py = f'"{sys.executable}"'

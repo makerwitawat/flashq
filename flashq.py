@@ -7692,6 +7692,22 @@ def goal_cancel(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, r
     return 0
 
 
+def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
+    """เหตุเบรก → คำสั่งทางออกที่ใช้ได้จริง (สั่งเมื่อ user เลือกแล้วเท่านั้น)"""
+    out, has = [], lambda *ks: any(k in s for s in stop for k in ks)  # noqa: E731
+    if has("นอกขอบเขต", "ไฟล์ล็อก"):
+        out.append(f"ทางออก (ไฟล์นอกขอบเขต/ไฟล์ล็อก): ให้ user ตรวจไฟล์ → ยอมรับ = `goal ack {rel} --reason \"<เหตุของ user>\"` แล้ว `goal verify`"
+                   " · ไม่ยอมรับ = git revert แล้ว ack เช่นกัน (ไม่ล้าง base/รอบ)")
+    if has("ครบงบ", "เกินงบเวลา"):
+        out.append(f"ทางออก (งบหมด): user ต่องบ = `goal check {rel} --extend <รอบ> --extend-hours <ชม.>` แล้ว `goal verify` (เก็บ base/รอบ/ประวัติ)"
+                   f" · หรือเริ่มนับใหม่ทั้งหมด = `goal check {rel} --reset`")
+    if has("พังซ้ำ"):
+        out.append("ทางออก (พังซ้ำ): สืบต้นตอใหม่/แผนคนละทาง → มีงานใหม่แล้วค่อย `goal verify` (ตรวจซ้ำโดยไม่มีงานใหม่ไม่ช่วย)")
+    if has("ย้ายเสาประตู"):
+        out.append(f"ทางออก (เกณฑ์ถูกแก้): user ยืนยันเกณฑ์ใหม่ → `goal check {rel} --reset`")
+    return out
+
+
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     # output ลงไฟล์ชั่วคราว ไม่ใช่ pipe: ลูกที่สืบทอด pipe ไปแล้วค้างเบื้องหลัง (เช่น `start /b server`) จะไม่ทำให้ communicate() รอตามไปจน timeout ไม่ทำงาน
     with tempfile.TemporaryFile() as buf:
@@ -7803,6 +7819,19 @@ def cmd_goal(a) -> int:
             print(f"รอบล่าสุด {last['at']}: {last['verdict']} · ไม่ผ่าน {', '.join(last['fail']) or '-'}")
             for k, v in (last.get("human_res") or {}).items():
                 print(f"คนตรวจ {k}: {'ผ่าน' if v['ok'] else 'ไม่ผ่าน — ' + v.get('reason', '')} ({v['at']})")
+        stops = list((last or {}).get("stop") or [])
+        if st.get("sig") != g["sig"] and not any("ย้ายเสาประตู" in s for s in stops):
+            stops.append("เกณฑ์/ขอบเขตในไฟล์เป้าหมายถูกแก้หลังเริ่ม (ย้ายเสาประตู) → ให้ user ยืนยัน แล้ว `goal check --reset`")
+        for s in stops:
+            print(f"เบรก: {s}")
+        warn = list((last or {}).get("warn") or [])
+        if warn:
+            print("เตือน: ไฟล์นอกขอบเขตที่อาจเป็นของ session อื่น (ไม่เบรก): " + ", ".join(warn[:8]) + (" …" if len(warn) > 8 else ""))
+        for h in goal_stop_hints(stops, rel):
+            print(h)
+        ack = (st.get("acks") or [None])[-1]
+        if ack:
+            print(f"รับทราบล่าสุด {ack['at']}: {ack['reason']} ({len(ack.get('files') or [])} ไฟล์)")
         return 0
     if a.action == "human":
         return goal_human(root, goal, rel, g, st, sp, rounds_max, a)
@@ -7889,6 +7918,8 @@ def cmd_goal(a) -> int:
         print(f"ถอยหลัง: {', '.join(regress)} เคยผ่านรอบก่อนแต่รอบนี้ไม่ผ่าน → แผนรอบหน้าต้องแก้ตัวนี้ก่อน")
     for s in stop:
         print(f"เบรก: {s}")
+    for h in goal_stop_hints(stop, rel):
+        print(h)
     if human:
         print("ให้ user ตรวจเอง:\n  " + "\n  ".join(human))
         if recheck and verdict == "DONE_NEEDS_USER":
