@@ -2719,6 +2719,35 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_extend_budget_keeps_history(self):
+        """goal check --extend/--extend-hours: user ต่องบหลัง STOP ครบงบ → ตรวจต่อได้ · base/เวลาเริ่ม/รอบเดิมคงไว้ · ใช้คู่ --reset ไม่ได้"""
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 2\n")
+        self.goal_repo(body)
+        st_p = self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json"
+        v = lambda: self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # noqa: E731
+        c = lambda *a: self.run_q("goal", "check", "docs/plans/GOAL_x.md", *a)  # noqa: E731
+        self.assertIn("GOAL_CHECK=OK", c().stdout)
+        (self.proj / "src" / "a.txt").write_text("v1\n", encoding="utf-8")
+        self.assertIn("GOAL=CONTINUE รอบ 1/2", v().stdout)
+        (self.proj / "src" / "a.txt").write_text("v2\n", encoding="utf-8")
+        self.assertIn("ครบงบ 2 รอบแล้วยังไม่ผ่าน", v().stdout)
+        st0 = json.loads(st_p.read_text(encoding="utf-8"))
+        self.assertEqual(len(st0["rounds"]), 2)
+        r = c("--extend", "2", "--reset")  # ต่องบพร้อมเริ่มนับใหม่ = ไม่มีทาง
+        self.assertIn("GOAL_CHECK=FAIL", r.stdout)
+        r = c("--extend", "2", "--extend-hours", "1")
+        self.assertIn("GOAL_CHECK=OK", r.stdout, r.stdout)
+        self.assertIn("งบ 4 รอบ / 7 ชม.", r.stdout)
+        self.assertIn("ใช้ไปแล้ว 2 รอบ", r.stdout)
+        st1 = json.loads(st_p.read_text(encoding="utf-8"))
+        self.assertEqual((st1["base"], st1["started"]), (st0["base"], st0["started"]))  # ไม่ล้าง base/เวลาเริ่ม
+        self.assertEqual(len(st1["rounds"]), 2)  # ประวัติรอบเดิมอยู่ครบ
+        self.assertEqual(st1["extra_rounds"], 2)
+        r = v()  # ไม่มีงานใหม่ = ตรวจซ้ำ ไม่นับรอบ · งบใหม่ทำให้วนต่อได้
+        self.assertIn("GOAL=CONTINUE รอบ 2/4", r.stdout, r.stdout)
+
     def test_goal_ack_clears_scope_brake_keeps_rounds(self):
         """goal ack: user รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อกจนถึงตอนนี้ = ตรวจต่อได้ ไม่ต้อง --reset (base/รอบเดิมอยู่)
         · ไม่มีเหตุ/ยังไม่มีรอบ = ไม่รับทราบ · commit/ไฟล์ที่แก้หลัง ack ยังถูกตรวจตามปกติ"""

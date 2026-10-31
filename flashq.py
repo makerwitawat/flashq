@@ -7159,7 +7159,7 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
         write_json(GOALS_DIR / f"{key}.json", {
             "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
             "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
-            "rounds_max": rounds_max, "hours": g["hours"], "started": st.get("started", ""), "updated": now(), "rounds": rounds,
+            "rounds_max": rounds_max, "hours": g["hours"] + float(st.get("extra_hours") or 0), "started": st.get("started", ""), "updated": now(), "rounds": rounds,
             "owner": st.get("owner") or {}, "goal_abs": str(goal), "cancelled": goal_cancelled(goal, st)})
     except Exception:
         pass
@@ -7740,7 +7740,7 @@ def cmd_goal(a) -> int:
         print(f"GOAL_CHECK=FAIL\nไม่พบไฟล์เป้าหมาย: {goal}")
         return 1
     rel = goal.relative_to(root).as_posix() if goal.is_relative_to(root) else str(goal)
-    rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"]))
+    rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"])) + int((st or {}).get("extra_rounds") or 0)  # + ที่ user ต่องบ (check --extend)
     if a.action == "cancel":
         return goal_cancel(root, goal, rel, g, st, sp, rounds_max, a, is_git)
     canc = goal_cancelled(goal, st)
@@ -7769,15 +7769,29 @@ def cmd_goal(a) -> int:
         old = st
         if not st or a.reset:
             st = {"goal": rel, "sig": g["sig"], "base": _git(root, "rev-parse", "HEAD"), "started": now(), "rounds": [], "owner": st.get("owner", {}) if st else {}}
+            rounds_max = min(GOAL_ROUNDS_CAP, max(1, g["rounds"]))  # state ใหม่ = ไม่มีงบที่ต่อไว้
         if a.reset and old:  # ประวัติย่อข้ามการ reset → ยังรู้ว่าคนตรวจไม่ผ่านซ้ำ/ถอยหลังซ้ำ (เตือนพิจารณายกเลิก)
             ors = old.get("rounds") or []
             st["past"] = (list(old.get("past") or []) + [goal_round_brief(r, ors[k - 1] if k else None) for k, r in enumerate(ors)])[-30:]
+        if a.extend or a.extend_hours:  # user ต่องบ: ไม่แตะ base/started/rounds/past
+            if a.reset or not old:
+                print("ต้องแก้: --extend ใช้กับธงที่เริ่มแล้วเท่านั้น และห้ามใช้คู่ --reset")
+                print("GOAL_CHECK=FAIL")
+                return 1
+            if not (0 <= a.extend <= GOAL_ROUNDS_CAP and 0 <= a.extend_hours <= 24):
+                print(f"ต้องแก้: --extend ได้ 0..{GOAL_ROUNDS_CAP} รอบ · --extend-hours ได้ 0..24 ชม. ต่อครั้ง")
+                print("GOAL_CHECK=FAIL")
+                return 1
+            st["extra_rounds"] = int(st.get("extra_rounds") or 0) + a.extend
+            st["extra_hours"] = float(st.get("extra_hours") or 0) + a.extend_hours
+            rounds_max += a.extend
+            print(f"ต่องบ +{a.extend} รอบ / +{a.extend_hours:g} ชม. (ต่อแล้วรวม {st['extra_rounds']} รอบ / {st['extra_hours']:g} ชม.) · base/รอบ/ประวัติเดิมคงไว้")
         st["owner"] = goal_owner() or st.get("owner") or {}
         sp.parent.mkdir(parents=True, exist_ok=True)
         write_json(sp, st)
         goal_publish(root, goal, rel, g, st, rounds_max)
         print(f"GOAL_CHECK=OK เกณฑ์ {len(g['items'])} ข้อ (เครื่องตรวจ {sum(1 for i in g['items'] if i['cmd'])}) · "
-              f"งบ {rounds_max} รอบ / {g['hours']:g} ชม. · ใช้ไปแล้ว {len(st['rounds'])} รอบ · base {st['base'][:9]}")
+              f"งบ {rounds_max} รอบ / {g['hours'] + float(st.get('extra_hours') or 0):g} ชม. · ใช้ไปแล้ว {len(st['rounds'])} รอบ · base {st['base'][:9]}")
         return 0
     if not st:
         print(f"GOAL=STOP ยังไม่ได้รัน `goal check {rel}` (ต้องตรวจเป้าหมาย + จด base ก่อน)")
@@ -7843,8 +7857,9 @@ def cmd_goal(a) -> int:
             stop.append(f"พังซ้ำเรื่องเดิม 2 รอบติด ({', '.join(fail)} ผลเหมือนเดิมทุกตัวอักษร) → แผนแก้ไม่ถูกจุด ต้องให้ user/สืบต้นตอใหม่")
         if n >= rounds_max:
             stop.append(f"ครบงบ {rounds_max} รอบแล้วยังไม่ผ่าน")
-        if hrs >= g["hours"]:
-            stop.append(f"เกินงบเวลา {g['hours']:g} ชม. (ผ่านไป {hrs:.1f})")
+        hmax = g["hours"] + float(st.get("extra_hours") or 0)
+        if hrs >= hmax:
+            stop.append(f"เกินงบเวลา {hmax:g} ชม. (ผ่านไป {hrs:.1f})")
         verdict = "STOP" if stop else "CONTINUE"
     since = _ts(prev["at"]) if prev else _ts(st["started"]) - 5
     rnd = {"at": now(), "verdict": verdict, "fail": fail, "results": results, "out_scope": out_scope[:50], "locked": locked[:50],
@@ -8042,6 +8057,8 @@ def main() -> int:
     go.add_argument("--reason", default="", help="cancel: เหตุที่ user สั่งเลิกธง (เขียนลงบรรทัดสถานะใต้หัวไฟล์ GOAL) · ack: เหตุที่ user ยอมรับไฟล์นอกขอบเขต/ไฟล์ล็อก")
     go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
+    go.add_argument("--extend", type=int, default=0, help="check: ต่องบรอบ +N เก็บ base/รอบ/ประวัติ — ใช้เมื่อ user สั่งหลัง STOP ครบงบ")
+    go.add_argument("--extend-hours", dest="extend_hours", type=float, default=0, help="check: ต่องบเวลา +H ชม.")
     go.set_defaults(fn=cmd_goal)
     us = sp.add_parser("usage", help="โทเคน Claude ต่อแผน: สแกน transcript ของ Claude Code (วางแผน · ตรวจ · รอบแก้) + USD โดยประมาณ")
     us.add_argument("target", nargs="?", default="", help="ไฟล์แผน PLAN_*.md หรือโฟลเดอร์โปรเจกต์ (= ทุกแผนที่ถูกพูดถึง) · ใช้กับ --flash = กรองเฉพาะโปรเจกต์นี้")
