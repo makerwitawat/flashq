@@ -3775,7 +3775,7 @@ document.addEventListener("click", async (e) => {
   const d = b.dataset, body = { id: d.gid, action: d.gact };
   const gl = (state?.goals || []).find((x) => x.id === d.gid), gname = gl ? `${gl.project_name} · ${gl.title}` : "";
   if (d.gact === "verify" && !await ask({ title: "ตรวจเป้าหมายนี้ใหม่?", detail: gname, icon: "↻", ok: "ตรวจใหม่",
-    body: "• รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที\n• นับเป็นรอบใหม่ของงบรอบ" })) return;
+    body: "• รันเกณฑ์ทุกข้อ ใช้เวลาหลายนาที\n• ไม่มีงานใหม่ตั้งแต่รอบก่อน = ไม่นับรอบ แค่อัปเดตผล" })) return;
   if (d.gact === "claude" && !await ask({ title: "ให้ Claude ทำต่อ?", detail: gname, icon: "🤖", ok: "เปิดในแอป Claude",
     body: "• เปิด session ใหม่ในแอป Claude (แท็บ Code) พร้อมพิมพ์ /flash-goal รอไว้ — กด Enter ในแอปเพื่อเริ่ม\n• ใช้โควตา Claude · เครื่องไม่มีแอป = เปิดหน้าต่าง CLI แทน" })) return;
   if (d.gact === "archive" && !await ask({ title: "เก็บการ์ดเป้าหมายนี้?", detail: gname, icon: "✖", ok: "เก็บ",
