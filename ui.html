@@ -2661,9 +2661,10 @@ async function openRunNow(id) {
   for (const r of rep.running) {
     const st = r.overlap === null ? (r.same_project ? `<b style="color:var(--quota)">ตรวจไฟล์ไม่ได้</b> (ดึง path จากแผนไม่ได้ — ตรวจเองก่อน)` : "คนละโปรเจกต์")
       : r.overlap.length ? `<b style="color:var(--fail)">⚠ ไฟล์ซ้อน ${r.overlap.length} ไฟล์</b>${fileList(r.overlap)}` : `<span style="color:var(--ok)">✓ ไม่มีไฟล์ซ้อน</span>`;
-    h += `<div class="rn-cmp${r.overlap && r.overlap.length ? " bad" : ""}">
+    const blk = r.block ? `<div><b style="color:var(--fail)">⚠ แผนห้ามรันคู่</b> — ${esc(r.block)}</div>` : "";
+    h += `<div class="rn-cmp${(r.overlap && r.overlap.length) || r.block ? " bad" : ""}">
       <div>เทียบกับงานที่กำลังทำ: <b>${esc(r.project_name)}</b> <span class="mono">${esc(r.message ? "ข้อความ: " + r.message : r.plan + " " + r.tasks)}</span></div>
-      <div>${r.same_project ? `<b style="color:var(--quota)">โปรเจกต์เดียวกัน</b>` : "คนละโปรเจกต์"} · ${st}</div></div>`;
+      <div>${r.same_project ? `<b style="color:var(--quota)">โปรเจกต์เดียวกัน</b>` : "คนละโปรเจกต์"} · ${st}</div>${blk}</div>`;
   }
   h += `<details><summary class="muted">ไฟล์ที่งานนี้จะแตะ (จากแผน)</summary>${fileList(rep.files)}</details>
     <ul class="rn-warn">

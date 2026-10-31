@@ -1306,11 +1306,14 @@ def overlap_report(target: dict) -> dict:
         theirs = job_info(j)["files"]
         over = None if (mine is None or theirs is None) else (
             sorted({a for a in mine for b in theirs if paths_overlap(a, b)}) if same else [])
+        block = conflict_reason(target, j, job_info) if same else ""  # เกณฑ์เดียวกับตัวจัดคิว: flashq-parallel: no / ขอบเขต flashq-exclusive / ไฟล์ร่วม
+        if block.startswith("ดึงรายการไฟล์"):  # ตรวจไฟล์ไม่ได้ — แสดงผ่านช่อง unknown อยู่แล้ว
+            block = ""
         items.append({"id": j["id"], "project_name": Path(j.get("project", "")).name, "plan": j.get("plan", ""),
                       "tasks": j.get("tasks", ""), "message": j.get("message", ""), "model": j.get("model", ""),
-                      "same_project": same, "files": theirs, "overlap": over})
+                      "same_project": same, "files": theirs, "overlap": over, "block": block})
     return {"id": target["id"], "files": mine, "running": items,
-            "any_overlap": any(i["overlap"] for i in items),
+            "any_overlap": any(i["overlap"] or i["block"] for i in items),
             "unknown": any(i["same_project"] and i["overlap"] is None for i in items),
             "legacy": target.get("qv", 0) < QUEUE_VERSION, "max_parallel": max_parallel(), "used": len(held_slots())}
 
@@ -4314,9 +4317,10 @@ def cmd_runnow(a) -> int:
     for it in rep["running"]:
         over = it["overlap"]
         print(f"เทียบกับ {it['id']} ({it['project_name']}{' · โปรเจกต์เดียวกัน' if it['same_project'] else ''}): "
-              + ("ตรวจไฟล์ไม่ได้" if over is None else ("ไฟล์ซ้อน: " + ", ".join(over) if over else "ไม่มีไฟล์ซ้อน")))
+              + ("ตรวจไฟล์ไม่ได้" if over is None else ("ไฟล์ซ้อน: " + ", ".join(over) if over else "ไม่มีไฟล์ซ้อน"))
+              + (f" · แผนห้ามรันคู่: {it['block']}" if it.get("block") else ""))
     if rep["any_overlap"] and not a.force:
-        print("หยุด: มีไฟล์ซ้อนกับงานที่กำลังทำ — ใส่ --force ถ้ายืนยันจะรันคู่ขนาน")
+        print("หยุด: ไฟล์ซ้อน/แผนห้ามรันคู่กับงานที่กำลังทำ — ใส่ --force ถ้ายืนยันจะรันคู่ขนาน")
         return 1
     ok, msg = request_run_now(j)
     print(msg)
@@ -5856,7 +5860,7 @@ def make_ui_server(port: int = 4097):
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 rep = overlap_report(j)
                 if rep["any_overlap"] and body.get("ack_overlap") is not True:
-                    return self._send(409, {"ok": False, "message": "มีไฟล์ซ้อนกับงานที่กำลังทำ — ต้องติ๊กยืนยันก่อน", "report": rep})
+                    return self._send(409, {"ok": False, "message": "ไฟล์ซ้อน/แผนห้ามรันคู่กับงานที่กำลังทำ — ต้องติ๊กยืนยันก่อน", "report": rep})
                 ok, msg = request_run_now(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/config":

@@ -3372,6 +3372,20 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("Build/x.cmake", c("K.md", "I.md"))
         self.assertIn("ดึงรายการไฟล์", c("I.md", "NOPE.md"))
 
+        # หน้าต่างรันเลย (overlap_report) ต้องใช้เกณฑ์เดียวกับตัวจัดคิว: ไฟล์ที่แตะไม่ซ้อนแต่ชนขอบเขต exclusive = ต้อง ack
+        from unittest import mock
+        tgt, run = {**J("I.md"), "created": "x"}, {**J("K.md"), "status": "running"}
+        with mock.patch.object(flashq, "jobs", lambda: [tgt, run]), mock.patch.object(flashq, "live_state", lambda j: j.get("status", "queued")):
+            rep = flashq.overlap_report(tgt)
+        self.assertEqual(rep["running"][0]["overlap"], [])
+        self.assertIn("ขอบเขตห้ามรันคู่", rep["running"][0]["block"])
+        self.assertTrue(rep["any_overlap"])
+        with mock.patch.object(flashq, "jobs", lambda: [{**J("J.md"), "status": "running"}, J("I.md")]), \
+                mock.patch.object(flashq, "live_state", lambda j: j.get("status", "queued")):
+            rep = flashq.overlap_report(J("I.md"))
+        self.assertEqual(rep["running"][0]["block"], "")
+        self.assertFalse(rep["any_overlap"])
+
     def test_ui_schedule_config_and_reason(self):
         """ui: POST /api/config schedule (ผิด = 400) · /api/state บอกโหมด + เหตุผลที่งานรอคิว"""
         self.auto_plan()
