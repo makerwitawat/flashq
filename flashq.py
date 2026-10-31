@@ -7273,12 +7273,16 @@ def _other_topic(files: list[str], topic: str) -> bool:
 
 
 def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[float, float]], topic: str = "",
-                       scope: list[str] | None = None) -> tuple[list[str], list[str]]:
+                       scope: list[str] | None = None, ack: dict | None = None) -> tuple[list[str], list[str]]:
     """ไฟล์ที่ถูกแก้ระหว่างวนเป้าหมาย → (ของงาน Flash เป้าหมายนี้แน่ ๆ, อาจเป็นของ session อื่น)
     นับเฉพาะ commit (ไม่รวม merge) ที่เกิดระหว่างงาน Flash ของเป้าหมายนี้รัน · ไม่มีประวัติงาน = ทุก commit หลัง base
     ข้าม commit ที่แตะ GOAL_/PLAN_FLASH_ ของเรื่องอื่น · commit ที่ไม่แตะ goal-files/แผนของเรื่องนี้ และ (ไม่มีรหัสงาน `(T-xx)` หรือมีงานแผนอื่นรันซ้อนอยู่)
     = "อาจเป็นของ session อื่น" (เตือน ไม่ STOP) · ไฟล์ค้าง/ยังไม่ track ที่แก้ระหว่างงานรัน ก็เป็น "อาจเป็น" (Flash ต้อง commit ทุกงาน)
-    ไม่มีประวัติงาน Flash ของเป้าหมาย = แยกไม่ได้ → ทุกอย่างนับเป็นของเป้าหมาย (รวมไฟล์ค้างที่แก้หลังเริ่ม)"""
+    ไม่มีประวัติงาน Flash ของเป้าหมาย = แยกไม่ได้ → ทุกอย่างนับเป็นของเป้าหมาย (รวมไฟล์ค้างที่แก้หลังเริ่ม)
+    ack = user รับทราบแล้ว: นับ commit หลัง head ของ ack · ไฟล์ค้างที่แก้หลัง ts"""
+    if ack and ack.get("head"):
+        base = ack["head"]
+    ack_ts, acked = float((ack or {}).get("ts") or 0), set((ack or {}).get("files") or [])
     ours, maybe = set(), set()
     split = scope is not None and bool(windows)  # ไม่มีประวัติงาน Flash = แยกไม่ได้ นับทุกอย่างเป็นของเป้าหมาย (เข้มเหมือนเดิม)
     others = [(a, b) for t, a, b, _ in goal_project_jobs(root) if t != topic] if split else []
@@ -7302,10 +7306,11 @@ def goal_changed_files(root: Path, base: str, started: str, windows: list[tuple[
         f = f.strip()
         try:
             m = (root / f).stat().st_mtime if f else 0
-            if f and (any(a - 2 <= m <= b + 5 for a, b in windows) if windows else m >= _ts(started)):
+            if f and m > ack_ts and (any(a - 2 <= m <= b + 5 for a, b in windows) if windows else m >= _ts(started)):
                 (maybe if split else ours).add(f)
         except OSError:
-            ours.add(f)  # ถูกลบ = นับว่าแก้
+            if f not in acked:
+                ours.add(f)  # ถูกลบ = นับว่าแก้ (ยกเว้นที่ ack แล้ว)
     return sorted(ours), sorted(maybe - ours)
 
 
@@ -7705,6 +7710,26 @@ def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     return p.returncode, out.decode("utf-8", errors="replace")
 
 
+def goal_ack(root: Path, goal: Path, rel: str, g: dict, st: dict, sp: Path, rounds_max: int, a) -> int:
+    """user รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อกที่เจอแล้ว → ตรวจเฉพาะ commit หลัง HEAD ตอน ack และไฟล์ที่แก้หลังจากนั้น (ไม่ล้าง base/รอบ/ประวัติ)"""
+    reason = (a.reason or "").strip()
+    if not reason:
+        print('GOAL_ACK=FAIL ต้องระบุ --reason "เหตุที่ user ยอมรับ"')
+        return 1
+    last = st["rounds"][-1] if st.get("rounds") else {}
+    files = sorted(set(last.get("out_scope", []) + last.get("locked", []) + last.get("warn", [])))
+    if not files:
+        print("GOAL_ACK=FAIL รอบล่าสุดไม่มีไฟล์นอกขอบเขต/ไฟล์ล็อกให้รับทราบ")
+        return 1
+    st["acks"] = (st.get("acks") or [])[-19:] + [{"at": now(), "ts": time.time(), "head": _git(root, "rev-parse", "HEAD"),
+                                                   "reason": reason, "files": files[:50]}]
+    write_json(sp, st)
+    goal_publish(root, goal, rel, g, st, rounds_max)
+    print(f"รับทราบ {len(files)} ไฟล์: " + ", ".join(files[:8]) + (" …" if len(files) > 8 else ""))
+    print(f"GOAL_ACK=OK → รัน goal verify {rel} ต่อ (ไม่ล้าง base/รอบ/ประวัติ · commit/ไฟล์ที่แก้หลังจากนี้ยังถูกตรวจตามปกติ)")
+    return 0
+
+
 def cmd_goal(a) -> int:
     """check = ตรวจไฟล์เป้าหมายก่อนเริ่ม (ธงวัดได้ไหม · ขอบเขต · งบรอบ) แล้วจด base commit + ลายนิ้วมือเกณฑ์
     verify = รันเกณฑ์ทุกข้อ + ตรวจขอบเขต/ไฟล์ล็อก/เกณฑ์ถูกแก้ + เบรก (รอบ · เวลา · พังซ้ำ) → `GOAL=DONE|DONE_NEEDS_USER|CONTINUE|STOP`
@@ -7767,6 +7792,8 @@ def cmd_goal(a) -> int:
         return 0
     if a.action == "human":
         return goal_human(root, goal, rel, g, st, sp, rounds_max, a)
+    if a.action == "ack":
+        return goal_ack(root, goal, rel, g, st, sp, rounds_max, a)
     # verify
     stop = []
     if st.get("sig") != g["sig"]:
@@ -7788,7 +7815,8 @@ def cmd_goal(a) -> int:
     cfg = project_cfg(root)
     free = [rel, (cfg.get("plan_dir") or "docs/plans").rstrip("/") + "/", ".flash.json", ".gitignore", ".tmp/"] + g["locked"]
     windows = goal_job_windows(root, goal.stem) if is_git else []
-    ours, maybe = goal_changed_files(root, st["base"], st["started"], windows, goal_topic(goal.stem), g["files"] + free) if is_git else ([], [])
+    ours, maybe = goal_changed_files(root, st["base"], st["started"], windows, goal_topic(goal.stem), g["files"] + free,
+                                     ack=(st.get("acks") or [None])[-1]) if is_git else ([], [])
     out_scope = [f for f in ours if not _glob_hit(f, g["files"] + free)]
     warn = [f for f in maybe if not _glob_hit(f, g["files"] + free)]
     locked = [f for f in ours + maybe if g["locked"] and _glob_hit(f, g["locked"])]
@@ -8006,12 +8034,12 @@ def main() -> int:
     rn.add_argument("--force", action="store_true", help="รันแม้ไฟล์ซ้อนกับงานที่กำลังทำ")
     rn.set_defaults(fn=cmd_runnow)
     go = sp.add_parser("goal", help="โหมดเป้าหมาย (/flash-goal): check ไฟล์เป้าหมาย · verify เกณฑ์ + เบรก · status · cancel (user สั่งเลิกธง)")
-    go.add_argument("action", choices=["check", "verify", "status", "human", "cancel"])
+    go.add_argument("action", choices=["check", "verify", "status", "human", "cancel", "ack"])
     go.add_argument("goal", help="ไฟล์เป้าหมาย เช่น docs/plans/GOAL_<เรื่อง>.md")
     go.add_argument("item", nargs="?", default="", help="human: ข้อคนตรวจ เช่น G-07")
     go.add_argument("--pass", dest="passed", action="store_true", help="human: ข้อนี้ผ่าน")
     go.add_argument("--fail", default="", help='human: ข้อนี้ไม่ผ่าน + เหตุ')
-    go.add_argument("--reason", default="", help="cancel: เหตุที่ user สั่งเลิกธง (เขียนลงบรรทัดสถานะใต้หัวไฟล์ GOAL)")
+    go.add_argument("--reason", default="", help="cancel: เหตุที่ user สั่งเลิกธง (เขียนลงบรรทัดสถานะใต้หัวไฟล์ GOAL) · ack: เหตุที่ user ยอมรับไฟล์นอกขอบเขต/ไฟล์ล็อก")
     go.add_argument("--project", default="", help="โฟลเดอร์โปรเจกต์ (ค่าเริ่มต้น = cwd · worktree → checkout หลัก)")
     go.add_argument("--reset", action="store_true", help="check: เริ่มนับใหม่ (base/รอบ/ลายนิ้วมือเกณฑ์) — ใช้เมื่อ user ยืนยันเกณฑ์ใหม่แล้ว")
     go.set_defaults(fn=cmd_goal)

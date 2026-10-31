@@ -2719,6 +2719,51 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_ack_clears_scope_brake_keeps_rounds(self):
+        """goal ack: user รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อกจนถึงตอนนี้ = ตรวจต่อได้ ไม่ต้อง --reset (base/รอบเดิมอยู่)
+        · ไม่มีเหตุ/ยังไม่มีรอบ = ไม่รับทราบ · commit/ไฟล์ที่แก้หลัง ack ยังถูกตรวจตามปกติ"""
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n")
+        self.goal_repo(body)
+        st_p = self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json"
+        g = lambda *a: subprocess.run(["git", "-C", str(self.proj), *a], capture_output=True, check=True)  # noqa: E731
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md").stdout)
+        r = self.run_q("goal", "ack", "docs/plans/GOAL_x.md", "--reason", "x")  # ยังไม่มีรอบ = ไม่มีไฟล์ให้รับทราบ
+        self.assertIn("GOAL_ACK=FAIL", r.stdout)
+        self.assertEqual(r.returncode, 1)
+        (self.proj / "other.py").write_text("x\n", encoding="utf-8")
+        g("add", "other.py")
+        g("commit", "-qm", "นอกขอบเขต")
+        (self.proj / "scratch.txt").write_text("x\n", encoding="utf-8")
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=STOP", r.stdout, r.stdout)
+        self.assertIn("other.py", r.stdout)
+        self.assertIn("scratch.txt", r.stdout)
+        st0 = json.loads(st_p.read_text(encoding="utf-8"))
+        self.assertEqual(len(st0["rounds"]), 1)
+        r = self.run_q("goal", "ack", "docs/plans/GOAL_x.md")  # ไม่มี --reason = ไม่รับทราบ
+        self.assertIn("GOAL_ACK=FAIL", r.stdout)
+        self.assertEqual(r.returncode, 1)
+        r = self.run_q("goal", "ack", "docs/plans/GOAL_x.md", "--reason", "user ยอมรับ")
+        self.assertIn("GOAL_ACK=OK", r.stdout, r.stdout)
+        self.assertIn("other.py", r.stdout)
+        self.assertIn("scratch.txt", r.stdout)
+        self.assertEqual(r.returncode, 0)
+        st1 = json.loads(st_p.read_text(encoding="utf-8"))
+        self.assertEqual((st1["base"], st1["started"]), (st0["base"], st0["started"]))  # ไม่ล้าง base/เวลาเริ่ม
+        self.assertEqual(len(st1["rounds"]), 1)
+        self.assertEqual(st1["acks"][-1]["reason"], "user ยอมรับ")
+        (self.proj / "src" / "a.txt").write_text("new\n", encoding="utf-8")
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")
+        self.assertIn("GOAL=DONE", r.stdout, r.stdout)
+        self.assertNotIn("นอกขอบเขต", r.stdout)
+        (self.proj / "other2.py").write_text("x\n", encoding="utf-8")
+        g("add", "other2.py")
+        g("commit", "-qm", "นอกขอบเขตอีก")
+        r = self.run_q("goal", "verify", "docs/plans/GOAL_x.md")  # commit หลัง ack ยังถูกตรวจ
+        self.assertRegex(r.stdout, r"(?m)goal-files: other2\.py$")
+
     def test_goal_published_for_ui(self):
         """check/verify คัดลอกสถานะไป ~/.flashq/goals · ui_goals: ผ่านกี่ข้อ · ผูกงานแผน _R<n> · เก็บเหตุเบรกของรอบ"""
         py = f'"{sys.executable}"'
