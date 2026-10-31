@@ -2719,6 +2719,23 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_state_recovers_after_tmp_deleted(self):
+        """สำเนาสถานะธงใน ~/.flashq/goal-state: .tmp/flashq-goal ถูกลบ → goal status/verify กู้รอบ/base เดิมได้"""
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n")
+        self.goal_repo(body)
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md").stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/3", self.run_q("goal", "verify", "docs/plans/GOAL_x.md").stdout)
+        self.assertEqual(len(list((self.home / "goal-state").glob("*.json"))), 1)
+        shutil.rmtree(self.proj / ".tmp" / "flashq-goal")
+        s = self.run_q("goal", "status", "docs/plans/GOAL_x.md")
+        self.assertIn("รอบ 1/3", s.stdout, s.stdout)
+        self.assertIn("กู้สถานะธงจากสำเนา", s.stdout, s.stdout)
+        self.assertNotIn("ยังไม่ได้รัน", s.stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/3", self.run_q("goal", "verify", "docs/plans/GOAL_x.md").stdout)
+        self.assertTrue((self.proj / ".tmp" / "flashq-goal" / "GOAL_x.json").is_file())
+
     def test_goal_status_shows_brakes_and_way_out(self):
         """goal verify/status พิมพ์เหตุเบรกทุกข้อ + บรรทัดทางออกที่ใช้ได้จริง (ack/extend/reset)"""
         py = f'"{sys.executable}"'

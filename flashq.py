@@ -6290,10 +6290,28 @@ def _goal_state_path(root: Path, goal: Path) -> Path:
 def _goal_load(root: Path, goal_arg: str) -> tuple[Path, Path, dict, dict]:
     goal = Path(goal_arg)
     goal = goal if goal.is_absolute() else root / goal
-    return goal, _goal_state_path(root, goal), goal_parse(goal), read_json(_goal_state_path(root, goal))
+    sp = _goal_state_path(root, goal)
+    st = read_json(sp)
+    if not st:  # ต้นฉบับหาย (ลบ .tmp) → กู้จากสำเนาใน ~/.flashq/goal-state/ (รอบ/base เดิม ไม่ใช่เริ่มใหม่)
+        rel = goal.relative_to(root).as_posix() if goal.is_relative_to(root) else str(goal)
+        st = read_json(GOAL_STATE_BAK / f"{_goal_key(root, rel)}.json")
+        if st:
+            try:
+                sp.parent.mkdir(parents=True, exist_ok=True)
+                write_json(sp, st)
+            except OSError:
+                pass
+            print("หมายเหตุ: ไฟล์สถานะธงใน .tmp/flashq-goal หาย → กู้สถานะธงจากสำเนา ~/.flashq/goal-state/ (รอบ/base เดิม)")
+    return goal, sp, goal_parse(goal), st
 
 
 GOALS_DIR = HOME / "goals"  # สำเนาสถานะเป้าหมายทุกโปรเจกต์ ให้ UI เห็น (ต้นฉบับอยู่ใน <project>/.tmp/flashq-goal/)
+GOAL_STATE_BAK = HOME / "goal-state"  # สำเนาไฟล์สถานะธง (.tmp ในโปรเจกต์ถูกลบได้)
+
+
+def _goal_key(root: Path, rel: str) -> str:
+    """คีย์เดียวกับการ์ดใน goal_publish (ผูกโปรเจกต์ + path เป้าหมาย)"""
+    return hashlib.sha1(f"{root.resolve()}|{rel}".lower().encode("utf-8")).hexdigest()[:12]
 
 
 _TITLE_CACHE: dict[str, tuple[float, str]] = {}
@@ -7155,12 +7173,14 @@ def goal_publish(root: Path, goal: Path, rel: str, g: dict, st: dict, rounds_max
         if rounds:
             rounds[-1]["results"] = st["rounds"][-1].get("results", {})
         GOALS_DIR.mkdir(parents=True, exist_ok=True)
-        key = hashlib.sha1(f"{root.resolve()}|{rel}".lower().encode("utf-8")).hexdigest()[:12]
+        key = _goal_key(root, rel)
         write_json(GOALS_DIR / f"{key}.json", {
             "id": key, "project": str(root), "goal": rel, "stem": goal.stem, "title": title or goal.stem,
             "items": [{"id": i["id"], "desc": i["desc"], "human": i["human"] if not i["cmd"] else ""} for i in g["items"]],
             "rounds_max": rounds_max, "hours": g["hours"] + float(st.get("extra_hours") or 0), "started": st.get("started", ""), "updated": now(), "rounds": rounds,
             "owner": st.get("owner") or {}, "goal_abs": str(goal), "cancelled": goal_cancelled(goal, st)})
+        GOAL_STATE_BAK.mkdir(parents=True, exist_ok=True)
+        write_json(GOAL_STATE_BAK / f"{key}.json", st)
     except Exception:
         pass
 
