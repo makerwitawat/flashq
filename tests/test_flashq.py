@@ -1654,6 +1654,8 @@ class FlashqTest(unittest.TestCase):
         self.assertIsNone(p1.poll())  # งานแรกยังรันอยู่ = ได้ช่องพิเศษจริง
         j = self.jobs_by_tasks()
         self.assertEqual(j["T-02"]["slot"], 2)
+        self.assertTrue(j["T-02"].get("forced"))  # บันทึกว่าผู้ใช้สั่งรันเลยข้ามคิว (แยกจากบั๊กตัวจัดคิว)
+        self.assertFalse(j["T-01"].get("forced"))
         self.assertIn("FLASH_RUN=OK", p1.communicate(timeout=120)[0])
         self.assertFalse((self.home / "run_now" / j2["id"]).exists())
         st = json.loads(self.http(base + "/api/state")[1])

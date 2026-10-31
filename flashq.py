@@ -885,10 +885,13 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
         else:
             can = not ahead and len(held) < limit
         if boost or can:
-            n = take_slot(job, extra=boost and (bool(ahead) or len(held) >= limit))
+            forced = boost and not can  # ผู้ใช้สั่งรันเลยข้ามตัวจัดคิว (รวมธง flashq-parallel: no / ไฟล์ซ้อน) → บันทึกไว้แยกจากบั๊กตัวจัดคิว
+            n = take_slot(job, extra=forced or (boost and (bool(ahead) or len(held) >= limit)))
             if n:
                 flag.unlink(missing_ok=True)
                 job["slot"] = n
+                if forced:
+                    job["forced"] = now()
                 return "ok"
             time.sleep(0.5)
             continue
@@ -4156,7 +4159,8 @@ def cmd_status(a) -> int:
     for h in held:
         j = next((x for x in jobs() if x["id"] == h.get("id")), {})
         print(f"  ช่อง {h['slot']}{' (พิเศษ)' if h.get('extra') else ''}: {h.get('id', '?')} pid {h.get('pid')} ตั้งแต่ {h.get('since')}"
-              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{plan_label(j)} {j.get('tasks', '')}" if j else ""))
+              + (f" · {Path(j.get('project', '')).name} {kind_tag(j)}{plan_label(j)} {j.get('tasks', '')}" if j else "")
+              + (" · ผู้ใช้สั่งรันเลยข้ามคิว" if j.get("forced") else ""))
     print(f"รอคิว: {len(q)} งาน")
     for i, j in enumerate(q, 1):
         why = sch["reasons"].get(j["id"]) or ("กำลังจะเริ่ม" if j["id"] in sch["start"] else "")
