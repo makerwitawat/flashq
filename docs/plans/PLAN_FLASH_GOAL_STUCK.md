@@ -39,7 +39,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
 
 ### กลุ่ม A — ปลดเบรกโดยไม่ล้างรอบ (flashq.py)
 
-- [ ] **T-01** `flashq.py` (`goal_changed_files` · `cmd_goal` · argparse ของ `goal`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` (`goal_changed_files` · `cmd_goal` · argparse ของ `goal`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - แนวคิด: คำสั่งใหม่ `goal ack <GOAL> --reason "<เหตุของ user>"` = user รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อก **ทั้งหมดจนถึงตอนนี้** · ไม่แตะ `base` `started` `rounds` `past` · หลัง ack ตรวจเฉพาะ commit หลัง HEAD ตอน ack และไฟล์ค้างที่แก้หลังเวลา ack
   - เทสต์: `test_goal_ack_clears_scope_brake_keeps_rounds` · body = G01 + `"goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 5\n"` · ลำดับ:
     1. `goal check` → `GOAL_CHECK=OK`
@@ -70,7 +70,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
   - หลักฐานชี้ขาด: แดง `.tmp/T-01.red.log` บรรทัด `'GOAL_ACK=FAIL' not found` · เขียว `.tmp/T-01.green.log` บรรทัด `1 passed` · `.tmp/T-01.reg.log` บรรทัด `2 passed`
   - commit: `flashq: goal ack รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อกแล้วตรวจต่อได้ ไม่ต้อง --reset (ไม่ล้าง base/รอบ) + เทสต์ (T-01)`
 
-- [ ] **T-02** `flashq.py` (`cmd_goal` check/verify · `goal_publish` · argparse) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` (`cmd_goal` check/verify · `goal_publish` · argparse) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - แนวคิด: `goal check <GOAL> --extend N [--extend-hours H]` = user ต่องบหลัง STOP ครบงบ/เกินเวลา · เก็บ base/started/rounds/past ไว้ · ใช้ได้เฉพาะธงที่เริ่มแล้วและไม่คู่ `--reset`
   - เทสต์: `test_goal_extend_budget_keeps_history` · body = G01 + `"goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 2\n"` · `goal check` → `src/a.txt`=`v1\n` → verify มี `GOAL=CONTINUE รอบ 1/2` → `src/a.txt`=`v2\n` → verify มี `ครบงบ 2 รอบแล้วยังไม่ผ่าน` · เก็บ `base` `started` จาก state · `goal check ... --extend 2 --reset` → มี `GOAL_CHECK=FAIL` · `goal check ... --extend 2 --extend-hours 1` → มี `GOAL_CHECK=OK` `งบ 4 รอบ / 7 ชม.` `ใช้ไปแล้ว 2 รอบ` · state: `base`/`started` เท่าเดิม `len(rounds)==2` `extra_rounds==2` · verify (ไม่มีงานใหม่) → มี `GOAL=CONTINUE รอบ 2/4`
   - แดง: `PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "goal_extend" > .tmp/T-02.red.log 2>&1` → FAIL `AssertionError: 'GOAL_CHECK=FAIL' not found in ''` (argparse: `unrecognized arguments: --extend`)
@@ -106,7 +106,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
   - หลักฐานชี้ขาด: แดง `.tmp/T-02.red.log` บรรทัด `'GOAL_CHECK=FAIL' not found` · เขียว `.tmp/T-02.green.log` `1 passed` · `.tmp/T-02.reg.log` `2 passed`
   - commit: `flashq: goal check --extend/--extend-hours ต่องบรอบ/เวลาหลัง STOP โดยไม่ล้าง base/รอบ + เทสต์ (T-02)`
 
-- [ ] **T-03** `flashq.py` (`goal stop hints` ใหม่ · `cmd_goal` status/verify) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-03** `flashq.py` (`goal stop hints` ใหม่ · `cmd_goal` status/verify) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_goal_status_shows_brakes_and_way_out` · body = G01 + `"goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n"` · `goal check` → เขียน `other.py` (ไม่ commit) → `goal verify` → stdout มี `เบรก: แก้ไฟล์นอกขอบเขต goal-files: other.py` และ `goal ack docs/plans/GOAL_x.md` · `goal status` → มี `เบรก: แก้ไฟล์นอกขอบเขต goal-files: other.py` · `goal ack docs/plans/GOAL_x.md` · `ทางออก`
   - แดง: `... -k "goal_status_shows_brakes" > .tmp/T-03.red.log 2>&1` → FAIL `AssertionError: 'goal ack docs/plans/GOAL_x.md' not found in` (verify ยังไม่มีบรรทัดทางออก)
   - แก้:
@@ -135,7 +135,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
 
 ### กลุ่ม B — หน้าเว็บ + สถานะไม่หาย + ไม่ค้าง
 
-- [ ] **T-04** `ui.html` ~3778 (dialog ปุ่ม 🔄 ตรวจใหม่)
+- [x] **T-04** `ui.html` ~3778 (dialog ปุ่ม 🔄 ตรวจใหม่)
   - ก่อน: `• นับเป็นรอบใหม่ของงบรอบ" })) return;`
   - หลัง: `• ไม่มีงานใหม่ตั้งแต่รอบก่อน = ไม่นับรอบ แค่อัปเดตผล" })) return;`
   - (สองวลีนี้มีในพจนานุกรม EN แล้ว: `ไม่มีงานใหม่ตั้งแต่รอบก่อน|…` และ `ไม่นับรอบ แค่อัปเดตผล|…` · **ห้ามแตะ** บรรทัด `นับเป็นรอบใหม่ของงบรอบ|counts as…` ในพจนานุกรม)
@@ -144,7 +144,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
   - หลักฐานชี้ขาด: `.tmp/T-04.node.log` ขนาด 0 ไบต์ · `.tmp/T-04.log` บรรทัด `1 passed` · `git show --stat HEAD` แตะ `ui.html` ไฟล์เดียว 1 บรรทัด
   - commit: `ui: กล่องยืนยันตรวจใหม่บอกตรงจริง — ไม่มีงานใหม่ = ไม่นับรอบ (T-04)`
 
-- [ ] **T-05** `flashq.py` (`_goal_load` · `goal_publish`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-05** `flashq.py` (`_goal_load` · `goal_publish`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - แนวคิด: ต้นฉบับยังอยู่ที่ `.tmp/flashq-goal/` (เทสต์เดิมอ้าง) · เพิ่มสำเนาที่ `HOME / "goal-state" / "<key>.json"` (key เดียวกับการ์ดใน `goal_publish`) · ต้นฉบับหาย → กู้จากสำเนา (ไม่ใช้โฟลเดอร์ `goals/` เพราะเทสต์ `:3492` ตรวจว่าโฟลเดอร์นั้นว่าง)
   - เทสต์: `test_goal_state_recovers_after_tmp_deleted` · body = G01 + `"goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n"` · check → verify (`GOAL=CONTINUE รอบ 1/3`) → `len(list((self.home / "goal-state").glob("*.json"))) == 1` → `shutil.rmtree(self.proj / ".tmp" / "flashq-goal")` → `goal status` มี `รอบ 1/3` และ `กู้สถานะธงจากสำเนา` · ไม่มี `ยังไม่ได้รัน` → `goal verify` มี `GOAL=CONTINUE รอบ 1/3` · ไฟล์ `.tmp/flashq-goal/GOAL_x.json` มีอยู่
   - แดง: `... -k "goal_state_recovers" > .tmp/T-05.red.log 2>&1` → FAIL `AssertionError: 0 != 1` (ยังไม่มีสำเนา)
@@ -159,7 +159,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
   - หลักฐานชี้ขาด: แดง `.tmp/T-05.red.log` บรรทัด `AssertionError: 0 != 1` · เขียว `1 passed` · reg `4 passed`
   - commit: `flashq: สำรองสถานะธงไว้ที่ ~/.flashq/goal-state — ลบ .tmp แล้วรอบ/base ไม่หาย + เทสต์ (T-05)`
 
-- [ ] **T-06** `flashq.py` ~7117 (`goal_phase`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-06** `flashq.py` ~7117 (`goal_phase`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_goal_phase_cancelled_job_needs_new_round` · body = G01 + `"goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n"` · check + verify ด้วย `env={"CLAUDE_CODE_SESSION_ID": ""}` · `mod = self.load_mod("flashq_goalcancelled")` · `mod.GOALS_DIR = self.home / "goals"` · `mod.CLAUDE_PROJECTS = self.home / "cp"` · `g = mod.ui_goals([])[0]` · `job = {"id": "J9", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R2.md", "state": "cancelled", "finished": "2099-01-01 00:00:00"}` · `ph = mod.ui_goals([], [job])[0]["phase"]` → `ph["step"] == "plan"` · `"ถูกยกเลิก" in ph["label"]` · `ph["warn"] is True`
   - แดง: `... -k "goal_phase_cancelled" > .tmp/T-06.red.log 2>&1` → FAIL `AssertionError: 'review' != 'plan'`
   - แก้: ก่อน `if fresh and verdict != "DONE":` (มีที่เดียว) แทรก 3 บรรทัด ย่อหน้าเท่ากัน:
@@ -170,7 +170,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
   - หลักฐานชี้ขาด: แดง `.tmp/T-06.red.log` บรรทัด `'review' != 'plan'` · เขียว `1 passed` · reg `1 passed`
   - commit: `flashq: การ์ดธงแยก "งานรอบนี้ถูกยกเลิก — ส่งใหม่" ไม่ค้าง "รอ Claude ตรวจ" + เทสต์ (T-06)`
 
-- [ ] **T-07** `flashq.py` ~7693-7700 (`goal_run_cmd`) — แก้ตรง ไม่มีเทสต์แดง (เหตุ: `run_q` ส่ง `stdin=DEVNULL` ให้ flashq อยู่แล้ว ลูกสืบทอด → เทสต์ stdin ผ่านตั้งแต่ก่อนแก้ · kill ไม่สำเร็จจำลองไม่ได้ในเทสต์)
+- [x] **T-07** `flashq.py` ~7693-7700 (`goal_run_cmd`) — แก้ตรง ไม่มีเทสต์แดง (เหตุ: `run_q` ส่ง `stdin=DEVNULL` ให้ flashq อยู่แล้ว ลูกสืบทอด → เทสต์ stdin ผ่านตั้งแต่ก่อนแก้ · kill ไม่สำเร็จจำลองไม่ได้ในเทสต์)
   - ก่อน: `p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=buf, stderr=subprocess.STDOUT)`
   - หลัง: `p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdin=subprocess.DEVNULL, stdout=buf, stderr=subprocess.STDOUT)  # คำสั่งที่รอ input ได้ EOF ทันที ไม่ค้าง`
   - จุดเสียบ 2: บรรทัด `p.wait()` ที่อยู่**ถัดจาก `kill_tree(p.pid)` ภายใน `def goal_run_cmd`** (ไม่ใช่ที่ ~1663/~1759) → แทนด้วย `try:` / `p.wait(timeout=15)` / `except subprocess.TimeoutExpired:` / `print(f"เตือน: ฆ่าคำสั่งเกณฑ์ไม่สำเร็จ pid {p.pid} — ไม่รอต่อ", file=sys.stderr)` (ย่อหน้าตามบล็อก except เดิม · สไตล์เดียวกับ `print(..., file=sys.stderr)` ที่มีในไฟล์)
@@ -180,7 +180,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
 
 ### กลุ่ม C — เอกสาร
 
-- [ ] **T-08** `claude/commands/flash-goal.md` (§3 STOP · §5 ทำต่อ) — ข้อความในบล็อก text ด้านล่างคือข้อความตรงตัวที่ต้องใส่ (ไม่มี backslash)
+- [x] **T-08** `claude/commands/flash-goal.md` (§3 STOP · §5 ทำต่อ) — ข้อความในบล็อก text ด้านล่างคือข้อความตรงตัวที่ต้องใส่ (ไม่มี backslash)
   - จุดเสียบ 1: บรรทัดที่ขึ้นต้น `- มีงาน flashq ค้างอยู่` → ในวงเล็บของบรรทัดนั้น แทน `{{FLASHQ_RUN}}` (ที่ไม่มีคำสั่งย่อย) ด้วยข้อความบรรทัดที่ 1 ของบล็อก (เดิมไม่มีคำสั่งย่อย → ตรวจงานค้างไม่ได้)
   - จุดเสียบ 2: บรรทัดที่ขึ้นต้น `` - `GOAL=STOP` → **หยุดวน** `` → ต่อท้ายบรรทัดด้วยบรรทัดที่ 2 ของบล็อก
   - จุดเสียบ 3: บรรทัดที่มีคำว่า `รายงานเบรกให้ user ก่อน` (ใน §5 ทำต่อ) → แทรกบรรทัดที่ 3 ของบล็อก ต่อจากคำว่า `รายงานเบรกให้ user ก่อน` ทันที
@@ -193,7 +193,7 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
   - หลักฐานชี้ขาด: `.tmp/T-08.log` มีบรรทัด `flash-goal.md:` ที่มี `FLASHQ_RUN}} status` 1 บรรทัด + บรรทัดสรุป pytest มี `passed` ไม่มี `failed`
   - commit: `flash-goal: ทำต่อตรวจงานค้างด้วย status + STOP บอกทางออก ack/extend/reset (T-08)`
 
-- [ ] **T-09** `CHANGELOG.md` + `docs/REFERENCE.md` — ข้อความในบล็อก text = ตรงตัว
+- [x] **T-09** `CHANGELOG.md` + `docs/REFERENCE.md` — ข้อความในบล็อก text = ตรงตัว
   - ก่อน: `## 2026-10-31` (CHANGELOG มีที่เดียว) → หลัง: คงหัวข้อ แล้วแทรกบรรทัดที่ 1 ของบล็อกเป็น bullet แรกใต้หัวข้อ
   - ก่อน: `python D:\MyCode\flashq\flashq.py goal check|verify|status|human|cancel <GOAL>   # โหมดเป้าหมาย` → หลัง: แทน `cancel <GOAL>` ด้วย `cancel|ack <GOAL>` (ที่เหลือตรงตัว)
   - จุดเสียบ REFERENCE: บรรทัดที่ขึ้นต้น `` - `flashq goal status <GOAL>` = ทำต่อหลัง session ปิด `` → แทรกบรรทัดที่ 2 ของบล็อกเป็นบรรทัดใหม่ **ก่อน** บรรทัดนั้น
@@ -215,6 +215,15 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | `80ec2cf` | แดง `.tmp/T-01.red.log` → `AssertionError: 'GOAL_ACK=FAIL' not found in ''` · เขียว `.tmp/T-01.green.log` → `1 passed, 183 deselected in 4.32s` · reg `.tmp/T-01.reg.log` → `2 passed, 182 deselected in 16.91s` | |
+| T-02 | ✅แก้ | `745da37` | แดง `.tmp/T-02.red.log` → `AssertionError: 'GOAL_CHECK=FAIL' not found in ''` · เขียว `.tmp/T-02.green.log` → `1 passed, 184 deselected in 3.98s` · reg `.tmp/T-02.reg.log` → `2 passed, 183 deselected in 14.97s` | |
+| T-03 | ✅แก้ | `a015901` | แดง `.tmp/T-03.red.log` → `AssertionError: 'goal ack docs/plans/GOAL_x.md' not found` · เขียว `.tmp/T-03.green.log` → `1 passed, 185 deselected in 1.85s` · reg `.tmp/T-03.reg.log` → `1 passed, 185 deselected in 9.53s` | |
+| T-04 | ✅แก้ | `f076521` | `.tmp/T-04.node.log` = 0 ไบต์ · `.tmp/T-04.log` → `1 passed, 185 deselected in 0.15s` · `git show --stat HEAD` = `ui.html | 2 +-` 1 ไฟล์ | |
+| T-05 | ✅แก้ | `48a8997` | แดง `.tmp/T-05.red.log` → `AssertionError: 0 != 1` · เขียว `.tmp/T-05.green.log` → `1 passed, 186 deselected in 2.67s` · reg `.tmp/T-05.reg.log` → `4 passed, 183 deselected in 21.61s` | |
+| T-06 | ✅แก้ | `061f7cf` | แดง `.tmp/T-06.red.log` → `AssertionError: 'review' != 'plan'` (`1 failed, 187 deselected`) · เขียว `.tmp/T-06.green.log` → `1 passed, 187 deselected in 2.48s` · reg `.tmp/T-06.reg.log` → `1 passed, 187 deselected in 7.46s` | |
+| T-07 | ✅แก้ | `b168217` | `.tmp/T-07.log` → `2 passed, 186 deselected in 12.69s` · `git show HEAD` มี `stdin=subprocess.DEVNULL` + `p.wait(timeout=15)` ใน `goal_run_cmd` | |
+| T-08 | ✅แก้ | `2e33021` | `.tmp/T-08.log` → `claude/commands/flash-goal.md:63:... \`{{FLASHQ_RUN}} status\`` + `5 passed, 183 deselected in 6.86s` | |
+| T-09 | ✅แก้ | `5b785d1` | `.tmp/T-09.log` ขึ้น `3 files changed` (ไฟล์งาน 2 + แผนที่ agent หลักติ๊กค้าง) → scoped diff `2 files changed, 3 insertions(+), 1 deletion(-)` · `git grep -n "goal ack"` = `CHANGELOG.md:6` + `docs/REFERENCE.md:112` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - การ์ด STOP `ui.html:2225` ยังบอก "แก้ต้นเหตุแล้วกด 🔄 ตรวจใหม่" (ไม่พูดถึง ack/extend) — ต้องเพิ่มวลีใหม่ + พจนานุกรม EN · ทำรอบหน้า
