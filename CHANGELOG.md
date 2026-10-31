@@ -2,6 +2,11 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-10-31 (รุ่น 0.2.3)
+- **runnow บันทึกว่าข้ามคิว**: งานที่ผู้ใช้สั่งรันเลยจนได้ช่องทั้งที่ตัวจัดคิวยังไม่ปล่อย (เช่น แผน `flashq-parallel: no`) ถูกใส่ธง `forced` ใน job + ช่องเป็น `(พิเศษ)` · `flashq status` ต่อท้าย "ผู้ใช้สั่งรันเลยข้ามคิว" — แยกออกจากบั๊กตัวจัดคิวได้
+- **แก้: `flashq inbox` ไม่แสดงผลเลย** (hook เรียก stdout.reconfigure บน StringIO แล้วถูกกลืนเงียบ) + ไม่กรองตาม session ของผู้สั่ง · เพิ่มเทสต์ `run --detach` → `inbox`
+- **แก้ธงค้าง (goal)**: ดูรายการ ack/--extend/สำรองสถานะ/การ์ดงานรอบถูกยกเลิก/verify ไม่ค้างในหัวข้อ 2026-10-31 ด้านล่าง
+
 ## 2026-10-31
 - **แก้: ธง (flashq goal) เบรกแล้วค้าง**: `goal ack <GOAL> --reason "…"` รับทราบไฟล์นอกขอบเขต/ไฟล์ล็อกแล้วตรวจต่อได้ (เดิม STOP ตลอดเพราะ commit เก่าอยู่ใน base..HEAD) · `goal check --extend N --extend-hours H` ต่องบโดยไม่ล้าง base/รอบ · `goal status` พิมพ์เหตุเบรก + ทางออก · สถานะธงสำรองที่ `~/.flashq/goal-state/` (ลบ .tmp ไม่รีเซ็ต) · การ์ดแยกงานรอบที่ถูกยกเลิก · กล่องตรวจใหม่บอกตรงว่าไม่มีงานใหม่ไม่นับรอบ · verify ไม่ค้างเมื่อเกณฑ์รอ input
 - **ผู้สั่งเป็น opencode ได้ (โมเดลอะไรก็ได้ เช่น GLM)**: `flashq install` สร้าง `/flash-plan` `/flash-check` `/flash-goal` `/flash-investigate` `/flash-qa` `/flash-doc` `/flash-init` ใน `~/.config/opencode/command/` จากต้นฉบับ `claude/commands/` (ใส่ตารางแปลเครื่องมือให้) · `flashq run --detach` ส่งเข้าคิวแล้วคืนทันที · `flashq inbox` แสดงผลงานที่จบของโปรเจกต์ (แทน hook ที่ opencode ไม่มี) · `flashq config open_session off` ปิดการเปิดหน้าต่าง session ของพนักงานทั้งเครื่อง

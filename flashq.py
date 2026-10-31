@@ -82,7 +82,7 @@ CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
 CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120, "dead_clear_hours": 24}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO) · dead_clear_hours = ป้าย "process ตาย" หายเองเมื่อพ้นกี่ชั่วโมง (0 = ไม่หายเอง)
 SCHEDULES = ("auto", "fifo")
 MAX_SLOTS = 8          # เพดานของ max_parallel
-VERSION = "0.2.2"      # รุ่นของโปรแกรม — ต้องตรงกับ tag ของ release (แสดงบนแถบชื่อหน้าต่าง/หน้าเว็บ) · แก้ตอนออกรุ่นใหม่
+VERSION = "0.2.3"      # รุ่นของโปรแกรม — ต้องตรงกับ tag ของ release (แสดงบนแถบชื่อหน้าต่าง/หน้าเว็บ) · แก้ตอนออกรุ่นใหม่
 QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
