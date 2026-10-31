@@ -629,6 +629,16 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("install", env=env)
         self.assertIn("ทุกบทบาทใช้ได้บนเครื่องนี้", r.stdout)
 
+    def test_config_open_session_and_inbox_empty(self):
+        r = self.run_q("config", "open_session", "off")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIs(json.loads((self.home / "config.json").read_text(encoding="utf-8"))["open_session"], False)
+        r = self.run_q("config", "open_session", "maybe")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        r = self.run_q("inbox")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("ไม่มีผลงานใหม่", r.stdout)
+
     def test_install_claude_and_opencode(self):
         claude = self.tmp / "claude_home"
         env = {"FLASHQ_CLAUDE_HOME": str(claude)}
@@ -641,6 +651,11 @@ class FlashqTest(unittest.TestCase):
         self.assertNotIn("{{FLASHQ}}", plan)
         self.assertEqual((claude / "commands" / "flash-check.md").read_text(encoding="utf-8"), "ของผู้ใช้เอง\n")
         self.assertTrue((self.tmp / "command" / "flash.md").exists())
+        oc_plan = (self.tmp / "command" / "flash-plan.md").read_text(encoding="utf-8")  # ผู้สั่งฝั่ง opencode สร้างจากต้นฉบับ Claude
+        self.assertIn("ผู้สั่งคือ agent หลักของ opencode", oc_plan)
+        self.assertIn("--detach", oc_plan)
+        self.assertNotIn("effort:", oc_plan)
+        self.assertNotIn("{{FLASHQ", oc_plan)
         self.assertTrue((claude / "agents" / "flash-checker.md").exists(), r.stdout)
         self.assertTrue((claude / "hooks" / "image_guard.py").exists(), r.stdout)
         self.assertNotIn("{{FLASHQ}}", (claude / "hooks" / "image_guard.py").read_text(encoding="utf-8"))

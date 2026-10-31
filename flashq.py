@@ -794,7 +794,14 @@ def set_config(key: str, value) -> tuple[str, str]:
         cfg["dead_clear_hours"] = v
         write_json(CONFIG, cfg)
         return "", (f"ตั้งป้ายงานตายหายเองเมื่อพ้น {v:g} ชั่วโมง แล้ว" if v else "ปิดการล้างป้ายงานตายอัตโนมัติแล้ว")
-    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min, dead_clear_hours", ""
+    if key == "open_session":
+        v = str(value if value is not None else "").lower()
+        if v not in ("on", "off", "true", "false", "1", "0"):
+            return "open_session ต้องเป็น on | off", ""
+        cfg["open_session"] = v in ("on", "true", "1")
+        write_json(CONFIG, cfg)
+        return "", ("สั่ง opencode desktop เปิดหน้าต่าง session ตอนงานเริ่มแล้ว" if cfg["open_session"] else "ปิดการเปิดหน้าต่าง session อัตโนมัติแล้ว (งานยังรันตามปกติ ดูได้ที่ flashq ui)")
+    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min, dead_clear_hours, open_session", ""
 
 
 def slot_path(n: int) -> Path:
@@ -1664,7 +1671,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             if sid:
                 job["session"] = sid
                 save_job(job)
-                if not no_open:
+                if not no_open and read_config().get("open_session") is not False:  # open_session: off = ไม่เปิดหน้าต่าง session ให้ (ใช้เมื่อสั่งงานจาก opencode เอง)
                     open_in_desktop(sid, attach)
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
@@ -2172,6 +2179,15 @@ def cmd_run(a) -> int:
         print("ต้องมี <plan> <tasks> หรือ --message")
         return 1
     start = Path(a.project or os.getcwd())
+    if getattr(a, "detach", False):  # ผู้สั่งที่ไม่มี background shell (เช่น opencode) → ส่งแล้วคืนทันที · ผลงานจบอยู่ใน inbox (flashq inbox)
+        rest = [x for x in sys.argv[1:] if x != "--detach"]
+        r = spawn_run(([sys.argv[0]] if FROZEN else [sys.executable, sys.argv[0]]) + rest, str(start))
+        print(r["message"])
+        if r.get("job"):
+            print(f"FLASH_RUN=DETACHED job={r['job']} — จบแล้วดูผลด้วย: {run_cmd()} inbox")
+        elif r.get("ok"):
+            print(f"FLASH_RUN=DETACHED job=? — ดู log ส่งงาน {r['out']} · ผลด้วย: {run_cmd()} inbox")
+        return 0 if r.get("ok") else 1
     root, is_git = project_root(start)
     cfg = project_cfg(root)
     for d in (JOBS, LOGS):
@@ -3991,6 +4007,26 @@ def cmd_sweep(a) -> int:
     return 0
 
 
+def cmd_inbox(a) -> int:
+    """แสดงผลงานที่จบแล้วของโปรเจกต์นี้ (cwd) แล้วย้ายเข้า inbox/done — ทางเดียวกับ hook inbox_notify.py แต่เรียกเองได้ (ผู้สั่งที่ไม่ใช่ Claude Code ไม่มี hook)"""
+    import io
+    src = REPO / "hooks" / "inbox_notify.py"
+    if not src.exists():
+        print(f"ไม่พบ {src} — รัน install ใหม่จากที่อยู่จริงของ flashq")
+        return 1
+    ns: dict = {"__name__": "inbox_notify"}
+    exec(compile(fill_template(src.read_text(encoding="utf-8"), True), str(src), "exec"), ns)
+    old_in, old_out = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = io.StringIO(json.dumps({"cwd": os.getcwd(), "session_id": ""})), io.StringIO()
+    try:
+        ns["main"]()
+        text = sys.stdout.getvalue().strip()
+    finally:
+        sys.stdin, sys.stdout = old_in, old_out
+    print(text or "ไม่มีผลงานใหม่ของโปรเจกต์นี้")
+    return 0
+
+
 def wait_targets(target: str) -> list[dict]:
     """งานที่ตรงกับ target: id (ขึ้นต้น) หรือชื่อแผน/stem · เลือกงานที่ยังไม่จบก่อน ไม่มี = งานล่าสุดของแผนนั้น"""
     rows = jobs()
@@ -4296,8 +4332,8 @@ def cmd_config(a) -> int:
         for k, v in read_config().items():
             print(f"{k} = {v}")
         return 0
-    if a.key not in ("max_parallel", "schedule", "starve_min", "dead_clear_hours"):
-        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min, dead_clear_hours")
+    if a.key not in ("max_parallel", "schedule", "starve_min", "dead_clear_hours", "open_session"):
+        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min, dead_clear_hours, open_session")
         return 1
     if a.value is None:
         print(f"{a.key} = {read_config().get(a.key)}")
@@ -4824,9 +4860,28 @@ def fill_template(text: str, py: bool = False) -> str:
     return text.replace("{{FLASHQ_RUN}}", run).replace("{{FLASHQ_EXE}}", exe).replace("{{FLASHQ}}", str(REPO).replace("\\", "/"))
 
 
+OC_COMMANDER_NOTE = """
+> **ผู้สั่งคือ agent หลักของ opencode (โมเดลไหนก็ได้ เช่น GLM)** — ไฟล์นี้สร้างจากต้นฉบับของ Claude Code ตอน `flashq install` (แก้ที่ `claude/commands/` ไม่ใช่ไฟล์นี้) · อ่านคำในไฟล์ตามนี้:
+> - `AskUserQuestion` → question tool · `Agent` / subagent → task tool (เลือก `model:` ไม่ได้ ใช้ agent ที่มี) · `Skill` → skill tool
+> - `run_in_background` → ใส่ `--detach` ท้ายคำสั่ง `flashq run …` (ส่งเข้าคิวแล้วคืนทันที) แล้ว**หยุดรอ** ห้าม sleep/poll · จบแล้วผู้ใช้สั่งต่อ หรือรัน `flashq inbox` ดูผลงานที่จบ
+> - hook/ยามของ Claude (`run_guard` `inbox_notify` `delegate_guard`) ไม่มีใน opencode → ทำตามกติกาในไฟล์ด้วยตัวเอง · ไม่มี subagent `flash-checker` → ตรวจเองตามขั้นของคำสั่ง
+> - ไม่อยากให้เปิดหน้าต่าง session ของพนักงานซ้อนกับ session นี้ → `flashq config open_session off`
+"""
+
+
+def to_opencode_command(text: str) -> str:
+    """แปลงคำสั่งต้นฉบับของ Claude Code เป็นคำสั่ง opencode (ผู้สั่งเป็นโมเดลอะไรก็ได้) — ตัด effort · ใส่ตารางแปลเครื่องมือหลังบรรทัด flashq:managed"""
+    text = re.sub(r"^effort:.*\n", "", text, count=1, flags=re.M).replace("(Claude Code · ทุกโปรเจกต์)", "(opencode · ทุกโปรเจกต์)")
+    m = re.search(r"^<!-- flashq:managed.*-->\n", text, re.M)
+    end = text.find("\n---\n", 3) if text.startswith("---") else -1
+    at = m.end() if m else (end + 5 if end >= 0 else 0)
+    return text[:at] + OC_COMMANDER_NOTE + text[at:]
+
+
 def install_items(claude_home: Path):
     """(ปลายทาง, เนื้อหาที่ต้องติดตั้ง) ของทุกไฟล์ที่ install คัดลอก — install กับ install --check ใช้ชุดเดียวกัน"""
     pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command", "*.md"),
+             (REPO / "claude" / "commands", OC_CONFIG.parent / "command", "*.md"),
              (REPO / "opencode" / "agent", OC_CONFIG.parent / "agent", "*.md"),
              (REPO / "claude" / "commands", claude_home / "commands", "*.md"),
              (REPO / "claude" / "agents", claude_home / "agents", "*.md"),
@@ -4836,6 +4891,8 @@ def install_items(claude_home: Path):
             continue
         for src in sorted(src_dir.glob(pat)):
             text = fill_template(src.read_text(encoding="utf-8"), src.suffix == ".py")
+            if src_dir == REPO / "claude" / "commands" and dst_dir == OC_CONFIG.parent / "command":  # ผู้สั่งฝั่ง opencode สร้างจากต้นฉบับเดียวกับ Claude
+                text = to_opencode_command(text)
             if src_dir == REPO / "opencode" / "agent":  # โมเดลที่ผู้ใช้เลือกไว้ (flashq models) ไม่ถูกต้นฉบับทับกลับเป็นค่าตั้งต้น
                 text = with_header_model(text, json_agent_model(src.stem))
             yield dst_dir / src.name, text
@@ -7833,7 +7890,8 @@ def main() -> int:
         r.add_argument("--switch-on-quota", type=int, default=0, help="QUOTA แล้วสลับบัญชีถัดไปและสั่งซ้ำได้กี่ครั้ง")
         r.add_argument("--retry-nostart", type=int, default=2, help="NOSTART แล้วลองใหม่กี่ครั้ง")
         r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
-        r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้")
+        r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้ (ปิดทั้งเครื่อง: config open_session off)")
+        r.add_argument("--detach", action="store_true", help="ส่งเข้าคิวแล้วคืนทันที ไม่รอจนงานจบ (สำหรับผู้สั่งที่รัน background ไม่ได้ เช่น opencode) · ผลดูด้วย inbox")
         r.set_defaults(fn=cmd_run)
     vf.set_defaults(attach="none")  # agent ที่เพิ่งติดตั้ง live server 4096 อาจยังไม่เห็น → รันแยกเป็นค่าเริ่มต้น
     inv.set_defaults(attach="none")
@@ -7893,6 +7951,8 @@ def main() -> int:
     wt.add_argument("--timeout-min", type=float, default=480, help="รอได้นานสุด (นาที) · เกิน = FLASH_WAIT=TIMEOUT exit 3")
     wt.add_argument("--poll", type=float, default=15, help="เช็กทุกกี่วินาที")
     wt.set_defaults(fn=cmd_wait)
+    ib = sp.add_parser("inbox", help="แสดงผลงานที่จบแล้วของโปรเจกต์นี้ (cwd) แล้วย้ายเข้า done — แทน hook สำหรับผู้สั่งที่ไม่ใช่ Claude Code")
+    ib.set_defaults(fn=cmd_inbox)
     sw = sp.add_parser("sweep", help="แจ้ง (inbox/toast) งานที่ process ตายกลางคัน — hook inbox_notify เรียกให้เอง")
     sw.set_defaults(fn=cmd_sweep)
     sh = sp.add_parser("shrink", help="ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (ประหยัด context)")
@@ -7927,7 +7987,7 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
-    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours)")
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours · open_session on|off)")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)
