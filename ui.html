@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>flashq คิวกลาง</title>
+<title>flashq v{{VERSION}} คิวกลาง</title>
 <style>
 :root {
   --zoom: 1;
@@ -675,6 +675,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
 
 <script>
 const TOKEN = "{{TOKEN}}";
+const VERSION = "{{VERSION}}".startsWith("{{") ? "" : "{{VERSION}}";  // รุ่นของโปรแกรม (server แทนค่าให้) · แสดงบนแถบชื่อ
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const store = {
@@ -2023,12 +2024,13 @@ function actBtns(j, { retry = true, short = true, check = false } = {}) {
   return h;
 }
 
+const VER = VERSION ? " v" + VERSION : "";
 function render() {
   const s = state;
   $("updated").textContent = `อัปเดต ${s.now}`;
   const runs = s.running_list || (s.running ? [s.running] : []);
-  document.title = runs.length ? `▶${runs.length > 1 ? runs.length + " งาน" : ""} ${dur(runs[0].elapsed_sec)} · ${runs[0].project_name} · flashq`
-    : (s.queued.length ? `คิว ${s.queued.length} · flashq` : "flashq คิวกลาง");
+  document.title = runs.length ? `▶${runs.length > 1 ? runs.length + " งาน" : ""} ${dur(runs[0].elapsed_sec)} · ${runs[0].project_name} · flashq${VER}`
+    : (s.queued.length ? `คิว ${s.queued.length} · flashq${VER}` : `flashq${VER} คิวกลาง`);
 
   const sf = s.submit_fails || [];
   $("deadBox").hidden = !s.dead.length && !sf.length;

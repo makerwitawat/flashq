@@ -23,6 +23,7 @@
 - แก้ `flashq.py`: เทสต์ที่เกี่ยวข้อง `python -m pytest tests/test_flashq.py -q -x -k "<คำ>"` · ก่อน merge ควรรันทั้งชุด (~6 นาที · ตั้ง timeout ≥ 500 วิ) · ตั้ง `PYTHONIOENCODING=utf-8` เมื่อรันจาก bash
 - แก้ `ui.html`: ตรวจ syntax ของ JS — ดึง `<script>` ออกมาเป็นไฟล์ใน `.tmp/` แล้ว `node --check` · ทดสอบหน้าจริงด้วย server แยกพอร์ต (ด้านล่าง)
 - แก้ `flashq.py`/`ui.html` แล้วต้อง **รีสตาร์ต `flashq ui`** (พอร์ต 4097) ให้หน้าเว็บใช้โค้ดใหม่ — server รันจาก checkout หลัก `D:\MyCode\flashq` จึงต้อง merge เข้า master ก่อน
+- ออกรุ่นใหม่ (release/tag): แก้ `VERSION` ใน `flashq.py` ให้ตรงกับ tag ก่อน (แสดงบนแถบชื่อหน้าต่าง/หน้าเว็บ)
 - แก้ไฟล์ใน `claude/` `opencode/` `hooks/` ต้องรัน `python flashq.py install` ใหม่ (ไฟล์ที่ติดตั้งแล้วจะใช้ได้ใน session ใหม่)
 
 ## ทดสอบหน้าเว็บโดยไม่แตะข้อมูลจริง

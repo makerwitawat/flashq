@@ -82,6 +82,7 @@ CONFIG, RUN_NOW = HOME / "config.json", HOME / "run_now"
 CONFIG_DEFAULTS = {"max_parallel": 1, "schedule": "fifo", "starve_min": 120, "dead_clear_hours": 24}  # ไม่มีไฟล์ config = พฤติกรรมเดิม (ทีละงาน FIFO) · dead_clear_hours = ป้าย "process ตาย" หายเองเมื่อพ้นกี่ชั่วโมง (0 = ไม่หายเอง)
 SCHEDULES = ("auto", "fifo")
 MAX_SLOTS = 8          # เพดานของ max_parallel
+VERSION = "0.2.2"      # รุ่นของโปรแกรม — ต้องตรงกับ tag ของ release (แสดงบนแถบชื่อหน้าต่าง/หน้าเว็บ) · แก้ตอนออกรุ่นใหม่
 QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
@@ -5760,7 +5761,7 @@ def make_ui_server(port: int = 4097):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path == "/":
-                html = (RES / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token)
+                html = (RES / "ui.html").read_text(encoding="utf-8").replace("{{TOKEN}}", token).replace("{{VERSION}}", VERSION)
                 return self._send(200, html, "text/html; charset=utf-8")
             if u.path == "/api/state":
                 return self._send(200, {**ui_state(), "boot": boot})
@@ -6098,14 +6099,14 @@ def cmd_gui(a) -> int:
     hide_child_consoles()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=ui_models, daemon=True).start()
-    win = webview.create_window("flashq", f"http://127.0.0.1:{srv.server_address[1]}/", width=1280, height=840, min_size=(900, 600))
+    win = webview.create_window(f"flashq v{VERSION}", f"http://127.0.0.1:{srv.server_address[1]}/", width=1280, height=840, min_size=(900, 600))
 
     def on_shown():
         gui_set_icon("flashq")
         last = ""
         while True:  # ชื่อหน้าต่างตาม <title> ของหน้าเว็บ (ui.html เปลี่ยนตามงานที่รัน เช่น "▶ 2:10 · โปรเจกต์ · flashq")
             try:
-                t = win.evaluate_js("document.title") or "flashq"
+                t = win.evaluate_js("document.title") or f"flashq v{VERSION}"
                 if t != last:
                     win.set_title(t)
                     last = t
