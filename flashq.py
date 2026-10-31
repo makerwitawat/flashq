@@ -7734,14 +7734,17 @@ def goal_stop_hints(stop: list[str], rel: str) -> list[str]:
 def goal_run_cmd(root: Path, cmd: str, timeout_min: float) -> tuple[int, str]:
     # output ลงไฟล์ชั่วคราว ไม่ใช่ pipe: ลูกที่สืบทอด pipe ไปแล้วค้างเบื้องหลัง (เช่น `start /b server`) จะไม่ทำให้ communicate() รอตามไปจน timeout ไม่ทำงาน
     with tempfile.TemporaryFile() as buf:
-        p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdout=buf, stderr=subprocess.STDOUT)
+        p = subprocess.Popen(cmd, shell=True, cwd=str(root), stdin=subprocess.DEVNULL, stdout=buf, stderr=subprocess.STDOUT)  # คำสั่งที่รอ input ได้ EOF ทันที ไม่ค้าง
         timed_out = False
         try:
             p.wait(timeout=timeout_min * 60)
         except subprocess.TimeoutExpired:
             timed_out = True
             kill_tree(p.pid)
-            p.wait()
+            try:
+                p.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                print(f"เตือน: ฆ่าคำสั่งเกณฑ์ไม่สำเร็จ pid {p.pid} — ไม่รอต่อ", file=sys.stderr)
         buf.seek(0)
         out = buf.read()
     if timed_out:
