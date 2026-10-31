@@ -639,6 +639,20 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ไม่มีผลงานใหม่", r.stdout)
 
+    def test_run_detach_then_inbox(self):
+        """--detach คืนทันทีพร้อม FLASH_RUN=DETACHED · งานจบแล้ว inbox แสดงผลครั้งเดียว (ย้ายเข้า done)"""
+        r = self.run_q("run", "--message", "PONG", "--attach", "none", "--detach")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=DETACHED", r.stdout)
+        out = ""
+        for _ in range(60):
+            out = self.run_q("inbox").stdout
+            if "ไม่มีผลงานใหม่" not in out:
+                break
+            time.sleep(0.5)
+        self.assertIn("→ OK", out)
+        self.assertIn("ไม่มีผลงานใหม่", self.run_q("inbox").stdout)
+
     def test_install_claude_and_opencode(self):
         claude = self.tmp / "claude_home"
         env = {"FLASHQ_CLAUDE_HOME": str(claude)}

@@ -4016,11 +4016,14 @@ def cmd_inbox(a) -> int:
         return 1
     ns: dict = {"__name__": "inbox_notify"}
     exec(compile(fill_template(src.read_text(encoding="utf-8"), True), str(src), "exec"), ns)
+    ns["mine"] = lambda row, session, cwd, now: ns["related"](row.get("project", ""), cwd)  # เรียกเอง = ทุกงานของโปรเจกต์นี้ ไม่กรองตาม session ของผู้สั่ง (ผู้สั่งต่างตัวกันได้)
     old_in, old_out = sys.stdin, sys.stdout
-    sys.stdin, sys.stdout = io.StringIO(json.dumps({"cwd": os.getcwd(), "session_id": ""})), io.StringIO()
+    buf = io.BytesIO()  # hook เรียก sys.stdout.reconfigure → ต้องเป็น TextIOWrapper ไม่ใช่ StringIO
+    sys.stdin, sys.stdout = io.StringIO(json.dumps({"cwd": os.getcwd(), "session_id": ""})), io.TextIOWrapper(buf, encoding="utf-8")
     try:
         ns["main"]()
-        text = sys.stdout.getvalue().strip()
+        sys.stdout.flush()
+        text = buf.getvalue().decode("utf-8").strip()
     finally:
         sys.stdin, sys.stdout = old_in, old_out
     print(text or "ไม่มีผลงานใหม่ของโปรเจกต์นี้")
