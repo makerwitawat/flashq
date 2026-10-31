@@ -851,7 +851,7 @@ def take_slot(job: dict, extra: bool) -> int:
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"id": job["id"], "pid": os.getpid(), "pid_start": proc_start(os.getpid()), "since": now(),
-                       "extra": extra}, f, ensure_ascii=False)
+                       "extra": extra, "project": job.get("project", "")}, f, ensure_ascii=False)
         return n
     return 0
 

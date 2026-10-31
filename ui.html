@@ -1961,6 +1961,7 @@ $("setupDlg").addEventListener("click", (ev) => {
   if (b.dataset.sulang) { if (b.dataset.sulang !== LANG) { store.set("lang", b.dataset.sulang); try { sessionStorage.setItem("flashq.suResume", "2"); } catch (e) {} location.reload(); } return; }
   if (b.dataset.suact) suAct(b.dataset.suact);
 });
+$("setupDlg").addEventListener("cancel", () => { suStore.set("1"); post("/api/setup_done", { done: true }); });  // กด Esc = ข้าม เหมือนปุ่ม X
 $("setupBtn").onclick = () => suOpen(1);
 (async () => {
   let resume = null; try { resume = sessionStorage.getItem("flashq.suResume"); sessionStorage.removeItem("flashq.suResume"); } catch (e) {}
