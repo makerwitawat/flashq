@@ -7132,6 +7132,9 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
         why = q.get("wait_reason") or ""
         return ph("flash", f"⏳ แผนรอบ {q['goal']['round']} อยู่ในคิว ลำดับ {q.get('position', '?')}" + (f" · {why}" if why else ""),
                   q.get("wait_sec"), "เข้าคิวมา", rnd=q["goal"]["round"])
+    if fresh and verdict != "DONE" and last_job.get("state") == "cancelled":  # งานรอบนั้นถูกหยุด ไม่ใช่ทำเสร็จ
+        return ph("plan", f"🚫 งาน Flash รอบ {last_job['round']} ถูกยกเลิกก่อนเสร็จ — ต้องส่งแผนรอบนี้เข้าคิวใหม่ (ไม่ต้อง goal verify)",
+                  last_job.get("ago_sec"), "ยกเลิกมา", True, rnd=last_job["round"])
     if fresh and verdict != "DONE":
         return ph("review", f"📥 Flash ทำรอบ {last_job['round']} เสร็จแล้ว — รอ Claude ตรวจ (goal verify)",
                   sess_ago if act else last_job.get("ago_sec"), "เคลื่อนไหวล่าสุด" if act else "Flash เสร็จมา", sess_warn or (not act and (last_job.get("ago_sec") or 0) > 1800))

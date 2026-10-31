@@ -2719,6 +2719,26 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("ครบงบ 3 รอบแล้วยังไม่ผ่าน", r.stdout, r.stdout)
         self.assertIn("รอบ 3/3", self.run_q("goal", "status", "docs/plans/GOAL_x.md").stdout)
 
+    def test_goal_phase_cancelled_job_needs_new_round(self):
+        """งาน Flash รอบล่าสุดถูกยกเลิก → การ์ดบอก "ต้องส่งแผนรอบนี้เข้าคิวใหม่" (ขั้น plan) ไม่ใช่ "รอ Claude ตรวจ" """
+        py = f'"{sys.executable}"'
+        body = (f"- [ ] G-01 ค่าเป็น new · ตรวจ: `{py} tests/acc.py` · ต้องเห็น: `VAL=new`\n"
+                "goal-files: src/*\ngoal-locked: tests/*\ngoal-max-rounds: 3\n")
+        self.goal_repo(body)
+        env = {"CLAUDE_CODE_SESSION_ID": ""}
+        self.assertIn("GOAL_CHECK=OK", self.run_q("goal", "check", "docs/plans/GOAL_x.md", env=env).stdout)
+        self.assertIn("GOAL=CONTINUE รอบ 1/3", self.run_q("goal", "verify", "docs/plans/GOAL_x.md", env=env).stdout)
+        mod = self.load_mod("flashq_goalcancelled")
+        mod.GOALS_DIR = self.home / "goals"
+        mod.CLAUDE_PROJECTS = self.home / "cp"
+        g = mod.ui_goals([])[0]
+        job = {"id": "J9", "project": g["project"], "plan": "docs/plans/PLAN_FLASH_x_R2.md",
+               "state": "cancelled", "finished": "2099-01-01 00:00:00"}
+        ph = mod.ui_goals([], [job])[0]["phase"]
+        self.assertEqual(ph["step"], "plan")
+        self.assertIn("ถูกยกเลิก", ph["label"])
+        self.assertIs(ph["warn"], True)
+
     def test_goal_state_recovers_after_tmp_deleted(self):
         """สำเนาสถานะธงใน ~/.flashq/goal-state: .tmp/flashq-goal ถูกลบ → goal status/verify กู้รอบ/base เดิมได้"""
         py = f'"{sys.executable}"'
