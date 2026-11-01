@@ -1675,6 +1675,10 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(flashq.paths_overlap("cworking/script/", "cworking/script/x.txt"))
         self.assertTrue(flashq.paths_overlap("a.cpp", "src/a.cpp"))
         self.assertFalse(flashq.paths_overlap("src/a.cpp", "lib/a.cpp"))
+        self.assertTrue(flashq.paths_overlap("src", "src/a.cpp"))
+        self.assertTrue(flashq.paths_overlap("Client/Src", "Client/Src/a.cpp"))
+        self.assertFalse(flashq.paths_overlap("src/a", "src/ab.cpp"))
+        self.assertFalse(flashq.paths_overlap("src/a.cpp", "lib/a.cpp"))
 
     def test_ui_run_now_extra_slot(self):
         """ปุ่มรันเลย: max_parallel=1 งานที่ 2 รอคิว → ตรวจไฟล์ซ้อน (ซ้อน = ต้อง ack) → ได้ช่องพิเศษ รันพร้อมงานแรก"""

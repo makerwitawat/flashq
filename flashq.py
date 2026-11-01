@@ -1083,7 +1083,7 @@ def paths_overlap(a: str, b: str) -> bool:
     a, b = _gnorm(a), _gnorm(b)
     if a == "" or b == "":  # glob ระดับรากครอบทุกไฟล์
         return True
-    if a == b or (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b)):
+    if a == b or b.startswith(a.rstrip("/") + "/") or a.startswith(b.rstrip("/") + "/"):
         return True
     if a.endswith("/") or b.endswith("/"):
         return False
