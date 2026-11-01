@@ -5884,7 +5884,8 @@ def log_tail(j: dict, attempt: int, offset: int, limit: int = 256 * 1024) -> dic
     logs = j.get("logs") or []
     out = {"attempts": len(logs), "attempt": 0, "offset": 0, "size": 0, "lines": [], "reset": False,
            "state": live_state(j), "last": j.get("last", ""),
-           "denied_help": "\n".join(perm_fix_lines(j["perm_denied"], partial=j.get("result") != "DENIED")) if j.get("perm_denied") else ""}
+           "denied_help": "\n".join(perm_fix_lines(j["perm_denied"], partial=j.get("result") != "DENIED")) if j.get("perm_denied") else "",
+           "unverified": j.get("unverified") or []}
     if not logs:
         return out
     idx = attempt - 1 if 1 <= attempt <= len(logs) else len(logs) - 1

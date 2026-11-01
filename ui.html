@@ -2406,6 +2406,7 @@ async function pollLog() {
       logDone = true;
       if (!d.attempts) add.push(d.state === "queued" ? "(ยังรอคิว — ยังไม่มี log)" : "(ไม่มีไฟล์ log)");
       if (d.denied_help) add.push("", d.denied_help);
+      if (d.unverified && d.unverified.length) add.push("", "⚠ ผล OK ยังไม่ยืนยัน: " + d.unverified.join(" · "));
       if (d.last) add.push("", "---- ข้อความท้าย ----", d.last);
     }
     if (live) logDone = false;
