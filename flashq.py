@@ -899,6 +899,15 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
             reason = sch["reasons"].get(job["id"], "")
         else:
             can = not ahead and len(held) < limit
+            if can and job.get("plan"):
+                for r in jobs():
+                    if live_state(r) != "running" or r["id"] == job["id"] or not r.get("plan"):
+                        continue
+                    c = conflict_reason(job, r, job_info)
+                    if c:
+                        can = False
+                        reason = f"ชนกับ {r['id']}: {c}"
+                        break
         if boost or can:
             forced = boost and not can  # ผู้ใช้สั่งรันเลยข้ามตัวจัดคิว (รวมธง flashq-parallel: no / ไฟล์ซ้อน) → บันทึกไว้แยกจากบั๊กตัวจัดคิว
             n = take_slot(job, extra=forced or (boost and (bool(ahead) or len(held) >= limit)))

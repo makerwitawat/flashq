@@ -1626,9 +1626,10 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         r = self.run_q("config", "max_parallel", "2")
         self.assertEqual(r.returncode, 0, r.stdout)
+        self.overlap_plan()
         p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(1.5)
-        p2 = self.run_q("run", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
+        p2 = self.run_q("run", "PLAN.md", "T-03", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
         self.wait_for(lambda: all(j.get("status") == "running" for j in self.jobs_by_tasks().values())
                       and len(self.jobs_by_tasks()) == 2, msg="ไม่ได้รัน 2 งานพร้อมกัน")
         st = self.run_q("status").stdout
@@ -1641,9 +1642,25 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=OK", o2)
         self.assertNotIn("QUEUED", o2)
         j = self.jobs_by_tasks()
-        self.assertEqual({j["T-01"]["slot"], j["T-02"]["slot"]}, {1, 2})
-        self.assertLess(j["T-02"]["started"], j["T-01"]["finished"])  # ซ้อนกันจริง
+        self.assertEqual({j["T-01"]["slot"], j["T-03"]["slot"]}, {1, 2})
+        self.assertLess(j["T-03"]["started"], j["T-01"]["finished"])  # ซ้อนกันจริง
         self.assertEqual(sorted(p.name for p in self.home.glob("running*.lock")), [])
+
+    def test_fifo_conflict_waits(self):
+        """โหมด fifo (ค่าเริ่มต้น): งานที่ไฟล์ชนกับงานที่กำลังรันต้องรอคิว แม้ยังมีช่องว่าง"""
+        r = self.run_q("config", "max_parallel", "2")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.overlap_plan()
+        p1 = self.run_q("run", "PLAN.md", "T-01", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "6"}, wait=False)
+        self.wait_for(lambda: self.jobs_by_tasks().get("T-01", {}).get("status") == "running")
+        p2 = self.run_q("run", "PLAN.md", "T-02", "--attach", "none", "--no-open", env={"FAKE_SLEEP": "1"}, wait=False)
+        o1 = p1.communicate(timeout=120)[0]
+        o2 = p2.communicate(timeout=120)[0]
+        self.assertIn("FLASH_RUN=OK", o1)
+        self.assertIn("FLASH_RUN=OK", o2)
+        j = self.jobs_by_tasks()
+        self.assertGreaterEqual(j["T-02"]["started"], j["T-01"]["finished"])  # ต้องรอ ไม่รันพร้อม
+        self.assertIn("ชนกับ", o2)
 
     def overlap_plan(self):
         (self.proj / "PLAN.md").write_text(
