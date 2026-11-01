@@ -67,8 +67,14 @@ class FlashqTest(unittest.TestCase):
     def test_ok_without_commit_or_done_warns(self):
         """exit 0 แต่ไม่มี commit ใหม่/DONE (worker หยุดถามผู้ใช้) = ยัง OK แต่ต้องเตือน · ส่งข้อความตรง (ไม่มีแผน) ไม่เตือน"""
         r = self.run_q(*self.base())
-        self.assertIn("FLASH_RUN=OK", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)
         self.assertIn("WARN: สถานะ OK แต่ไม่มี commit ใหม่", r.stdout)
+        job = json.loads(max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))
+        self.assertEqual(job["status"], "ok")
+        self.assertEqual(job["result"], "OK_UNVERIFIED")
+        self.assertIsInstance(job["unverified"], list)
+        self.assertTrue(job["unverified"])
         r = self.run_q("run", "--message", "PONG", "--attach", "none", "--no-open")
         self.assertIn("FLASH_RUN=OK", r.stdout)
         self.assertNotIn("ไม่มี commit ใหม่", r.stdout)
@@ -165,7 +171,7 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("wait", "PLAN.md", "--poll", "0.5")
         p1.communicate(timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("FLASH_RUN=OK job=", r.stdout)
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED job=", r.stdout)
         self.assertIn("PLAN.md T-01", r.stdout)
         jid = re.search(r"job=(\S+)", r.stdout).group(1)
         r = self.run_q("wait", jid[:10])  # งานจบแล้ว = ตอบทันที

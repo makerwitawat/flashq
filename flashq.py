@@ -1941,6 +1941,23 @@ def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None 
     return any(said_done(t) for t in outputs)
 
 
+def unverified_reasons(job: dict, res: dict) -> list[str]:
+    """เหตุที่ผล OK ยังไม่ยืนยัน (ไม่มีหลักฐานงาน) — ว่าง = OK จริง"""
+    out = []
+    if res.get("no_progress"):
+        out.append("ไม่มี commit ของงานและไม่มีคำว่า DONE")
+    if job.get("readonly") and job.get("modified"):
+        out.append("งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน")
+    if job.get("kind") == "investigate":
+        cites = job.get("citations") or {}
+        bad = cites.get("bad") or []
+        if bad:
+            out.append(f"ผู้สืบอ้างเลขไฟล์:บรรทัดผิด {len(bad)} จุด")
+        elif not cites.get("ok"):
+            out.append("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย")
+    return out
+
+
 # ---------- คำสั่ง ----------
 PLAN_SOFT = (300, 100, 30)  # (บรรทัดทั้งแผน, บรรทัดโค้ดใน ``` รวม, บล็อกโค้ดเดียวยาวสุด) เกิน = เตือน
 PLAN_HARD = (600, 200, 60)  # เกิน = ปฏิเสธ (แผนใหญ่ = คนวางแผนเขียนโค้ดแทน Flash ไปแล้ว → เปลี่ยนเป็นสเปก/แบ่งแผน · ไม่มีทางลัด)
@@ -2533,14 +2550,21 @@ def cmd_run(a) -> int:
                 for b in cites["bad"][:10]:
                     print("  ✗", b, flush=True)
     finally:
-        job.update(status=res["status"].lower(), result=res.get("status"), rc=res.get("rc"),
+        verdict = res.get("status")
+        reasons = unverified_reasons(job, res) if verdict == "OK" else []
+        if reasons:
+            job["unverified"] = reasons
+            verdict = "OK_UNVERIFIED"
+        job.update(status=res["status"].lower(), result=verdict, rc=res.get("rc"),
                    finished=now(), last=(res.get("last") or (f"NOSTART: {job['nostart_diag'][-1]}" if res.get("status") == "NOSTART" and job.get("nostart_diag") else ""))[-1500:])
         save_job(job)
         release(job)
-        notify_job(job, res["status"], res.get("mins") or 0.0)
+        notify_job(job, verdict, res.get("mins") or 0.0)
 
-    print(f"FLASH_RUN={res['status']} exit={res['rc']} เวลา={res['mins']:.1f} นาที tool={res['tools']} "
+    print(f"FLASH_RUN={verdict} exit={res['rc']} เวลา={res['mins']:.1f} นาที tool={res['tools']} "
           f"session={res['session']} job={jid}")
+    if job.get("unverified"):
+        print("WARN: ผล OK ยังไม่ยืนยัน — " + " · ".join(job["unverified"]))
     print(f"desktop: โปรเจกต์ {root.name} > session '{title}'")
     if res.get("no_progress"):
         print("WARN: สถานะ OK แต่ไม่มี commit ใหม่และ worker ไม่รายงาน DONE → น่าจะหยุดถามหรือยังไม่ได้ทำงาน · อ่านสรุปท้ายแล้วตอบ/สั่งซ้ำ อย่าเชื่อ OK")
@@ -4197,7 +4221,7 @@ def cmd_wait(a) -> int:
                 print(ln)
         print("---- สรุปท้าย ----")
         print((j.get("last") or "(ไม่มีข้อความ)")[-1500:])
-        if res != "OK":
+        if res not in ("OK", "OK_UNVERIFIED"):
             rc = 1
     return rc
 
