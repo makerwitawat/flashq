@@ -1702,7 +1702,10 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
         sid = wait_session(p, log, START_LIMIT_FIRST_SEC if attempt == 1 else START_LIMIT_SEC)
         if sid is None:
             kill_tree(p.pid)
-            p.wait()
+            try:
+                p.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                print(f"WARN: ฆ่า opencode pid {p.pid} ไม่สำเร็จใน 30 วิ — ปล่อยไว้แล้วไปต่อ", flush=True)
             rc, status = -1, "NOSTART"
             nostart = nostart_diag(root, t0)
             if nostart:
@@ -1798,7 +1801,10 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                                 why += " · สาเหตุแยกไม่ได้ (ไม่ได้ต่อ server ให้ถามสถานะ tool — ใช้ --attach live)"
                     if why:
                         kill_tree(p.pid)
-                        p.wait()
+                        try:
+                            p.wait(timeout=30)
+                        except subprocess.TimeoutExpired:
+                            print(f"WARN: ฆ่า opencode pid {p.pid} ไม่สำเร็จใน 30 วิ — ปล่อยไว้แล้วไปต่อ", flush=True)
                         rc, status = -1, "TIMEOUT"
                         job["timeout_reason"] = why
                         note = abort_session(job) if attach.startswith("http") else ""  # ฆ่าแค่ `opencode run --attach` → session บน server ยังเดิน (แก้ไฟล์ซ้อนกับรอบลองใหม่/งานถัดไป)
