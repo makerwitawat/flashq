@@ -73,6 +73,31 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=OK", r.stdout)
         self.assertNotIn("ไม่มี commit ใหม่", r.stdout)
 
+    def test_progress_counts_only_own_commits(self):
+        """job_progressed: นับเฉพาะ commit ของงานนี้ (T-xx ที่ matcher รับ หรือแตะไฟล์แผน) — commit ของ session อื่นไม่นับ"""
+        mod = self.load_mod("flashq_progress")
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.proj,  # noqa: E731
+                                        capture_output=True, text=True, encoding="utf-8", check=True)
+        git("init", "-q", "-b", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "เริ่ม")
+        head0 = git("rev-parse", "HEAD").stdout.strip()
+        job = {"plan": "PLAN.md", "tasks": "T-01..T-02"}
+        (self.proj / "x.txt").write_text("a\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "งาน B (T-05)")
+        self.assertFalse(mod.job_progressed(self.proj, head0, [], job))  # commit ของ session อื่น = ไม่นับ
+        (self.proj / "y.txt").write_text("b\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "แก้\n\nFlash-Task: T-01")
+        self.assertTrue(mod.job_progressed(self.proj, head0, [], job))
+        head1 = git("rev-parse", "HEAD").stdout.strip()
+        (self.proj / "PLAN.md").write_text("# plan\n- [ ] T-01\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "อัปเดตแผน")
+        self.assertTrue(mod.job_progressed(self.proj, head1, [], job))  # แตะไฟล์แผน = นับ
+        self.assertTrue(mod.job_progressed(self.proj, head0, []))  # ไม่ส่ง job = พฤติกรรมเดิม
+
     def test_missing_plan(self):
         r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)

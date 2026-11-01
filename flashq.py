@@ -1871,7 +1871,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     perm = perm_denials(errtxt, tool_denied)
     if status == "OK" and (rc != 0 or errors):
         status = "FAIL"
-    if status == "OK" and perm and not job_progressed(root, head0, texts + task_out):
+    if status == "OK" and perm and not job_progressed(root, head0, texts + task_out, job):
         status = "DENIED"  # opencode ตอบ "ไม่อนุญาต" ให้เอง งานจบ exit 0 โดยไม่ได้ทำอะไร — ไม่ใช่ OK
     if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
         status = "FAIL"
@@ -1881,7 +1881,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
         status = "QUOTA"
     no_progress = status == "OK" and job.get("plan") and not job.get("readonly") and job.get("kind") not in ("verify", "investigate") \
-        and not job_progressed(root, head0, texts + task_out)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
+        and not job_progressed(root, head0, texts + task_out, job)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
             "head0": head0, "head1": _git(root, "rev-parse", "HEAD"), "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
             "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
@@ -1899,11 +1899,22 @@ def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
     return out[:20]
 
 
-def job_progressed(root: Path, head0: str, outputs: list[str]) -> bool:
-    """งานสำเร็จบางส่วนไหม: มี commit ใหม่ หรือ worker/subagent รายงาน DONE (flash.md ให้ worker ตอบ `DONE`/`FAIL`)"""
+def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None = None) -> bool:
+    """งานสำเร็จบางส่วนไหม: มี commit ของงานนี้ (ข้อความระบุ T-xx ที่อยู่ในแผน หรือแตะไฟล์แผน) หรือ worker/subagent รายงาน DONE
+    (flash.md ให้ worker ตอบ `DONE`/`FAIL`) · commit ของ session อื่นในโปรเจกต์เดียวกันไม่นับ"""
     head1 = _git(root, "rev-parse", "HEAD")
     if head0 and head1 and head0 != head1:
-        return True
+        plan = (job or {}).get("plan")
+        if not plan:
+            return True
+        match = task_matcher((job or {}).get("tasks", ""))
+        if match is None:  # อ่านงานในแผนไม่ได้ = ถือว่ามีผลงาน (พฤติกรรมเดิม)
+            return True
+        for msg in _git(root, "log", "--format=%B%x00", f"{head0}..{head1}").split("\x00"):
+            if any(match(t) for t in re.findall(r"T-\d+[A-Za-z]*", msg)):
+                return True
+        if _git(root, "log", "--format=", "--name-only", f"{head0}..{head1}", "--", plan):
+            return True
     return any(re.search(r"\bDONE\b", t) for t in outputs)
 
 
