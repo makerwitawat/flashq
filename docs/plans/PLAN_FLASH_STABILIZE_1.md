@@ -41,7 +41,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - commit: `flashq: ลบไฟล์ล็อกซ้ำได้เมื่อไฟล์ถูกเปิดค้าง ไม่ทำให้ช่องคิวค้าง + เทสต์ (T-01)`
 
 - [ ] **T-02** `flashq.py` ~1689 และ ~1785 (`_run_once`) · แก้ตรง (ทดสอบการค้างของ taskkill จริงไม่ได้ในเทสต์)
-  - ก่อน (จุด 1 · เยื้อง 12 ช่อง · ใช้ 2 บรรทัดนี้ค้นให้เจอที่เดียว): `            p.wait()` ตามด้วย `            rc, status = -1, "NOSTART"`
+  - ก่อน (จุด 1 · เยื้อง 12 ช่อง): ค้นหาบรรทัด `            rc, status = -1, "NOSTART"` (เจอที่เดียว) · บรรทัดที่อยู่เหนือมันขึ้นไป 1 บรรทัดคือคำสั่งรอ process (p, จุด, wait, วงเล็บว่าง) เยื้อง 12 ช่อง — ให้แทนที่บรรทัดนั้นบรรทัดเดียว (ห้ามแตะ p.wait ของจุด 2)
   - หลัง (จุด 1):
     ```
                 try:
@@ -50,7 +50,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
                     print(f"WARN: ฆ่า opencode pid {p.pid} ไม่สำเร็จใน 30 วิ — ปล่อยไว้แล้วไปต่อ", flush=True)
                 rc, status = -1, "NOSTART"
     ```
-  - ก่อน (จุด 2 · เยื้อง 24 ช่อง): `                        p.wait()` ตามด้วย `                        rc, status = -1, "TIMEOUT"`
+  - ก่อน (จุด 2 · เยื้อง 24 ช่อง): ค้นหาบรรทัด `                        rc, status = -1, "TIMEOUT"` (ให้ Grep ยืนยันว่าเจอที่เดียวพร้อม kill_tree อยู่เหนือขึ้นไป 2 บรรทัด) · บรรทัดที่อยู่เหนือมันขึ้นไป 1 บรรทัดคือคำสั่งรอ process (p, จุด, wait, วงเล็บว่าง) เยื้อง 24 ช่อง — ให้แทนที่บรรทัดนั้นบรรทัดเดียว
   - หลัง (จุด 2): แบบเดียวกับจุด 1 (try/`p.wait(timeout=30)`/except พร้อม WARN เดียวกัน) เยื้อง 24 ช่อง แล้วตามด้วย `rc, status = -1, "TIMEOUT"` เดิม
   - ยืนยัน: คำสั่ง ast.parse (ต้องไม่มี output) แล้ว `-k "stalled or nostart"` → `.tmp/T-02.log` PASS
   - หลักฐานชี้ขาด: `.tmp/T-02.log` บรรทัดท้าย `passed` ไม่มี `failed` · `git show --stat HEAD` แตะ `flashq.py` ไฟล์เดียว
