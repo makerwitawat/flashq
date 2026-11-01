@@ -1016,7 +1016,7 @@ class FlashqTest(unittest.TestCase):
             return subprocess.run([sys.executable, str(hook)], input=json.dumps({"session_id": session, "cwd": str(cwd)}),
                                   capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=30)
         self.assertEqual(run_hook("s1", self.proj).stdout, "")  # ไม่มี inbox = เงียบ
-        r = self.run_q(*self.base(), env={"CLAUDE_CODE_SESSION_ID": "s1"})
+        r = self.run_q(*self.base(), env={"CLAUDE_CODE_SESSION_ID": "s1", "FAKE_TEXT": "T-01 DONE แล้ว"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         files = list((self.home / "inbox").glob("*.json"))
         self.assertEqual(len(files), 1)
