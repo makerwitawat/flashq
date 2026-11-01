@@ -1133,6 +1133,12 @@ def plan_meta(project: str, plan: str) -> dict:
         for t in re.split(r"[,\s]+", val):
             t = t.strip("`'\"()")
             if t and not t.startswith("-"):
+                p = Path(t)
+                if p.is_absolute():
+                    try:
+                        t = p.relative_to(Path(project)).as_posix()
+                    except ValueError:
+                        pass
                 dest.append(t.replace("\\", "/"))
     if files:
         out["files"] = sorted(set(files))

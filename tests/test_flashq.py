@@ -3565,6 +3565,9 @@ class FlashqTest(unittest.TestCase):
         (self.proj / "E2.md").write_text("# E2\nflashq-files: Common/y.h\n", encoding="utf-8")
         self.assertEqual(flashq.plan_meta(P, "A.md"), {"files": ["Client/UI/*.h", "Client/a.cpp"], "parallel": True})
         self.assertEqual(flashq.plan_meta(P, "D.md"), {"files": None, "parallel": False})  # placeholder ถูกข้าม
+        (self.proj / "M.md").write_text(f"# M\nflashq-files: {self.proj.as_posix()}/src/a.cpp\n- [ ] **T-01** แก้\n",
+                                        encoding="utf-8")
+        self.assertEqual(flashq.plan_meta(P, "M.md")["files"], ["src/a.cpp"])  # path เต็ม → path ในโปรเจกต์
         self.assertEqual(flashq.job_info({"project": P, "plan": "D.md", "tasks": "T-01"})["files"], ["Tools/t.py"])
         (self.proj / "H.md").write_text("# H\nflashq-files: MapEditor/b.cpp\nflashq-parallel: no — แตะ build ทั้งโปรเจกต์\n", encoding="utf-8")
         self.assertEqual(flashq.plan_meta(P, "H.md")["why"], "แตะ build ทั้งโปรเจกต์")
