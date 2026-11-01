@@ -56,6 +56,9 @@ def advice(row: dict) -> str:
                     f"ห้ามรับ/ทิ้ง/commit เองจนกว่าผู้ใช้สั่ง (รับ: {FQ} doc-review {job} accept · ทิ้ง: ... discard)")
         return (f"ช่างเอกสารไม่ผ่านด่านกลไก (สาเหตุอยู่ต้นข้อความท้าย · ดูเต็มด้วย {FQ} log {job}) — บอกผู้ใช้สาเหตุเป็นภาษาคน · "
                 f"ถ้ามีไฟล์ค้าง (ไม่ได้ย้อนให้) ให้ดู git diff แล้วเสนอ discard · ห้ามสั่งซ้ำเองจนกว่าผู้ใช้สั่ง")
+    if st == "OK_UNVERIFIED":
+        return ("ผล OK ยังไม่ยืนยัน (ดูบรรทัด WARN ใน log) — ห้ามเชื่อ OK · "
+                + (f"ตรวจด้วย /flash-check {plan} โดยดู git log ของงานเอง" if plan else f"อ่าน {FQ} log {row.get('job', '')} ก่อนรายงาน"))
     if st == "OK":
         if row.get("kind") == "investigate":
             return "ผลสืบ — ตรวจเลขไฟล์:บรรทัดที่อ้างก่อนเชื่อ (ดูบรรทัด CITATIONS ใน log)"

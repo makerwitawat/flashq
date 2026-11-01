@@ -1112,6 +1112,17 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(code, 404)
         self.assertEqual(r["prompt"], "/flash-check PLAN.md")
 
+    def test_unverified_routes_like_ok_with_warning(self):
+        """ผล ok_unverified (จบแต่ยังไม่ยืนยัน) → ปุ่มตรวจ/แจ้งเตือนปฏิบัติเหมือน ok แต่เตือนให้ตรวจเอง"""
+        mod = self.load_mod("flashq_unverified")
+        j = {"id": "jobu1", "status": "done", "result": "ok_unverified", "plan": "docs/PLAN.md"}
+        self.assertTrue(mod.claude_check_prompt(j).startswith("/flash-check docs/PLAN.md"), mod.claude_check_prompt(j))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("inbox_notify_unverified", REPO / "hooks" / "inbox_notify.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        self.assertIn("ยังไม่ยืนยัน", hook.advice({"status": "OK_UNVERIFIED", "plan": "P.md"}))
+
     def start_ui(self):
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))

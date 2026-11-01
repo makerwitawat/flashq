@@ -7556,6 +7556,8 @@ def claude_check_prompt(j: dict) -> str:
     """ข้อความตั้งต้นของ session Claude ใหม่ที่เปิดจากปุ่มบนการ์ดงานที่จบแล้ว
     OK + มีแผน = /flash-check · ผลสืบ = ตรวจเลขอ้างอิงก่อนเชื่อ · ไม่ OK/ตาย = ดู log หาสาเหตุแล้วรายงาน (ยังไม่สั่งซ้ำเอง)"""
     st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()
+    if st == "ok_unverified":
+        st = "ok"
     plan, jid = j.get("plan") or "", j["id"]
     if j.get("kind") == "doc":
         return (f"ช่างเอกสาร flashq job {jid} จบด้วยสถานะ {st.upper()}: อ่านผลด้วย `{run_cmd()} log {jid}` (ผลมาจากการตรวจด้วยกลไกของ flashq ไม่ใช่คำบอกของ AI) "
