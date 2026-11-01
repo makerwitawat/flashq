@@ -1911,6 +1911,17 @@ def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
     return out[:20]
 
 
+def said_done(text: str) -> bool:
+    """มี DONE ที่ไม่ได้ถูกปฏิเสธไหม — "NOT DONE" / "ยังไม่ DONE" / "ไม่ได้ DONE" / "ไม่ DONE" ไม่นับ"""
+    for m in re.finditer(r"\bDONE\b", text):
+        start = text.rfind("\n", 0, m.start()) + 1
+        prev = text[start:m.start()].rstrip(" \t\r\n*_\"'")
+        if prev.lower().endswith("not") or prev.endswith(("ยังไม่", "ไม่ได้", "ไม่")):
+            continue
+        return True
+    return False
+
+
 def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None = None) -> bool:
     """งานสำเร็จบางส่วนไหม: มี commit ของงานนี้ (ข้อความระบุ T-xx ที่อยู่ในแผน หรือแตะไฟล์แผน) หรือ worker/subagent รายงาน DONE
     (flash.md ให้ worker ตอบ `DONE`/`FAIL`) · commit ของ session อื่นในโปรเจกต์เดียวกันไม่นับ"""
@@ -1927,7 +1938,7 @@ def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None 
                 return True
         if _git(root, "log", "--format=", "--name-only", f"{head0}..{head1}", "--", plan):
             return True
-    return any(re.search(r"\bDONE\b", t) for t in outputs)
+    return any(said_done(t) for t in outputs)
 
 
 # ---------- คำสั่ง ----------

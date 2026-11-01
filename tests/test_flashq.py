@@ -98,6 +98,14 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(mod.job_progressed(self.proj, head1, [], job))  # แตะไฟล์แผน = นับ
         self.assertTrue(mod.job_progressed(self.proj, head0, []))  # ไม่ส่ง job = พฤติกรรมเดิม
 
+    def test_said_done_ignores_negation(self):
+        """DONE ที่ถูกปฏิเสธ (NOT DONE / ยังไม่ DONE / ไม่ได้ DONE) ต้องไม่นับเป็นงานเสร็จ"""
+        mod = self.load_mod("flashq_said_done")
+        for t in ("NOT DONE", "ยังไม่ DONE", "งานนี้ไม่ได้ DONE"):
+            self.assertFalse(mod.job_progressed(self.proj, "", [t]), t)
+        for t in ("T-01 DONE แล้ว", "สถานะ: DONE", "**DONE**"):
+            self.assertTrue(mod.job_progressed(self.proj, "", [t]), t)
+
     def test_missing_plan(self):
         r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
