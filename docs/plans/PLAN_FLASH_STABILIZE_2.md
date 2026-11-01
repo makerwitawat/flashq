@@ -52,6 +52,14 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-02.red.log` มี `OK_UNVERIFIED' not found` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: ผล OK ที่ไม่มีหลักฐานงานแสดงเป็น OK_UNVERIFIED พร้อมเหตุ + เทสต์ (T-02)`
 
+- [ ] **T-02R** `tests/test_flashq.py` (`test_notify_inbox_and_hook` ~1011) · แบบ: แก้เทสต์เดิมให้ตรงพฤติกรรมใหม่ของ T-02 (ไม่แตะ `flashq.py`)
+  - ปัญหา: T-02 ทำให้งานที่ไม่มี commit/DONE ได้ผล `OK_UNVERIFIED` — เทสต์นี้ใช้ `self.base()` ที่ fake opencode ไม่คืบ จึงได้ `OK_UNVERIFIED` แทน `OK` ที่บรรทัด 1024 (`('OK_UNVERIFIED','s1','PLAN.md') != ('OK',...)`) · เจตนาของเทสต์ = เคส "งานจบสำเร็จจริง" ของ inbox/hook
+  - สเปก: ทำให้การรันในเทสต์นี้เป็นงานที่คืบจริง (fake opencode ตอบมีคำ `DONE` — ดูวิธีที่เทสต์อื่นที่ได้ `FLASH_RUN=OK` เฉยๆ ทำ เช่น `test_ok_passes*` / ตัวช่วยใน setUp แล้วใช้แบบเดียวกัน) แล้ว assertion บรรทัด 1024 คงเดิมเป็น `"OK"` · **ห้ามลด/ลบ assertion · ห้ามเปลี่ยนค่าที่คาดเป็น `OK_UNVERIFIED` · ห้ามแตะ `flashq.py`/`hooks/`** (เรื่อง hook เป็นของ T-03)
+  - แดง: `-k "notify_inbox_and_hook"` ณ HEAD ปัจจุบัน → `.tmp/T-02R.red.log` FAIL ด้วย `OK_UNVERIFIED`
+  - เขียว: คำสั่งเดิม → `.tmp/T-02R.green.log` PASS · แล้ว `-k "notify or inbox or ok_passes or without_commit_or_done or wait_blocks"` → `.tmp/T-02R.reg.log` PASS
+  - หลักฐานชี้ขาด: แดง `.tmp/T-02R.red.log` มี `OK_UNVERIFIED` · เขียว/reg บรรทัดท้าย `passed` ไม่มี `failed`
+  - commit: `flashq: เทสต์ inbox ใช้งานที่คืบจริง ให้ตรงกับ OK_UNVERIFIED ของ T-02 (T-02R)`
+
 - [ ] **T-03** `flashq.py` ~7449 (`claude_check_prompt`) + `hooks/inbox_notify.py` ~59 (`advice`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_unverified_routes_like_ok_with_warning`: `mod.claude_check_prompt({"id": "jobu1", "status": "done", "result": "ok_unverified", "plan": "docs/PLAN.md"})` ต้องขึ้นต้นด้วย `/flash-check docs/PLAN.md` (ทางเดียวกับ result ok · ดูรูปแบบ dict จากเทสต์ที่ใช้ `jobok001`) · โหลด `hooks/inbox_notify.py` ด้วย `importlib.util.spec_from_file_location` แล้ว `advice({"status": "OK_UNVERIFIED", "plan": "P.md"})` ต้องมีคำ `ยังไม่ยืนยัน`
   - แดง: `-k "unverified_routes"` → `.tmp/T-03.red.log` FAIL (AssertionError ข้อแรก)
@@ -167,9 +175,9 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | 154a5e6 | `.tmp/T-01.red.log` → `AssertionError: True is not false : NOT DONE` · `.tmp/T-01.green.log` → `1 passed` · `.tmp/T-01.reg.log` → `4 passed` | |
-| T-02 | ✅แก้ (⚠️ ภายหลังพบว่าทำให้ `test_notify_inbox_and_hook` แดง — ไม่อยู่ในชุด reg ที่แผนกำหนด → ต้องออก T-02R) | 03c6e54 | `.tmp/T-02.red.log` → `AssertionError: 'FLASH_RUN=OK_UNVERIFIED' not found` · `.tmp/T-02.green.log` → `2 passed` · `.tmp/T-02.reg.log` → `9 passed` | |
-| T-03 | ⛔หยุด (โค้ดแก้แล้ว + green ผ่าน แต่ reg แดงด้วยเทสต์เดิมที่ค้างจาก T-02 → ยังไม่ commit · โค้ดถูก revert เก็บเป็น `.tmp/T-03.patch` — รอ T-02R แล้วรัน T-03 ใหม่) | - | `.tmp/T-03.red.log` → `AssertionError: False is not true : งาน flashq job jobu1` · `.tmp/T-03.green.log` → `1 passed` · `.tmp/T-03.reg.log` → `FAILED ...test_notify_inbox_and_hook` `('OK_UNVERIFIED', 's1', 'PLAN.md') != ('OK', 's1', 'PLAN.md')` (rerun `.tmp/T-03.reg2.log` แดงเหมือนกัน) · รันที่ HEAD `03c6e54` แบบไม่มีไฟล์ที่แก้ (`.tmp/T-03.head.log`) ก็แดงแบบเดียวกัน = เทสต์ค้างจาก T-02 ไม่ใช่ผลของ T-03 | |
+| T-01 | ✅แก้ | 154a5e6 | `.tmp/T-01.red.log` → `AssertionError: True is not false : NOT DONE` · `.tmp/T-01.green.log` → `1 passed` · `.tmp/T-01.reg.log` → `4 passed` | ✅ผ่าน (`said_done` ตรงสเปก · แตะ flashq.py + tests เท่านั้น · red<green<commit) |
+| T-02 | ✅แก้ (⚠️ ภายหลังพบว่าทำให้ `test_notify_inbox_and_hook` แดง — ไม่อยู่ในชุด reg ที่แผนกำหนด → ต้องออก T-02R) | 03c6e54 | `.tmp/T-02.red.log` → `AssertionError: 'FLASH_RUN=OK_UNVERIFIED' not found` · `.tmp/T-02.green.log` → `2 passed` · `.tmp/T-02.reg.log` → `9 passed` | ⚠️ diff ตรงสเปก แต่ชุด reg ของแผนไม่ครอบ `test_notify_inbox_and_hook` ที่แดงเพราะพฤติกรรมใหม่ (ยืนยันจาก T-03.reg/head log) → ❌ T-02R (แก้เทสต์) |
+| T-03 | ⛔หยุด (โค้ดแก้แล้ว + green ผ่าน แต่ reg แดงด้วยเทสต์เดิมที่ค้างจาก T-02 → ยังไม่ commit · โค้ดถูก revert เก็บเป็น `.tmp/T-03.patch` — รอ T-02R แล้วรัน T-03 ใหม่) | - | `.tmp/T-03.red.log` → `AssertionError: False is not true : งาน flashq job jobu1` · `.tmp/T-03.green.log` → `1 passed` · `.tmp/T-03.reg.log` → `FAILED ...test_notify_inbox_and_hook` `('OK_UNVERIFIED', 's1', 'PLAN.md') != ('OK', 's1', 'PLAN.md')` (rerun `.tmp/T-03.reg2.log` แดงเหมือนกัน) · รันที่ HEAD `03c6e54` แบบไม่มีไฟล์ที่แก้ (`.tmp/T-03.head.log`) ก็แดงแบบเดียวกัน = เทสต์ค้างจาก T-02 ไม่ใช่ผลของ T-03 | ⏸ ยังไม่ตรวจ — ส่งใหม่ต่อจาก T-02R (T-03..T-12 ยังไม่ได้ทำ) |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - นักทดสอบระดับ 3/4 · worktree แยกต่องาน (รอผู้ใช้ตัดสิน)
