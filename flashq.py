@@ -85,6 +85,7 @@ MAX_SLOTS = 8          # เพดานของ max_parallel
 VERSION = "0.2.3"      # รุ่นของโปรแกรม — ต้องตรงกับ tag ของ release (แสดงบนแถบชื่อหน้าต่าง/หน้าเว็บ) · แก้ตอนออกรุ่นใหม่
 QUEUE_VERSION = 2      # job ที่มี qv>=2 = โค้ดที่รองรับหลายช่อง + สัญญาณ run_now
 SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
+STALE_LOCK_HOURS = 24  # ล็อกที่ไม่มี pid_start + เก่ากว่ากี่ชั่วโมง + งานจบแล้ว = ล็อกค้าง เก็บได้
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
 # รอ sessionID ใน log นานสุดกี่วิ ก่อนนับเป็น NOSTART (เทสต์ตั้งสั้นได้ — ตั้งแล้วใช้ค่าเดียวทุกรอบ)
@@ -821,11 +822,21 @@ def slot_files() -> list[tuple[int, Path]]:
     return sorted(out)
 
 
+def lock_expired(held: dict) -> bool:
+    """ล็อกค้าง: ไม่มี pid_start + เก่าเกิน STALE_LOCK_HOURS + งานจบแล้ว (ไม่ใช่ queued/running)"""
+    if held.get("pid_start"):
+        return False
+    age = _secs(held.get("since", ""))
+    if age is None or age <= STALE_LOCK_HOURS * 3600:
+        return False
+    return read_json(JOBS / f"{held.get('id', '')}.json").get("status") not in ("queued", "running")
+
+
 def clear_stale_lock() -> None:
     """ลบช่องที่ process เจ้าของตายแล้ว (ทุกช่อง)"""
     for _, f in slot_files():
         held = read_json(f)
-        if held and pid_alive(held.get("pid", 0), held.get("pid_start", 0)):
+        if held and pid_alive(held.get("pid", 0), held.get("pid_start", 0)) and not lock_expired(held):
             continue
         try:
             if not held and time.time() - f.stat().st_mtime < 5:  # เพิ่งสร้าง (O_EXCL แล้วกำลังเขียน) — ยังไม่ใช่ล็อกตาย

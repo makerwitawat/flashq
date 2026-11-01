@@ -475,6 +475,21 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q(*self.base(), "--wait-min", "0.2")
         self.assertEqual(r.returncode, 0, r.stdout)
 
+    def test_ancient_lock_without_pid_start_cleared(self):
+        """ล็อกเก่าเกิน 24 ชม. ที่ไม่มี pid_start + งานจบแล้ว = ล็อกค้าง ต้องไม่ขวางคิว · งานที่ยังรันอยู่ต้องไม่ถูกเคลียร์"""
+        (self.home / "jobs").mkdir(parents=True)
+        lock = {"id": "jobold01", "pid": os.getpid(), "since": "2000-01-01 00:00:00"}
+        (self.home / "running.lock").write_text(json.dumps(lock), encoding="utf-8")
+        (self.home / "jobs" / "jobold01.json").write_text(json.dumps(
+            {"id": "jobold01", "status": "ok", "project": str(self.proj)}), encoding="utf-8")
+        r = self.run_q(*self.base(), "--wait-min", "0.2")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        (self.home / "running.lock").write_text(json.dumps(lock), encoding="utf-8")  # ล็อกเดิม แต่รอบนี้งานยังรันอยู่
+        (self.home / "jobs" / "jobold01.json").write_text(json.dumps(
+            {"id": "jobold01", "status": "running", "project": str(self.proj)}), encoding="utf-8")
+        r = self.run_q(*self.base(), "--wait-min", "0.2")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+
     def test_quota_switch(self):
         r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota"})
         self.assertIn("FLASH_RUN=QUOTA", r.stdout)
