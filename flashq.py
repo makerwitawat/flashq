@@ -922,11 +922,26 @@ def acquire(job: dict, wait_min: float, no_wait: bool) -> str:
                 break
 
 
-def release(job: dict) -> None:
-    for _, f in slot_files():
-        if read_json(f).get("id") == job["id"]:
+def _unlink_retry(f: Path, tries: int = 3, gap: float = 0.2) -> bool:
+    """ลบไฟล์แบบลองซ้ำ (Windows: ไฟล์ถูกเปิดค้างชั่วคราว → PermissionError) · FileNotFoundError = ถือว่าสำเร็จ"""
+    for i in range(tries):
+        try:
             f.unlink(missing_ok=True)
-    (RUN_NOW / job["id"]).unlink(missing_ok=True)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if i + 1 < tries:
+                time.sleep(gap)
+    return False
+
+
+def release(job: dict) -> None:
+    targets = [f for _, f in slot_files() if read_json(f).get("id") == job["id"]]
+    targets.append(RUN_NOW / job["id"])
+    for f in targets:
+        if not _unlink_retry(f):
+            print(f"WARN: ลบไฟล์ล็อก {f.name} ไม่สำเร็จ (ไฟล์ถูกเปิดค้าง) — คิวจะเคลียร์เองเมื่อ process จบ", flush=True)
 
 
 def request_run_now(j: dict) -> tuple[bool, str]:

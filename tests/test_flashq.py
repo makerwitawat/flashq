@@ -3112,6 +3112,35 @@ class FlashqTest(unittest.TestCase):
                 mod.replace_file(tmp, target, wait_sec=0.3)
             self.assertFalse(tmp.exists())
 
+    def test_release_retries_locked_file(self):
+        """Windows: ไฟล์ล็อกถูกเปิดค้างชั่วคราว → release ต้องลองซ้ำแล้วสำเร็จ · ยังลบไม่ได้ = เตือน WARN ไม่โยน error จนคิวค้าง"""
+        import io
+        import pathlib
+        from contextlib import redirect_stdout
+        mod = self.load_mod("fq_rel")
+        mod.LOCK.write_text(json.dumps({"id": "jobrel01", "pid": 1}), encoding="utf-8")
+        orig = pathlib.Path.unlink
+        calls = []
+
+        def flaky(self_, *a, **k):
+            calls.append(self_)
+            if len(calls) <= 2:  # ถูกเปิดค้าง 2 ครั้งแรก แล้วจึงลบได้
+                raise PermissionError("ถูกเปิดค้าง")
+            return orig(self_, *a, **k)
+
+        with mock.patch.object(pathlib.Path, "unlink", autospec=True, side_effect=flaky):
+            mod.release({"id": "jobrel01"})
+        self.assertFalse(mod.LOCK.exists())
+        self.assertGreaterEqual(len(calls), 3)
+        # ลบไม่ได้ทุกครั้ง → ไม่โยน error ออกมา และต้องเตือน WARN
+        mod.LOCK.write_text(json.dumps({"id": "jobrel01", "pid": 1}), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(pathlib.Path, "unlink", autospec=True, side_effect=PermissionError("ถูกเปิดค้าง")):
+            with redirect_stdout(out):
+                mod.release({"id": "jobrel01"})
+        self.assertIn("WARN", out.getvalue())
+        self.assertTrue(mod.LOCK.exists())
+
     def test_orphan_child_is_reaped_by_cancel_dismiss_stale_lock_and_crash(self):
         """`flashq run` ตายแต่ opencode ลูกรอด: ยกเลิก/ล้างช่องตาย/run_once ล้ม ต้องฆ่าลูก · pid ที่เวลาเริ่มไม่ตรงห้ามแตะ"""
         mod = self.load_mod("flashq_orphan")
