@@ -30,7 +30,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
 ## 1. กลุ่ม B — ผลต้องซื่อตรง (OK ต้องแปลว่าทำจริง)
 **สาเหตุ/หลักฐาน** (Claude ตรวจแล้ว): `job_progressed` (flashq.py ~1856) นับ `\bDONE\b` ทุกที่ — "NOT DONE"/"ยังไม่ DONE" ก็นับ · งาน no_progress/อ่านอย่างเดียวแก้ไฟล์/ผู้สืบอ้างเลขบรรทัดผิด ยังได้ `FLASH_RUN=OK` และ `result="OK"` (~2451, ~2457) มีแค่ WARN · `qa_verdict` (~2935) ไม่ตั้ง `expect` + "collected 0 items" = PASS · `doc_verdict` (~3402) ลบเนื้อหาเอกสารทิ้งครึ่งไฟล์ก็ได้ DRAFT · `cmd_scope` (~3669) แผนไม่มีงาน T-xx เลย → วนว่าง → `SCOPE_RESULT=PASS`
 
-- [ ] **T-01** `flashq.py` ~1856 (`job_progressed`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` ~1856 (`job_progressed`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_said_done_ignores_negation` ใช้ `load_mod`: `mod.job_progressed(self.proj, "", ["NOT DONE"])` False · `["ยังไม่ DONE"]` False · `["งานนี้ไม่ได้ DONE"]` False · `["T-01 DONE แล้ว"]` True · `["สถานะ: DONE"]` True · `["**DONE**"]` True
   - แดง: `-k "said_done"` → `.tmp/T-01.red.log` FAIL ด้วย `True is not false`
   - แก้ (สเปก): ฟังก์ชันใหม่ `said_done(text: str) -> bool` เหนือ `job_progressed` — แต่ละ match ของ `\bDONE\b` ดูข้อความก่อนหน้าในบรรทัดเดียวกัน ตัดช่องว่างและ `*_"'` ท้ายออก ถ้าลงท้ายด้วย `NOT` (ไม่สนตัวพิมพ์) / `ยังไม่` / `ไม่ได้` / `ไม่` → ไม่นับ · มี match ที่นับได้อย่างน้อย 1 = True · ก่อน: `    return any(re.search(r"\bDONE\b", t) for t in outputs)` · หลัง: `    return any(said_done(t) for t in outputs)` · ห้ามบังคับรูปแบบ `สถานะ:` (เทสต์เดิม FAKE_TEXT "T-01 DONE แล้ว · T-02 ถูกปฏิเสธสิทธิ์" ต้องยังนับ)
@@ -38,7 +38,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-01.red.log` มี `True is not false` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: คำว่า NOT DONE / ยังไม่ DONE ไม่นับเป็นงานเสร็จ + เทสต์ (T-01)`
 
-- [ ] **T-02** `flashq.py` ~2451/~2457/~4115 (`cmd_run` finally · `cmd_wait`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` ~2451/~2457/~4115 (`cmd_run` finally · `cmd_wait`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์ (แก้เทสต์เดิมตรงตัว 2 จุด):
     - `test_ok_without_commit_or_done_warns`: เพิ่ม `self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)` และอ่าน job json ล่าสุดใน `self.home / "jobs"` ต้องได้ `status == "ok"`, `result == "OK_UNVERIFIED"`, `unverified` เป็น list ไม่ว่าง · `r.returncode == 0` (คงเดิม)
     - `test_wait_blocks_until_done_and_reports`: บรรทัด `self.assertIn("FLASH_RUN=OK job=", r.stdout)` → `self.assertIn("FLASH_RUN=OK_UNVERIFIED job=", r.stdout)` และต้องคง `returncode == 0` ของ wait
@@ -167,6 +167,9 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | 154a5e6 | `.tmp/T-01.red.log` → `AssertionError: True is not false : NOT DONE` · `.tmp/T-01.green.log` → `1 passed` · `.tmp/T-01.reg.log` → `4 passed` | |
+| T-02 | ✅แก้ (⚠️ ภายหลังพบว่าทำให้ `test_notify_inbox_and_hook` แดง — ไม่อยู่ในชุด reg ที่แผนกำหนด → ต้องออก T-02R) | 03c6e54 | `.tmp/T-02.red.log` → `AssertionError: 'FLASH_RUN=OK_UNVERIFIED' not found` · `.tmp/T-02.green.log` → `2 passed` · `.tmp/T-02.reg.log` → `9 passed` | |
+| T-03 | ⛔หยุด (โค้ดแก้แล้ว + green ผ่าน แต่ reg แดงด้วยเทสต์เดิมที่ค้างจาก T-02 → ยังไม่ commit · โค้ดถูก revert เก็บเป็น `.tmp/T-03.patch` — รอ T-02R แล้วรัน T-03 ใหม่) | - | `.tmp/T-03.red.log` → `AssertionError: False is not true : งาน flashq job jobu1` · `.tmp/T-03.green.log` → `1 passed` · `.tmp/T-03.reg.log` → `FAILED ...test_notify_inbox_and_hook` `('OK_UNVERIFIED', 's1', 'PLAN.md') != ('OK', 's1', 'PLAN.md')` (rerun `.tmp/T-03.reg2.log` แดงเหมือนกัน) · รันที่ HEAD `03c6e54` แบบไม่มีไฟล์ที่แก้ (`.tmp/T-03.head.log`) ก็แดงแบบเดียวกัน = เทสต์ค้างจาก T-02 ไม่ใช่ผลของ T-03 | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - นักทดสอบระดับ 3/4 · worktree แยกต่องาน (รอผู้ใช้ตัดสิน)
