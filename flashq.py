@@ -956,8 +956,20 @@ def _unlink_retry(f: Path, tries: int = 3, gap: float = 0.2) -> bool:
     return False
 
 
+def _read_lock_retry(f: Path, tries: int = 3, gap: float = 0.2) -> dict:
+    """อ่านไฟล์ล็อกแบบลองซ้ำ (Windows: อ่านพลาดชั่วคราวแล้วได้ {}) · ไฟล์หายไปแล้ว = คืนค่าที่อ่านได้"""
+    data: dict = {}
+    for i in range(tries):
+        data = read_json(f)
+        if data or not f.exists():
+            return data
+        if i + 1 < tries:
+            time.sleep(gap)
+    return data
+
+
 def release(job: dict) -> None:
-    targets = [f for _, f in slot_files() if read_json(f).get("id") == job["id"]]
+    targets = [f for _, f in slot_files() if _read_lock_retry(f).get("id") == job["id"]]
     targets.append(RUN_NOW / job["id"])
     for f in targets:
         if not _unlink_retry(f):

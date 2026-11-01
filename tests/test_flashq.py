@@ -3202,6 +3202,34 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("WARN", out.getvalue())
         self.assertTrue(mod.LOCK.exists())
 
+    def test_release_retries_unreadable_lock(self):
+        """อ่านไฟล์ล็อกพลาดครั้งเดียว (ได้ {}) แล้วข้ามลบเงียบ ๆ → ต้องอ่านซ้ำจนได้ id แล้วลบ · อ่านได้แล้วห้าม retry"""
+        mod = self.load_mod("fq_rel_unread")
+        real_read_json = mod.read_json
+        calls = {}
+
+        def flaky(f):
+            calls[f] = calls.get(f, 0) + 1
+            if f == mod.LOCK and calls[f] <= 2:  # ถูกเปิดค้าง 2 ครั้งแรก → อ่านได้ {}
+                return {}
+            return real_read_json(f)
+
+        def once(f):
+            calls[f] = calls.get(f, 0) + 1
+            return real_read_json(f)
+
+        mod.LOCK.write_text(json.dumps({"id": "jobrel02", "pid": 1}), encoding="utf-8")
+        with mock.patch.object(mod, "read_json", side_effect=flaky), mock.patch.object(mod.time, "sleep"):
+            mod.release({"id": "jobrel02"})
+        self.assertFalse(mod.LOCK.exists())
+        # อ่านได้แล้วต้องไม่ retry (ไม่เกิน 1 ครั้งต่อไฟล์) และล็อกของ id อื่นต้องยังอยู่
+        mod.LOCK.write_text(json.dumps({"id": "other", "pid": 1}), encoding="utf-8")
+        calls.clear()
+        with mock.patch.object(mod, "read_json", side_effect=once), mock.patch.object(mod.time, "sleep"):
+            mod.release({"id": "jobrel02"})
+        self.assertTrue(mod.LOCK.exists())
+        self.assertLessEqual(max(calls.values()), 1)
+
     def test_orphan_child_is_reaped_by_cancel_dismiss_stale_lock_and_crash(self):
         """`flashq run` ตายแต่ opencode ลูกรอด: ยกเลิก/ล้างช่องตาย/run_once ล้ม ต้องฆ่าลูก · pid ที่เวลาเริ่มไม่ตรงห้ามแตะ"""
         mod = self.load_mod("flashq_orphan")
