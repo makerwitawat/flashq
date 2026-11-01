@@ -1217,6 +1217,10 @@ def conflict_reason(a: dict, b: dict, info) -> str:
         return "ดึงรายการไฟล์ของงานนี้ไม่ได้ (ใส่ flashq-files: ในแผน)"
     if ib["files"] is None:
         return "ดึงรายการไฟล์ของงานนั้นไม่ได้"
+    if not ia["files"]:
+        return "แผนไม่ระบุไฟล์ที่งานนี้จะแตะ (ใส่ `path` บนหัวงานหรือ flashq-files: ในแผน)"
+    if not ib["files"]:
+        return "แผนของงานนั้นไม่ระบุไฟล์ที่จะแตะ"
     over = sorted({x for x in ia["files"] for y in ib["files"] if paths_overlap(x, y)})
     if over:
         return "ไฟล์ " + ", ".join(over[:3]) + (f" (+{len(over) - 3})" if len(over) > 3 else "")

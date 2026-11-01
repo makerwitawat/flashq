@@ -3613,6 +3613,8 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("flashq-parallel", c("K.md", "I.md"))
         self.assertIn("Build/x.cmake", c("K.md", "I.md"))
         self.assertIn("ดึงรายการไฟล์", c("I.md", "NOPE.md"))
+        (self.proj / "L.md").write_text("# L\n- [ ] **T-01** แก้ข้อความ\n", encoding="utf-8")
+        self.assertIn("ไม่ระบุไฟล์", c("L.md", "B.md"))  # ดึงไฟล์ได้ลิสต์ว่าง = ไม่รู้ว่าชนไหม → ถือว่าชน
 
         # หน้าต่างรันเลย (overlap_report) ต้องใช้เกณฑ์เดียวกับตัวจัดคิว: ไฟล์ที่แตะไม่ซ้อนแต่ชนขอบเขต exclusive = ต้อง ack
         from unittest import mock
