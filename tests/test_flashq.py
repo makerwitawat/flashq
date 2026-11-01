@@ -639,6 +639,39 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ไม่มีผลงานใหม่", r.stdout)
 
+    def test_config_open_session_auto_and_priority(self):
+        """open_session: auto ล้างค่า · ลำดับ --no-open > .flash.json > config เครื่อง > ค่าเริ่มต้นตามผู้สั่ง (detach = ไม่เปิด)"""
+        mod = self.load_mod("flashq_openses")
+        proj = self.tmp / "proj_os"
+        proj.mkdir()
+        det, norm = {"submitter": "detach"}, {}
+        self.run_q("config", "open_session", "off")
+        r = self.run_q("config", "open_session", "auto")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("open_session", json.loads((self.home / "config.json").read_text(encoding="utf-8")))
+        self.assertFalse(mod.want_open_session(proj, det, False))   # auto + detach = ไม่เปิด
+        self.assertTrue(mod.want_open_session(proj, norm, False))   # auto + ผู้สั่งปกติ = เปิด
+        self.assertFalse(mod.want_open_session(proj, norm, True))   # --no-open ชนะทุกอย่าง
+        self.run_q("config", "open_session", "on")
+        self.assertTrue(mod.want_open_session(proj, det, False))    # config เครื่องชนะค่าเริ่มต้นตามผู้สั่ง
+        (proj / ".flash.json").write_text(json.dumps({"open_session": False}), encoding="utf-8")
+        self.assertFalse(mod.want_open_session(proj, norm, False))  # โปรเจกต์ชนะ config เครื่อง
+        (proj / ".flash.json").write_text(json.dumps({"open_session": "on"}), encoding="utf-8")
+        self.run_q("config", "open_session", "off")
+        self.assertTrue(mod.want_open_session(proj, det, False))    # โปรเจกต์ on ชนะเครื่อง off
+        self.assertFalse(mod.want_open_session(proj, det, True))
+
+    def test_ui_config_open_session(self):
+        base = self.start_ui()
+        hdr = {"Content-Type": "application/json", "X-Flashq-Token": self.ui_token(base)}
+        self.assertEqual(json.loads(self.http(base + "/api/state")[1])["open_session"], "auto")
+        code, out = self.http(base + "/api/config", json.dumps({"open_session": "off"}).encode(), hdr)
+        self.assertEqual(code, 200, out)
+        self.assertEqual(json.loads(self.http(base + "/api/state")[1])["open_session"], "off")
+        self.assertEqual(self.http(base + "/api/config", json.dumps({"open_session": "xx"}).encode(), hdr)[0], 400)
+        self.http(base + "/api/config", json.dumps({"open_session": "auto"}).encode(), hdr)
+        self.assertEqual(json.loads(self.http(base + "/api/state")[1])["open_session"], "auto")
+
     def test_run_detach_then_inbox(self):
         """--detach คืนทันทีพร้อม FLASH_RUN=DETACHED · งานจบแล้ว inbox แสดงผลครั้งเดียว (ย้ายเข้า done)"""
         r = self.run_q("run", "--message", "PONG", "--attach", "none", "--detach")

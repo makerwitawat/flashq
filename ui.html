@@ -442,6 +442,8 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
           <select id="maxPar"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
         <label class="muted" title="auto = เริ่มงานที่ไม่ชนกับงานที่กำลังทำเอง (ข้ามงานที่ชน · กันอดตาย) · fifo = หัวคิวก่อนเสมอ">จัดคิว
           <select id="schedMode"><option value="auto">อัตโนมัติ</option><option value="fifo">ตามลำดับ</option></select></label>
+        <label class="muted" title="เปิดหน้าต่าง session ของพนักงานตอนงานเริ่มไหม · อัตโนมัติ = ไม่เปิดเมื่อสั่งจาก opencode (run --detach) นอกนั้นเปิด · ตั้งเฉพาะโปรเจกต์ได้ด้วย open_session ใน .flash.json">หน้าต่าง session
+          <select id="openSess"><option value="auto">อัตโนมัติ</option><option value="on">เปิด</option><option value="off">ไม่เปิด</option></select></label>
         <button class="ico" data-collapse title="พับ/กาง">▾</button></div>
       <div class="pb" id="running"></div>
     </section>
@@ -965,6 +967,8 @@ if (LANG === "en") {
 จะแสดงในหน้าเว็บแทน|will be shown on the web page instead
 จัดการบัญชีโมเดล|Manage model accounts
 จัดคิว|schedule
+หน้าต่าง session|session window
+ไม่เปิด|don't open
 จับได้|detected
 จาก|from
 จากแผน|from the plan
@@ -2057,6 +2061,7 @@ function render() {
   $("slotInfo").textContent = `(ใช้ช่อง ${sl.used}/${sl.max}${sl.used > sl.max ? " · มีช่องพิเศษ" : ""})`;
   if (document.activeElement !== $("maxPar")) $("maxPar").value = String(sl.max);
   if (document.activeElement !== $("schedMode")) $("schedMode").value = s.schedule || "fifo";
+  if (document.activeElement !== $("openSess")) $("openSess").value = s.open_session || "auto";
   setHTML("running", runs.length ? runs.map((r, i) => `<div class="run-item">
     <div class="kv">
       <div>สถานะ</div><div><span class="dot"></span> ${badge("running")} เวลาผ่านไป <b id="rnT${i}"></b>
@@ -2693,6 +2698,9 @@ $("schedMode").onchange = async () => {
     body: "• งานที่ไม่ชนกัน (คนละโปรเจกต์ หรือไฟล์ไม่ซ้อน) จะเริ่มพร้อมกันเอง และอาจแซงงานที่ชนซึ่งรออยู่ก่อน\n"
       + `• งานที่ถูกแซงรอเกิน ${state?.starve_min || 120} นาที = ล็อกเป็นหัวคิว\n• ทุกงานใช้บัญชี/โควตาเดียวกัน · ถ้าพร้อมกันเป็น 1 จะตั้งเป็น 2 ให้` })) { $("schedMode").value = state?.schedule || "fifo"; return; }
   const d = await post("/api/config", { schedule: v }); toast(d.message || d.error || "ผิดพลาด"); refresh();
+};
+$("openSess").onchange = async () => {
+  const d = await post("/api/config", { open_session: $("openSess").value }); toast(d.message || d.error || "ผิดพลาด"); refresh();
 };
 $("maxPar").onchange = async () => {
   const n = +$("maxPar").value;

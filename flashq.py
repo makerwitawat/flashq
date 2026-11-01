@@ -796,8 +796,12 @@ def set_config(key: str, value) -> tuple[str, str]:
         return "", (f"ตั้งป้ายงานตายหายเองเมื่อพ้น {v:g} ชั่วโมง แล้ว" if v else "ปิดการล้างป้ายงานตายอัตโนมัติแล้ว")
     if key == "open_session":
         v = str(value if value is not None else "").lower()
-        if v not in ("on", "off", "true", "false", "1", "0"):
-            return "open_session ต้องเป็น on | off", ""
+        if v not in ("on", "off", "true", "false", "1", "0", "auto"):
+            return "open_session ต้องเป็น on | off | auto", ""
+        if v == "auto":  # ล้างค่า → ตามผู้สั่ง (run --detach = ไม่เปิด · อื่น ๆ เปิด)
+            cfg.pop("open_session", None)
+            write_json(CONFIG, cfg)
+            return "", "open_session = auto — งานที่ส่งด้วย run --detach (เช่น จาก opencode) ไม่เปิดหน้าต่าง session · งานอื่นเปิดตามปกติ"
         cfg["open_session"] = v in ("on", "true", "1")
         write_json(CONFIG, cfg)
         return "", ("สั่ง opencode desktop เปิดหน้าต่าง session ตอนงานเริ่มแล้ว" if cfg["open_session"] else "ปิดการเปิดหน้าต่าง session อัตโนมัติแล้ว (งานยังรันตามปกติ ดูได้ที่ flashq ui)")
@@ -1445,6 +1449,26 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
     return " · ".join(parts)
 
 
+def _onoff(v):
+    """on/off/true/false/1/0 (หรือ bool) → bool · อ่านไม่ออก/ไม่ได้ตั้ง → None"""
+    if isinstance(v, bool):
+        return v
+    t = str(v if v is not None else "").strip().lower()
+    return True if t in ("on", "true", "1") else False if t in ("off", "false", "0") else None
+
+
+def want_open_session(root: Path, job: dict, no_open: bool) -> bool:
+    """เปิดหน้าต่าง session ของพนักงานตอนงานเริ่มไหม · --no-open > .flash.json ของโปรเจกต์ > config ของเครื่อง >
+    ค่าเริ่มต้นตามผู้สั่ง (ส่งด้วย run --detach = ผู้สั่งไม่ใช่ Claude Code เช่น opencode → ไม่เปิด · อื่น ๆ เปิด)"""
+    if no_open:
+        return False
+    for v in (project_cfg(root).get("open_session"), read_json(CONFIG).get("open_session")):
+        b = _onoff(v)
+        if b is not None:
+            return b
+    return job.get("submitter") != "detach"
+
+
 def open_in_desktop(sid: str, server: str) -> None:
     node = shutil.which("node")
     if not node:
@@ -1674,7 +1698,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             if sid:
                 job["session"] = sid
                 save_job(job)
-                if not no_open and read_config().get("open_session") is not False:  # open_session: off = ไม่เปิดหน้าต่าง session ให้ (ใช้เมื่อสั่งงานจาก opencode เอง)
+                if want_open_session(root, job, no_open):
                     open_in_desktop(sid, attach)
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
@@ -2183,7 +2207,7 @@ def cmd_run(a) -> int:
         return 1
     start = Path(a.project or os.getcwd())
     if getattr(a, "detach", False):  # ผู้สั่งที่ไม่มี background shell (เช่น opencode) → ส่งแล้วคืนทันที · ผลงานจบอยู่ใน inbox (flashq inbox)
-        rest = [x for x in sys.argv[1:] if x != "--detach"]
+        rest = [x for x in sys.argv[1:] if x != "--detach"] + ["--submitter", "detach"]
         r = spawn_run(([sys.argv[0]] if FROZEN else [sys.executable, sys.argv[0]]) + rest, str(start))
         print(r["message"])
         if r.get("job"):
@@ -2296,7 +2320,8 @@ def cmd_run(a) -> int:
            "kind": kind, "agent": agent, "prompt": prompt, "readonly": bool(a.readonly or kind in AGENT_KINDS),
            "title": title, "model": model, "status": "queued", "pid": os.getpid(),
            "pid_start": proc_start(os.getpid()), "created": now(), "qv": QUEUE_VERSION,
-           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "claude_host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", "")}
+           "claude_session": os.environ.get("CLAUDE_CODE_SESSION_ID", ""), "claude_host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID", ""),
+           "submitter": getattr(a, "submitter", "") or ""}
     save_job(job)
 
     got = acquire(job, a.wait_min, a.no_wait)
@@ -4872,7 +4897,7 @@ OC_COMMANDER_NOTE = """
 > - `AskUserQuestion` → question tool · `Agent` / subagent → task tool (เลือก `model:` ไม่ได้ ใช้ agent ที่มี) · `Skill` → skill tool
 > - `run_in_background` → ใส่ `--detach` ท้ายคำสั่ง `flashq run …` (ส่งเข้าคิวแล้วคืนทันที) แล้ว**หยุดรอ** ห้าม sleep/poll · จบแล้วผู้ใช้สั่งต่อ หรือรัน `flashq inbox` ดูผลงานที่จบ
 > - hook/ยามของ Claude (`run_guard` `inbox_notify` `delegate_guard`) ไม่มีใน opencode → ทำตามกติกาในไฟล์ด้วยตัวเอง · ไม่มี subagent `flash-checker` → ตรวจเองตามขั้นของคำสั่ง
-> - ไม่อยากให้เปิดหน้าต่าง session ของพนักงานซ้อนกับ session นี้ → `flashq config open_session off`
+> - `run --detach` ไม่เปิดหน้าต่าง session ของพนักงานให้เองอยู่แล้ว · อยากเปิด/ปิดเอง → `flashq config open_session on|off|auto` (ทั้งเครื่อง) หรือ `"open_session": true|false` ใน `.flash.json` (ต่อโปรเจกต์)
 """
 
 
@@ -5417,7 +5442,7 @@ def ui_state() -> dict:
         row["claude_title"] = claude_session_title(row["claude_session"])
     goals = ui_goals(running, history, queued)
     return {"now": now(), "lock": held[0] if held else {}, "slots": {"used": len(held), "max": max_parallel(), "held": held},
-            "schedule": sch["mode"], "starve_min": starve_min(), "dead_clear_hours": dead_clear_hours(),
+            "schedule": sch["mode"], "open_session": {True: "on", False: "off"}.get(_onoff(read_json(CONFIG).get("open_session")), "auto"), "starve_min": starve_min(), "dead_clear_hours": dead_clear_hours(),
             "running": running[0] if running else None, "running_list": running, "dead": dead, "queued": queued, "history": history,
             "history_total": history_total, "agent": agent, "current_model": configured_model(), "accounts": acc_rows, "accounts_source": accounts_source(),
             "projects": sorted({r["project_name"] for r in rows if r["project_name"]}),
@@ -5929,9 +5954,9 @@ def make_ui_server(port: int = 4097):
                 ok, msg = request_run_now(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/config":
-                keys = [k for k in ("schedule", "max_parallel", "starve_min", "dead_clear_hours") if k in body]
+                keys = [k for k in ("schedule", "max_parallel", "starve_min", "dead_clear_hours", "open_session") if k in body]
                 if not keys:
-                    return self._send(400, {"ok": False, "message": "ต้องมี max_parallel / schedule / starve_min / dead_clear_hours"})
+                    return self._send(400, {"ok": False, "message": "ต้องมี max_parallel / schedule / starve_min / dead_clear_hours / open_session"})
                 msgs = []
                 for k in keys:
                     err, msg = set_config(k, body[k])
@@ -7998,6 +8023,7 @@ def main() -> int:
         r.add_argument("--retry-nostart", type=int, default=2, help="NOSTART แล้วลองใหม่กี่ครั้ง")
         r.add_argument("--auto", action="store_true", help="อนุมัติ permission อัตโนมัติ (ยกเว้นที่ deny)")
         r.add_argument("--no-open", action="store_true", help="ไม่สั่ง desktop เปิด session ให้ (ปิดทั้งเครื่อง: config open_session off)")
+        r.add_argument("--submitter", default="", help=argparse.SUPPRESS)  # ภายใน: --detach ใส่ให้ตอนส่งต่อ → ค่าเริ่มต้นไม่เปิดหน้าต่าง session
         r.add_argument("--detach", action="store_true", help="ส่งเข้าคิวแล้วคืนทันที ไม่รอจนงานจบ (สำหรับผู้สั่งที่รัน background ไม่ได้ เช่น opencode) · ผลดูด้วย inbox")
         r.set_defaults(fn=cmd_run)
     vf.set_defaults(attach="none")  # agent ที่เพิ่งติดตั้ง live server 4096 อาจยังไม่เห็น → รันแยกเป็นค่าเริ่มต้น
@@ -8094,7 +8120,7 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
-    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours · open_session on|off)")
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours · open_session on|off|auto)")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)

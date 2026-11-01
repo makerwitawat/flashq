@@ -240,9 +240,11 @@ python D:\MyCode\flashq\flashq.py gui [--port 0]          # หน้าต่�
   "command": "flash",
   "timeout_min": 480,
   "rules": "กติกาเพิ่มที่ /flash แบบ global ต้องทำตาม (เช่น คำสั่ง commit ของโปรเจกต์)",
-  "external_dirs": ["D:/MyCode/my-game/*"]
+  "external_dirs": ["D:/MyCode/my-game/*"],
+  "open_session": false
 }
 ```
+- `open_session` (true/false · ไม่ใส่ = ตามเครื่อง) = เปิดหน้าต่าง session ของพนักงานตอนงานเริ่มไหม เฉพาะโปรเจกต์นี้ · ลำดับ: `--no-open` > `.flash.json` ของโปรเจกต์ > `flashq config open_session on|off` ของเครื่อง (หรือสวิตช์ "หน้าต่าง session" บนหน้าเว็บ) > ค่าเริ่มต้นตามผู้สั่ง · `auto` (ล้างค่าเครื่อง) = งานที่ส่งด้วย `run --detach` (เช่น จาก opencode) **ไม่เปิด** นอกนั้นเปิด
 
 ### งานถูกปฏิเสธสิทธิ์ (DENIED)
 - `opencode run` เป็นโหมดไม่โต้ตอบ: ถ้า agent แตะไฟล์**นอกโปรเจกต์**และ `permission.external_directory` ใน `~/.config/opencode/opencode.json` เป็น `ask` opencode จะตอบ "ไม่อนุญาต" ให้เองทันที (stderr: `permission requested: external_directory (<path>); auto-rejecting`) → subagent ล้ม งานจบ exit 0 โดยไม่ได้ทำอะไร

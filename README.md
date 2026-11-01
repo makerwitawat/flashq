@@ -133,7 +133,7 @@ python flashq.py gui    # หน้าต่างแอป (WebView2 ผ่า�
 | `/flash-investigate` · `/flash-qa` · `/flash-doc` | สั่งผู้สืบ · นักทดสอบ · ช่างเอกสาร |
 | `/flash-init` | ตั้งค่าโปรเจกต์ใหม่ |
 
-ใน opencode: `/flash` · `/flash-queue` · `/flash-switch` และคำสั่งฝั่งผู้สั่งชุดเดียวกับ Claude Code (`/flash-plan` `/flash-check` ฯลฯ — `install` สร้างให้) ทำให้โมเดลอื่นเช่น GLM เป็นผู้สั่งแทน Claude ได้ · ผู้สั่งส่งงานด้วย `run --detach` แล้วดูผลด้วย `flashq inbox` · ไม่อยากให้เปิดหน้าต่าง session ซ้อน: `flashq config open_session off`
+ใน opencode: `/flash` · `/flash-queue` · `/flash-switch` และคำสั่งฝั่งผู้สั่งชุดเดียวกับ Claude Code (`/flash-plan` `/flash-check` ฯลฯ — `install` สร้างให้) ทำให้โมเดลอื่นเช่น GLM เป็นผู้สั่งแทน Claude ได้ · ผู้สั่งส่งงานด้วย `run --detach` แล้วดูผลด้วย `flashq inbox` · ไม่อยากให้เปิดหน้าต่าง session ซ้อน: งานที่ส่งด้วย `--detach` ไม่เปิดให้เองอยู่แล้ว (ตั้งเองได้: สวิตช์ "หน้าต่าง session" บนหน้าเว็บ · `.flash.json` `open_session` ต่อโปรเจกต์ · `flashq config open_session off`
 
 ## ตั้งค่า
 
