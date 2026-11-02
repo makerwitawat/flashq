@@ -58,6 +58,8 @@ if mode == "subagent":  # opencode เตือนทาง stderr แล้ว�
     print("agent \"x\" is a subagent, not a primary agent. Falling back to default agent", file=sys.stderr, flush=True)
 if mode == "epipe":  # รายงานข้อความแล้วสตรีมตายด้วย EPIPE (exit 1) — FAKE_ERR_EXTRA = บรรทัด stderr อื่นที่ปนมา
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "DONE — เสร็จ")}}), flush=True)
+    if os.environ.get("FAKE_STEP_REASON"):  # จำลอง step_finish ท้ายรอบ (stop = โมเดลตอบจบ · tool-calls = ยังไม่จบ) ก่อนสตรีมตาย
+        print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"reason": os.environ["FAKE_STEP_REASON"]}}), flush=True)
     print("error: EPIPE: broken pipe, write", file=sys.stderr, flush=True)
     print("      at emitError (node:events:50:13)", file=sys.stderr, flush=True)
     if os.environ.get("FAKE_ERR_EXTRA"):

@@ -106,6 +106,37 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
 
+    def test_epipe_readonly_stop_not_fail(self):
+        """งานสืบ (อ่านอย่างเดียว) ที่โมเดลตอบจบ (step_finish=stop) แล้วตายด้วย EPIPE = OK_UNVERIFIED ไม่ใช่ FAIL · rc ยังเป็น 1"""
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_MODE": "epipe", "FAKE_TEXT": "รายงานผลสืบ: ต้นตอที่ a.py:1",
+                                                               "FAKE_STEP_REASON": "stop"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)
+        self.assertNotIn("FLASH_RUN=FAIL", r.stdout)
+        job = json.loads(max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))
+        self.assertEqual(job["result"], "OK_UNVERIFIED")
+        self.assertEqual(job["rc"], 1)
+        self.assertTrue(any("EPIPE" in x for x in job["unverified"]), job["unverified"])
+
+    def test_epipe_readonly_midrun_still_fail(self):
+        """งานสืบที่ยังไม่จบ (step_finish=tool-calls) หรือไม่มี step_finish เลย = ยังต้อง FAIL"""
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_MODE": "epipe", "FAKE_TEXT": "กำลังสืบ", "FAKE_STEP_REASON": "tool-calls"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_MODE": "epipe", "FAKE_TEXT": "กำลังสืบ"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
+    def test_epipe_work_job_without_done_still_fail(self):
+        """กฎผ่อนเฉพาะงานอ่านอย่างเดียว: งานแก้ที่ไม่มี DONE ยัง FAIL · งานสืบที่มี stderr อื่นปนก็ยัง FAIL"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "กำลังทำ", "FAKE_STEP_REASON": "stop"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_MODE": "epipe", "FAKE_TEXT": "รายงานผลสืบ",
+                                                               "FAKE_STEP_REASON": "stop", "FAKE_ERR_EXTRA": "Error: boom"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
     def test_progress_counts_only_own_commits(self):
         """job_progressed: นับเฉพาะ commit ของงานนี้ (T-xx ที่ matcher รับ หรือแตะไฟล์แผน) — commit ของ session อื่นไม่นับ"""
         mod = self.load_mod("flashq_progress")

@@ -1857,6 +1857,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                         break
 
     session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
+    last_finish = ""  # part.reason ของ step_finish ล่าสุด (stop = โมเดลตอบจบ · tool-calls = ยังไม่จบ)
     tool_denied, task_out = [], []  # tool ที่ล้มเพราะ opencode ปฏิเสธสิทธิ์ · ผลที่ subagent (tool task) ส่งกลับ
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
@@ -1880,6 +1881,8 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                 task_out.append(st["output"])
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
+        elif ev.get("type") == "step_finish":
+            last_finish = part.get("reason") or ""
     errtxt = err.read_text(encoding="utf-8", errors="replace")
     last = texts[-1] if texts else ""
     perm = perm_denials(errtxt, tool_denied)
@@ -1887,6 +1890,9 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     if status == "OK" and (rc != 0 or errors):
         if not errors and rc != 0 and epipe_only(errtxt) and said_done(last):
             epipe_done = f"opencode ล้มด้วย EPIPE หลังรายงาน DONE (rc={rc}) — ตรวจงานด้วย /flash-check"
+        elif not errors and rc != 0 and epipe_only(errtxt) and (job.get("readonly") or job.get("kind") in ("verify", "investigate")) \
+                and last_finish == "stop" and last:  # งานอ่านอย่างเดียวที่โมเดลตอบจบแล้ว (step_finish=stop) ไม่เขียน DONE ก็ถือว่าจบ
+            epipe_done = f"opencode ล้มด้วย EPIPE หลังโมเดลตอบจบ (step_finish=stop) (rc={rc}) — งานอ่านอย่างเดียว ตรวจรายงานด้วย /flash-check"
         else:
             status = "FAIL"
     if status == "OK" and perm and not job_progressed(root, head0, texts + task_out, job):
