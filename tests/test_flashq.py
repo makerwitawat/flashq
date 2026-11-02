@@ -477,6 +477,25 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual(code, 0, out)
             self.assertNotIn("หา commit จากข้อความ", out)
 
+    def test_scope_plan_without_tasks_fails(self):
+        """แผนที่ไม่มีงาน T-xx เลย → scope ต้อง FAIL (ไม่ใช่ PASS เปล่า)"""
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="scope3_") as d:
+            def git(*args):
+                r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", d, *args], capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                return r.stdout.strip()
+
+            git("init", "-q", "-b", "main")
+            Path(d, "PLAN.md").write_text("# plan\n", encoding="utf-8", newline="\n")
+            git("add", "--", "PLAN.md")
+            git("commit", "-qm", "base")
+            r = subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", "PLAN.md", "--project", d],
+                               capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=60)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("SCOPE_RESULT=FAIL", r.stdout)
+            self.assertIn("NOTASK", r.stdout)
+
     def test_fifo_queue_and_no_wait(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
         time.sleep(2.5)

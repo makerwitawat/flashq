@@ -3799,6 +3799,9 @@ def cmd_scope(a) -> int:
     allow, hashes = scope_parse(text)
     wanted = [t for t in re.split(r"[,\s]+", " ".join(a.tasks)) if t] or sorted(set(allow) | set(hashes))
     bad = 0
+    if not wanted:
+        print("SCOPE NOTASK ไม่พบงาน T-xx ในแผน — ตรวจขอบเขตไม่ได้")
+        bad += 1
     found_by: dict[str, list[str]] = {}  # งานที่ §4 ไม่มี hash แต่หา commit เจอเอง
     for t in wanted:
         if t not in hashes:
