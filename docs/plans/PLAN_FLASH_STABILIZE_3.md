@@ -23,7 +23,7 @@ stderr จริง (`~/.flashq/logs/*_1.err`) มีบล็อกซ้ำ �
 **ระวัง**: EPIPE เกิดกลางงานได้ด้วย (log งานสืบ step_finish สุดท้ายเป็น `tool-calls`) → ต้องมีหลักฐานว่าจบจริง (worker รายงาน DONE) จึงจะไม่ตีเป็น FAIL
 
 ## 2. งาน
-- [ ] **T-01** `flashq.py` (`_run_once`, ค้นข้อความ `if status == "OK" and (rc != 0 or errors):`) + `tests/fake_opencode.py` + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` (`_run_once`, ค้นข้อความ `if status == "OK" and (rc != 0 or errors):`) + `tests/fake_opencode.py` + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - fake_opencode: เพิ่มโหมด `FAKE_MODE=epipe` — พิมพ์ event text (ข้อความจาก `FAKE_TEXT`, ค่าเริ่มต้น `DONE — เสร็จ`) แล้วพิมพ์ลง stderr ข้อความ `error: EPIPE: broken pipe, write` กับบรรทัด `      at emitError (node:events:50:13)` แล้ว `sys.exit(1)` · โหมดอื่นไม่เปลี่ยน
   - เทสต์ใหม่ 3 ข้อ (ใช้ helper เดิมแบบเดียวกับเทสต์ `_run_once`/`cmd_run` ที่มีอยู่ — Grep หาตัวอย่าง `FAKE_MODE` ใน tests/test_flashq.py แล้วทำตามรูปแบบนั้น):
     1. `test_epipe_after_done_not_fail`: `FAKE_MODE=epipe`, `FAKE_TEXT="DONE — ครบ"` → ผลต้องไม่ใช่ `FAIL` (ต้องเป็น `OK_UNVERIFIED` และเหตุผลที่แสดง/บันทึกมีคำ `EPIPE`) · `rc` ที่บันทึกยังเป็น 1
@@ -42,4 +42,4 @@ stderr จริง (`~/.flashq/logs/*_1.err`) มีบล็อกซ้ำ �
 ## 4. ผล (ผู้ทำเติม · ผู้ตรวจเติมช่องขวา)
 | งาน | ผล | commit | หลักฐานชี้ขาด | ตรวจ Claude |
 |---|---|---|---|---|
-| T-01 | | | | |
+| T-01 | DONE — ใช้กลไก `unverified_reasons` เดิม (res คง status "OK" + เหตุ EPIPE) | 1c46c6f | `.tmp/T-01.red.log`: `FAILED tests/test_flashq.py::FlashqTest::test_epipe_after_done_not_fail` (FLASH_RUN=FAIL exit=1) · `.tmp/T-01.green.log`: `3 passed, 200 deselected in 5.36s` · `.tmp/T-01.reg.log`: `13 passed, 190 deselected in 59.73s` | |
