@@ -32,7 +32,7 @@
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
   python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
   python flashq.py goal cancel <GOAL.md> --reason "เหตุ"                  user สั่งเลิกธง → GOAL=CANCELLED (verify/check ปฏิเสธจนกว่าจะเปิดใหม่)
-ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|DENIED|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+ผลของ run: บรรทัด `FLASH_RUN=OK|OK_UNVERIFIED|FAIL|DENIED|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK/OK_UNVERIFIED · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
   DENIED = opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ เช่น อ่านไฟล์นอกโปรเจกต์) งานไม่ได้ทำ → บรรทัด `DENIED:` บอก path + ทางแก้ (`external_dirs` ใน .flash.json หรือ permission ใน opencode.json)
 """
 import argparse
