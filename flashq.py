@@ -1523,7 +1523,7 @@ def want_open_session(root: Path, job: dict, no_open: bool) -> bool:
         b = _onoff(v)
         if b is not None:
             return b
-    return job.get("submitter") != "detach"
+    return job.get("submitter") not in ("detach", "ui")
 
 
 def open_in_desktop(sid: str, server: str) -> None:
@@ -5782,6 +5782,7 @@ def build_run_argv(body: dict) -> tuple[list[str], str]:
             argv.append(f"--prompt={prompt}")
         if body.get("no_open"):
             argv.append("--no-open")
+        argv += ["--submitter", "ui"]
         if body.get("auto"):
             argv.append("--auto")
         return argv + tail, ""

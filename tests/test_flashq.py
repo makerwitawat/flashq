@@ -725,7 +725,13 @@ class FlashqTest(unittest.TestCase):
         self.assertFalse(mod.want_open_session(proj, det, False))   # auto + detach = ไม่เปิด
         self.assertTrue(mod.want_open_session(proj, norm, False))   # auto + ผู้สั่งปกติ = เปิด
         self.assertFalse(mod.want_open_session(proj, norm, True))   # --no-open ชนะทุกอย่าง
+        ui = {"submitter": "ui"}
+        self.assertFalse(mod.want_open_session(proj, ui, False))    # auto + ส่งจากหน้าเว็บ = ไม่เปิด
         self.run_q("config", "open_session", "on")
+        self.assertTrue(mod.want_open_session(proj, ui, False))     # config เครื่อง on ชนะค่าเริ่มต้นตามผู้สั่ง
+        argv, err = mod.build_run_argv({"project": str(self.proj), "plan": "PLAN.md", "tasks": "T-01"})
+        self.assertEqual(err, "")
+        self.assertIn(["--submitter", "ui"], [argv[i:i + 2] for i in range(len(argv) - 1)])
         self.assertTrue(mod.want_open_session(proj, det, False))    # config เครื่องชนะค่าเริ่มต้นตามผู้สั่ง
         (proj / ".flash.json").write_text(json.dumps({"open_session": False}), encoding="utf-8")
         self.assertFalse(mod.want_open_session(proj, norm, False))  # โปรเจกต์ชนะ config เครื่อง
