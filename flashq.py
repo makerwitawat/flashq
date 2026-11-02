@@ -3281,6 +3281,7 @@ DOC_MAX_PATHS = 32
 DOC_MAX_BRIEF = 4000
 DOC_TEXT_CAP = 1024 * 1024       # ไฟล์เอกสารที่ตรวจเนื้อหาได้ใหญ่สุด · เกินหรือมี NUL = ตรวจไม่ได้ (UNCHECKED)
 DOC_WHY_MAX = 8
+DOC_MAX_REMOVED = 40              # ลบ/เขียนทับเนื้อหาเดิมได้มากสุดกี่บรรทัดก่อนถือว่าไม่ผ่าน (REMOVED) · 0 = ปิดด่าน
 DOC_PROTECTED_RE = re.compile(r"(?:^|/)(?:\.git(?:/|$)|\.flash\.json$|\.env(?:\.[^/]*)?$|id_(?:rsa|ed25519|ecdsa)[^/]*$|[^/]*\.(?:pem|key|p12|pfx|keystore)$)", re.I)
 DOC_GUARD_FILES = (".flash.json", ".env", ".env.local", ".env.production", ".git/config", ".git/HEAD", ".git/hooks")
 DOC_SECRET_RES = [re.compile(p) for p in (
@@ -3355,7 +3356,17 @@ def doc_spec(name: str, v, default_min: float) -> dict | str:
         return f"ชุดเอกสาร '{name}': timeout_min ต้องเป็นตัวเลข"
     if not 0.1 <= timeout <= 1440:
         return f"ชุดเอกสาร '{name}': timeout_min ต้องอยู่ระหว่าง 0.1-1440"
-    return {"name": name, "paths": list(dict.fromkeys(norm)), "brief": brief.strip(), "timeout_min": timeout}
+    out = {"name": name, "paths": list(dict.fromkeys(norm)), "brief": brief.strip(), "timeout_min": timeout}
+    raw_m = v.get("max_removed")
+    if raw_m not in (None, ""):
+        try:
+            max_removed = int(raw_m)
+        except (TypeError, ValueError):
+            return f"ชุดเอกสาร '{name}': max_removed ต้องเป็นจำนวนเต็ม 0-100000"
+        if not 0 <= max_removed <= 100000:
+            return f"ชุดเอกสาร '{name}': max_removed ต้องอยู่ระหว่าง 0-100000"
+        out["max_removed"] = max_removed
+    return out
 
 
 def doc_guard(root: Path) -> dict:
@@ -3404,27 +3415,28 @@ def doc_before(root: Path, snap: dict | None) -> dict:
     return out
 
 
-def doc_added(root: Path, rel: str, head: str, before_texts: dict) -> tuple[list[str] | None, bool]:
-    """บรรทัดที่เพิ่ม/แก้ในไฟล์นี้ (เทียบกับฐานก่อนรัน) → (บรรทัด, ถูกลบหรือไม่) · None = ตรวจเนื้อหาไม่ได้ (ไบนารี/ใหญ่เกิน)"""
+def doc_added(root: Path, rel: str, head: str, before_texts: dict) -> tuple[list[str] | None, bool, int]:
+    """บรรทัดที่เพิ่ม/แก้ในไฟล์นี้ (เทียบกับฐานก่อนรัน) → (บรรทัด, ถูกลบหรือไม่, จำนวนบรรทัดที่ถูกลบ) · None = ตรวจเนื้อหาไม่ได้ (ไบนารี/ใหญ่เกิน)"""
     f = root / rel
     if not f.is_file():
-        return [], True
+        return [], True, 0
     try:
         data = f.read_bytes()
     except OSError:
-        return None, False
+        return None, False, 0
     if len(data) > DOC_TEXT_CAP or b"\x00" in data:
-        return None, False
+        return None, False, 0
     if rel in before_texts:
         base = before_texts[rel]
     else:
         r = run_timeout(["git", "-C", str(root), "show", f"{head}:{rel}"], 30, text=False) if head else None
         if r is not None and r.returncode == 0 and (len(r.stdout) > DOC_TEXT_CAP or b"\x00" in r.stdout):
-            return None, False
+            return None, False, 0
         base = r.stdout.decode("utf-8", "replace") if r is not None and r.returncode == 0 else ""  # ไม่มีใน HEAD = ไฟล์ใหม่
     new = data.decode("utf-8", "replace").splitlines()
-    diff = difflib.unified_diff(base.splitlines(), new, n=0, lineterm="")
-    return [x[1:] for x in diff if x.startswith("+") and not x.startswith("+++")], False
+    diff = list(difflib.unified_diff(base.splitlines(), new, n=0, lineterm=""))
+    return [x[1:] for x in diff if x.startswith("+") and not x.startswith("+++")], False, \
+        len([x for x in diff if x.startswith("-") and not x.startswith("---")])
 
 
 def doc_secrets(rel: str, lines: list[str]) -> list[str]:
@@ -3494,9 +3506,10 @@ def doc_verdict(spec: dict, run: dict, root: Path, before: dict | None, after: d
             ([f"(และอีก {len(outside) - DOC_WHY_MAX} ไฟล์)"] if len(outside) > DOC_WHY_MAX else []), changed + [p for p in guarded if p not in changed]
     if not changed:
         return "NOCHANGE", ["ไม่มีไฟล์เปลี่ยนเลย (เอกสารอาจตรงกับโค้ดอยู่แล้ว หรือ agent ไม่ได้ลงมือ)"], []
-    added, unchecked, deleted = {}, [], []
+    added, unchecked, deleted, removed = {}, [], [], 0
     for p in changed:
-        lines, gone = doc_added(root, p, head1, before_texts)
+        lines, gone, gone_n = doc_added(root, p, head1, before_texts)
+        removed += gone_n
         if gone:
             deleted.append(p)
         elif lines is None:
@@ -3513,7 +3526,10 @@ def doc_verdict(spec: dict, run: dict, root: Path, before: dict | None, after: d
     refs = [b for p, ls in added.items() for b in doc_badrefs(root, p, ls)]
     if refs:
         return "BADREF", refs[:DOC_WHY_MAX] + ([f"(และอีก {len(refs) - DOC_WHY_MAX} จุด)"] if len(refs) > DOC_WHY_MAX else []), changed
-    return "DRAFT", [f"แก้ {len(changed)} ไฟล์ ผ่านด่านกลไกทั้งหมด — รอผู้ใช้ดู diff"], changed
+    lim = spec.get("max_removed", DOC_MAX_REMOVED)
+    if lim > 0 and removed > lim:
+        return "REMOVED", [f"ลบ/แก้ทับเนื้อหาเดิม {removed} บรรทัด (เกิน {lim}) — ตรวจ diff ว่าไม่ได้ลบของจริงทิ้ง"], changed
+    return "DRAFT", [f"แก้ {len(changed)} ไฟล์ (ลบ {removed} บรรทัด) ผ่านด่านกลไกทั้งหมด — รอผู้ใช้ดู diff"], changed
 
 
 # ---------- ช่างเอกสาร — ขั้น 2: สั่งงาน · สำรอง/ย้อนกลับ · รับ/ทิ้ง ----------
@@ -3521,10 +3537,11 @@ DOC_AUTO_REVERT = ("OUTSIDE", "SECRET")   # ผลที่อันตราย
 DOC_BACKUP_CAP = 20 * 1024 * 1024
 DOC_SNAP_CAP = 500
 DOC_ICON = {"DRAFT": "📝", "TIMEOUT": "⏱", "ERROR": "⛔", "CHANGED": "⚠️", "OUTSIDE": "🚫", "NOCHANGE": "➖", "UNCHECKED": "⚠️", "DELETED": "🗑",
-            "SECRET": "🔑", "BADREF": "🔗", "CANCELLED": "✋"}
+            "SECRET": "🔑", "BADREF": "🔗", "REMOVED": "✂", "CANCELLED": "✋"}
 DOC_MEANING = {"TIMEOUT": "เกินเวลา", "ERROR": "agent ล้มเหลวหรือ flashq ตรวจไม่ได้", "CHANGED": "HEAD เปลี่ยนระหว่างรัน (ห้าม commit/สลับ branch)",
                "OUTSIDE": "แตะไฟล์นอกขอบเขตของชุด", "NOCHANGE": "ไม่มีไฟล์เปลี่ยน", "UNCHECKED": "ตรวจเนื้อหาไฟล์ไม่ได้ (ไบนารี/ใหญ่เกิน)",
-               "DELETED": "ลบไฟล์เอกสาร", "SECRET": "พบข้อความคล้ายความลับ", "BADREF": "อ้างถึงไฟล์/บรรทัดที่ไม่มีจริง", "CANCELLED": "ถูกยกเลิกกลางทาง"}
+               "DELETED": "ลบไฟล์เอกสาร", "SECRET": "พบข้อความคล้ายความลับ", "BADREF": "อ้างถึงไฟล์/บรรทัดที่ไม่มีจริง",
+               "REMOVED": "ลบเนื้อหาเดิมมากเกินเกณฑ์ — ไม่ผ่าน ต้องดู diff", "CANCELLED": "ถูกยกเลิกกลางทาง"}
 
 
 def doc_sha(p: Path) -> str:

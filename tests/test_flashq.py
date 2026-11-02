@@ -4921,6 +4921,22 @@ class DocTest(unittest.TestCase):
         self.assertLessEqual(len(why), 9)
         self.assertIn("อีก", why[-1])
 
+    def test_doc_mass_removal_flagged(self):
+        """เขียนทับจนเนื้อหาเดิมหายเกินเกณฑ์ → REMOVED (ไม่ผ่าน) · ตั้ง max_removed: 0 = ปิดด่าน แต่ยังรายงานจำนวนที่ลบ"""
+        lines = [f"บรรทัดที่ {i}\n" for i in range(1, 51)]
+        self.w("docs/C.md", "".join(lines), "w")
+        self.git("add", "docs/C.md")
+        self.git("commit", "-q", "-m", "c")
+        keep = "".join(lines[:3])
+        v, why, _ = self.verdict(lambda: self.w("docs/C.md", keep, "w"))
+        self.assertEqual(v, "REMOVED", why)
+        self.assertIn("47", " ".join(why))
+        self.git("checkout", "-q", "--", "docs/C.md")
+        v, why, _ = self.verdict(lambda: self.w("docs/C.md", keep, "w"), spec={**self.SPEC, "max_removed": 0})
+        self.assertEqual(v, "DRAFT", why)
+        self.assertIn("ลบ 47 บรรทัด", " ".join(why))
+        self.assertTrue(why[-1].endswith("รอผู้ใช้ดู diff"))
+
 
 class DocRunTest(unittest.TestCase):
     """ช่างเอกสาร ขั้น 2: `flashq doc` / `doc-review` ทั้งทาง (opencode ปลอมเขียนไฟล์แทน agent) · ตัดสินด้วยกลไก · ไม่ commit ให้"""
