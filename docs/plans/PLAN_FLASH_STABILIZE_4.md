@@ -23,7 +23,7 @@ flashq-parallel: yes
 ในลูปอ่าน log ของ `_run_once` (ค้น `elif ev.get("type") == "error" or "error" in ev:`) event ชนิด `step_finish` มี `part.reason` (`tool-calls` = ยังไม่จบ · `stop` = จบ) แต่ยังไม่ถูกเก็บ
 
 ## 2. งาน
-- [ ] **T-01** `flashq.py` (`_run_once`) + `tests/fake_opencode.py` + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` (`_run_once`) + `tests/fake_opencode.py` + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - fake_opencode: ขยายโหมด `FAKE_MODE=epipe` เดิม — ถ้ามี `FAKE_STEP_REASON` (เช่น `stop` หรือ `tool-calls`) ให้พิมพ์ event `{"type":"step_finish","sessionID":sid,"part":{"reason":<ค่า>}}` หลังข้อความ text ก่อนพิมพ์ stderr · ไม่ตั้ง = พฤติกรรมเดิมทุกอย่าง (เทสต์ EPIPE ของแผน 3 ต้องยังผ่าน)
   - เทสต์ใหม่ 3 ข้อ (ทำตามรูปแบบเทสต์ `test_epipe_*` ที่มีอยู่ · งานสืบ = ส่งด้วยคำสั่ง/พารามิเตอร์ที่ทำให้ `job["kind"]` เป็น `investigate` เหมือนเทสต์สืบเดิมที่มีใน tests/test_flashq.py — Grep `investigate`):
     1. `test_epipe_readonly_stop_not_fail`: งาน investigate · `FAKE_MODE=epipe` · `FAKE_TEXT="รายงานผลสืบ: ต้นตอที่ a.py:1"` (ไม่มี DONE) · `FAKE_STEP_REASON=stop` → ไม่ใช่ `FAIL` (ต้องเป็น `OK_UNVERIFIED` · เหตุผลที่บันทึกมีคำ `EPIPE`) · `rc` ยัง 1
@@ -42,4 +42,4 @@ flashq-parallel: yes
 ## 4. ผล (ผู้ทำเติม · ผู้ตรวจเติมช่องขวา)
 | งาน | ผล | commit | หลักฐานชี้ขาด | ตรวจ Claude |
 |---|---|---|---|---|
-| T-01 | | | | |
+| T-01 | DONE · 3 ไฟล์ตามช่องไฟล์ (นี้ไม่มีบรรทัด `skill:` → รายงาน skill `-`) | 6563d04 | แดง `.tmp/T-01.red.log` บรรทัด `FAILED tests/test_flashq.py::FlashqTest::test_epipe_readonly_stop_not_fail` + `FLASH_RUN=FAIL` + `EPIPE` · เขียว `.tmp/T-01.green.log` `2 passed, 204 deselected` · reg `.tmp/T-01.reg.log` `18 passed, 188 deselected` | |
