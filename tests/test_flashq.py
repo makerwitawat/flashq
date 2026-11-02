@@ -79,6 +79,33 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=OK", r.stdout)
         self.assertNotIn("ไม่มี commit ใหม่", r.stdout)
 
+    def test_epipe_after_done_not_fail(self):
+        """opencode รายงาน DONE แล้วตายด้วย EPIPE (rc=1, stderr เป็น traceback EPIPE ล้วน) = OK_UNVERIFIED ไม่ใช่ FAIL · rc ที่บันทึกยังเป็น 1"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)
+        self.assertNotIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertIn("EPIPE", r.stdout)
+        job = json.loads(max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))
+        self.assertEqual(job["result"], "OK_UNVERIFIED")
+        self.assertEqual(job["rc"], 1)
+        self.assertTrue(any("EPIPE" in x for x in job["unverified"]), job["unverified"])
+
+    def test_epipe_without_done_still_fail(self):
+        """EPIPE กลางงาน (ยังไม่มี DONE) = ยังต้อง FAIL"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "กำลังทำ"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
+    def test_real_error_rc1_still_fail(self):
+        """rc=1 จากความล้มเหลวอื่น (โหมด fail เดิม) หรือ stderr ที่มี error อื่นปนกับ EPIPE = ต้อง FAIL"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "fail"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ", "FAKE_ERR_EXTRA": "Error: boom"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
     def test_progress_counts_only_own_commits(self):
         """job_progressed: นับเฉพาะ commit ของงานนี้ (T-xx ที่ matcher รับ หรือแตะไฟล์แผน) — commit ของ session อื่นไม่นับ"""
         mod = self.load_mod("flashq_progress")

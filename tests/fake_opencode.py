@@ -2,7 +2,7 @@
 
 พฤติกรรมตามตัวแปรแวดล้อม:
   FAKE_SLEEP=<วินาที>   หน่วงก่อนจบ (ค่าเริ่มต้น 0)
-  FAKE_MODE=ok|quota|nostart|fail|denied (denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน)
+  FAKE_MODE=ok|quota|nostart|fail|denied|epipe (denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน · epipe = รายงานข้อความแล้วตายด้วย EPIPE exit 1)
   FAKE_ARGS_OUT=<path>  เขียน argv ลงไฟล์ (ต่อท้าย)
   FAKE_ENV_OUT=<path>   เขียนค่า OPENCODE_CONFIG_CONTENT ที่ได้รับลงไฟล์ (ว่าง = ไม่ได้รับ)
   FAKE_MODELS=a/b|c/d    รายชื่อที่ `opencode models` ตอบ (คั่นด้วย |)
@@ -56,6 +56,13 @@ if mode == "agentmissing":  # agent ไม่อยู่ในรายชื�
     print("agent \"x\" not found. Falling back to default agent", file=sys.stderr, flush=True)
 if mode == "subagent":  # opencode เตือนทาง stderr แล้วตกไปรัน agent เริ่มต้น (ยังจบด้วย exit 0)
     print("agent \"x\" is a subagent, not a primary agent. Falling back to default agent", file=sys.stderr, flush=True)
+if mode == "epipe":  # รายงานข้อความแล้วสตรีมตายด้วย EPIPE (exit 1) — FAKE_ERR_EXTRA = บรรทัด stderr อื่นที่ปนมา
+    print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "DONE — เสร็จ")}}), flush=True)
+    print("error: EPIPE: broken pipe, write", file=sys.stderr, flush=True)
+    print("      at emitError (node:events:50:13)", file=sys.stderr, flush=True)
+    if os.environ.get("FAKE_ERR_EXTRA"):
+        print(os.environ["FAKE_ERR_EXTRA"], file=sys.stderr, flush=True)
+    sys.exit(1)
 if mode == "fail":
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": "สถานะ: FAIL"}}), flush=True)
     sys.exit(1)

@@ -1883,8 +1883,12 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     errtxt = err.read_text(encoding="utf-8", errors="replace")
     last = texts[-1] if texts else ""
     perm = perm_denials(errtxt, tool_denied)
+    epipe_done = ""
     if status == "OK" and (rc != 0 or errors):
-        status = "FAIL"
+        if not errors and rc != 0 and epipe_only(errtxt) and said_done(last):
+            epipe_done = f"opencode ล้มด้วย EPIPE หลังรายงาน DONE (rc={rc}) — ตรวจงานด้วย /flash-check"
+        else:
+            status = "FAIL"
     if status == "OK" and perm and not job_progressed(root, head0, texts + task_out, job):
         status = "DENIED"  # opencode ตอบ "ไม่อนุญาต" ให้เอง งานจบ exit 0 โดยไม่ได้ทำอะไร — ไม่ใช่ OK
     if status == "OK" and SUBAGENT_RE.search(errtxt):  # agent เป็น subagent → opencode เงียบ ๆ ไปรัน agent เริ่มต้นแทน
@@ -1898,7 +1902,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
         and not job_progressed(root, head0, texts + task_out, job)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
             "head0": head0, "head1": _git(root, "rev-parse", "HEAD"), "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
-            "denied": denied, "perm_denied": perm, "recent": recent[-5:]}
+            "denied": denied, "perm_denied": perm, "recent": recent[-5:], "epipe_done": epipe_done}
 
 
 def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
@@ -1943,9 +1947,25 @@ def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None 
     return any(said_done(t) for t in outputs)
 
 
+def epipe_only(errtxt: str) -> bool:
+    """stderr เป็นขยะของ EPIPE traceback ล้วนไหม (ไม่มีข้อความ error อื่นปน) — True = ล้มเพราะ stream ปิดหลังงานจบ"""
+    if "EPIPE" not in errtxt:
+        return False
+    for ln in errtxt.splitlines():
+        s = ln.strip()
+        if not s or "EPIPE" in s or s.startswith("at ") or "throw er" in s:
+            continue
+        if re.match(r"^\d+\s*\|", s) or s.startswith("^"):  # บรรทัดโค้ด `45 |` หรือตัวชี้ `^`
+            continue
+        return False
+    return True
+
+
 def unverified_reasons(job: dict, res: dict) -> list[str]:
     """เหตุที่ผล OK ยังไม่ยืนยัน (ไม่มีหลักฐานงาน) — ว่าง = OK จริง"""
     out = []
+    if res.get("epipe_done"):
+        out.append(res["epipe_done"])
     if res.get("no_progress"):
         out.append("ไม่มี commit ของงานและไม่มีคำว่า DONE")
     if job.get("readonly") and job.get("modified"):
