@@ -80,6 +80,8 @@ python flashq.py run docs/plans/PLAN_X.md T-01..T-03
 python flashq.py
 ```
 
+รันจาก terminal ปกติได้ตรง ๆ · ใน Claude Code ต้องรันแบบ background (ยาม `hooks/run_guard.py` บล็อกคำสั่ง run แบบ foreground ที่ส่งผ่าน Claude Code เท่านั้น) — ใช้ `/flash-plan` จะจัดให้เอง
+
 หรือใน Claude Code: `/flash-plan <งานที่ต้องการ>` แล้วรอระบบแจ้งผล
 
 ### เปิดหน้าเว็บ / หน้าต่างแอป
