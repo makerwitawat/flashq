@@ -3032,6 +3032,9 @@ def qa_exec(job: dict, root: Path, spec: dict, log: Path) -> dict:
     return {"status": status, "rc": rc if rc is not None else -1, "secs": round(time.time() - t0, 1), "why": why}
 
 
+QA_NO_TESTS_RE = re.compile(r"collected 0 items|no tests ran|(?<![\d.,])\b0 tests\b", re.I)
+
+
 def qa_verdict(spec: dict, r: dict, text: str) -> str:
     """PASS = exit 0 และ (ไม่ได้ตั้ง expect หรือพบข้อความ expect ใน log) · อย่างอื่นไม่ผ่านหมด (fail-closed)
     NOEXPECT = exit 0 แต่ไม่พบข้อความที่ต้องมี → มักรันเทสต์ไม่ได้สักข้อ (collected 0 / ไม่ได้ build) ห้ามนับผ่าน"""
@@ -3043,6 +3046,8 @@ def qa_verdict(spec: dict, r: dict, text: str) -> str:
         return "FAIL"
     if spec["expect"] and not re.search(spec["expect"], text, re.M):
         return "NOEXPECT"
+    if not spec["expect"] and QA_NO_TESTS_RE.search(text):
+        return "NOEXPECT"  # ไม่ตั้ง expect แต่ log บอกเองว่าไม่มีเทสต์ให้รัน
     return "PASS"
 
 

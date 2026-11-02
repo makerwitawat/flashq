@@ -4369,6 +4369,16 @@ class QaTest(unittest.TestCase):
         r = self.run_q("list", "--all")
         self.assertIn("[ทดสอบ] ok bad silent slow  [", r.stdout)  # ไม่มีช่องว่างซ้อนจากแผนที่ว่าง
 
+    def test_qa_no_tests_ran_is_noexpect(self):
+        """ไม่ตั้ง expect แต่ log บอกเองว่าไม่มีเทสต์ให้รัน = NOEXPECT · log ที่มีเทสต์รันจริงยังเป็น PASS"""
+        mod = self.load_mod("flashq_no_tests_ran")
+        r = {"status": "DONE", "rc": 0}
+        spec = {"expect": ""}
+        for text in ("collected 0 items", "Ran 0 tests in 0.000s", "no tests ran in 0.01s"):
+            self.assertEqual("NOEXPECT", mod.qa_verdict(spec, r, text), text)
+        for text in ("3 passed in 1.2s", "Ran 10 tests"):
+            self.assertEqual("PASS", mod.qa_verdict(spec, r, text), text)
+
     @unittest.skipUnless(os.name == "nt", "ตัวอ่าน CPU/I/O ของโปรเซสใช้ได้บน Windows")
     def test_silent_frozen_suite_is_hang_but_busy_silent_suite_is_spared(self):
         """ชุดที่ไม่ได้ตั้ง idle_min: พ่น log เป็นจังหวะแล้วเงียบ + โปรเซสนิ่งสนิท = ค้าง (ตัดเร็ว ไม่รอ timeout_min) · เงียบแต่ CPU ยังขยับ = ทำงานจริง ไม่ฆ่า"""
