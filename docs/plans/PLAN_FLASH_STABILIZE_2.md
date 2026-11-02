@@ -52,7 +52,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-02.red.log` มี `OK_UNVERIFIED' not found` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: ผล OK ที่ไม่มีหลักฐานงานแสดงเป็น OK_UNVERIFIED พร้อมเหตุ + เทสต์ (T-02)`
 
-- [ ] **T-02R** `tests/test_flashq.py` (`test_notify_inbox_and_hook` ~1011) · แบบ: แก้เทสต์เดิมให้ตรงพฤติกรรมใหม่ของ T-02 (ไม่แตะ `flashq.py`)
+- [x] **T-02R** `tests/test_flashq.py` (`test_notify_inbox_and_hook` ~1011) · แบบ: แก้เทสต์เดิมให้ตรงพฤติกรรมใหม่ของ T-02 (ไม่แตะ `flashq.py`)
   - ปัญหา: T-02 ทำให้งานที่ไม่มี commit/DONE ได้ผล `OK_UNVERIFIED` — เทสต์นี้ใช้ `self.base()` ที่ fake opencode ไม่คืบ จึงได้ `OK_UNVERIFIED` แทน `OK` ที่บรรทัด 1024 (`('OK_UNVERIFIED','s1','PLAN.md') != ('OK',...)`) · เจตนาของเทสต์ = เคส "งานจบสำเร็จจริง" ของ inbox/hook
   - สเปก: ทำให้การรันในเทสต์นี้เป็นงานที่คืบจริง (fake opencode ตอบมีคำ `DONE` — ดูวิธีที่เทสต์อื่นที่ได้ `FLASH_RUN=OK` เฉยๆ ทำ เช่น `test_ok_passes*` / ตัวช่วยใน setUp แล้วใช้แบบเดียวกัน) แล้ว assertion บรรทัด 1024 คงเดิมเป็น `"OK"` · **ห้ามลด/ลบ assertion · ห้ามเปลี่ยนค่าที่คาดเป็น `OK_UNVERIFIED` · ห้ามแตะ `flashq.py`/`hooks/`** (เรื่อง hook เป็นของ T-03)
   - แดง: `-k "notify_inbox_and_hook"` ณ HEAD ปัจจุบัน → `.tmp/T-02R.red.log` FAIL ด้วย `OK_UNVERIFIED`
@@ -60,7 +60,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-02R.red.log` มี `OK_UNVERIFIED` · เขียว/reg บรรทัดท้าย `passed` ไม่มี `failed`
   - commit: `flashq: เทสต์ inbox ใช้งานที่คืบจริง ให้ตรงกับ OK_UNVERIFIED ของ T-02 (T-02R)`
 
-- [ ] **T-03** `flashq.py` ~7449 (`claude_check_prompt`) + `hooks/inbox_notify.py` ~59 (`advice`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-03** `flashq.py` ~7449 (`claude_check_prompt`) + `hooks/inbox_notify.py` ~59 (`advice`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_unverified_routes_like_ok_with_warning`: `mod.claude_check_prompt({"id": "jobu1", "status": "done", "result": "ok_unverified", "plan": "docs/PLAN.md"})` ต้องขึ้นต้นด้วย `/flash-check docs/PLAN.md` (ทางเดียวกับ result ok · ดูรูปแบบ dict จากเทสต์ที่ใช้ `jobok001`) · โหลด `hooks/inbox_notify.py` ด้วย `importlib.util.spec_from_file_location` แล้ว `advice({"status": "OK_UNVERIFIED", "plan": "P.md"})` ต้องมีคำ `ยังไม่ยืนยัน`
   - แดง: `-k "unverified_routes"` → `.tmp/T-03.red.log` FAIL (AssertionError ข้อแรก)
   - แก้: (1) flashq.py ต่อจากบรรทัด `    st = "dead" if live_state(j) == "dead" else str(j.get("result") or j.get("status") or "").lower()` เพิ่ม `    if st == "ok_unverified":` / `        st = "ok"` · (2) inbox_notify.py ก่อน (2 บรรทัด เยื้อง 4/8): `    if st == "OK":` / `        if row.get("kind") == "investigate":` → แทรกเหนือบรรทัดแรก:
@@ -73,14 +73,14 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-03.red.log` มี `AssertionError` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: ปุ่มตรวจงานและแจ้งเตือนรองรับผล OK_UNVERIFIED (T-03)`
 
-- [ ] **T-04** `flashq.py` ~5778 (`log_tail`) + `ui.html` ~2408 · แก้ตรง
+- [x] **T-04** `flashq.py` ~5778 (`log_tail`) + `ui.html` ~2408 · แก้ตรง
   - ก่อน (flashq.py): `           "denied_help": "\n".join(perm_fix_lines(j["perm_denied"], partial=j.get("result") != "DENIED")) if j.get("perm_denied") else ""}` · หลัง: แทน `}` ท้ายบรรทัดด้วย `,` (ต้องเป็น `else "",`) แล้วเพิ่มบรรทัดใหม่ `           "unverified": j.get("unverified") or []}` (เยื้องเท่าบรรทัดเดิม)
   - ก่อน (ui.html): `      if (d.denied_help) add.push("", d.denied_help);` · หลัง: คงบรรทัดเดิม แล้วเพิ่มบรรทัดถัดไป `      if (d.unverified && d.unverified.length) add.push("", "⚠ ผล OK ยังไม่ยืนยัน: " + d.unverified.join(" · "));`
   - ยืนยัน: ast.parse ผ่าน · ดึงเนื้อแท็ก script ของ ui.html ไป `.tmp/ui_check.js` (`python -c "import re;s=open('ui.html',encoding='utf-8').read();open('.tmp/ui_check.js','w',encoding='utf-8').write('\n'.join(re.findall(r'<script>(.*?)</script>',s,re.S)))"`) แล้ว `node --check .tmp/ui_check.js > .tmp/T-04.node.log 2>&1` · แล้ว `-k "log_tail or denied"` → `.tmp/T-04.log` PASS
   - หลักฐานชี้ขาด: `.tmp/T-04.node.log` ว่าง (exit 0) · `.tmp/T-04.log` บรรทัดท้าย `passed`
   - commit: `ui: กล่อง log แสดงเหตุที่ผล OK ยังไม่ยืนยัน (T-04)`
 
-- [ ] **T-05** `flashq.py` ~35 (docstring) + `claude/commands/flash-check.md` ~16 + `claude/commands/flash-investigate.md` ~30 · เอกสาร
+- [x] **T-05** `flashq.py` ~35 (docstring) + `claude/commands/flash-check.md` ~16 + `claude/commands/flash-investigate.md` ~30 · เอกสาร
   - ก่อน (flashq.py): ``ผลของ run: บรรทัด `FLASH_RUN=OK|FAIL|DENIED|QUOTA|`` (ต้นบรรทัด ~35) · หลัง: แทรก `OK_UNVERIFIED|` หลัง `FLASH_RUN=OK|` และเปลี่ยนท้าย `· exit 0 = OK ·` เป็น `· exit 0 = OK/OK_UNVERIFIED ·` (แก้เฉพาะบรรทัดนี้)
   - ก่อน (flash-check.md): ``- `FLASH_RUN=OK` → ข้อ 1`` · หลัง: ``- `FLASH_RUN=OK` → ข้อ 1 · `FLASH_RUN=OK_UNVERIFIED` → ข้อ 1 เช่นกัน แต่ถือว่ายังไม่มีหลักฐาน (อ่านบรรทัด `WARN:` ก่อน ห้ามติ๊กผ่านจากคำของ worker)``
   - ก่อน (flash-investigate.md): ``- `FLASH_RUN=OK` → อ่านรายงานจากท้ายผลลัพธ์`` (ต้นบรรทัด) · หลัง: เติมท้ายบรรทัดเดิม `` · `FLASH_RUN=OK_UNVERIFIED` = ผู้สืบอ้างผิด/ไม่อ้างเลขบรรทัด → ห้ามเชื่อจนกว่าจะเปิดโค้ดยืนยัน``
@@ -88,7 +88,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: `.tmp/T-05.log` มี 3 ไฟล์ · ไม่มีไฟล์อื่น
   - commit: `flashq: เอกสารคำสั่งอธิบายผล OK_UNVERIFIED (T-05)`
 
-- [ ] **T-06** `flashq.py` ~2935 (`qa_verdict`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-06** `flashq.py` ~2935 (`qa_verdict`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: ใน `QaTest` เพิ่ม `test_qa_no_tests_ran_is_noexpect` ใช้ `load_mod` แบบเทสต์อื่นในคลาส: `r = {"status": "DONE", "rc": 0}` · `spec = {"expect": ""}` · log `"collected 0 items"` / `"Ran 0 tests in 0.000s"` / `"no tests ran in 0.01s"` → `"NOEXPECT"` · log `"3 passed in 1.2s"` / `"Ran 10 tests"` → `"PASS"`
   - แดง: `-k "no_tests_ran"` → `.tmp/T-06.red.log` FAIL ด้วย `'PASS' != 'NOEXPECT'`
   - แก้: ค่าคงที่ใหม่เหนือ `qa_verdict`: `QA_NO_TESTS_RE = re.compile(r"collected 0 items|no tests ran|(?<![\d.,])\b0 tests\b", re.I)` · ก่อน (2 บรรทัด): `        return "NOEXPECT"` / `    return "PASS"` · หลัง:
@@ -102,7 +102,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-06.red.log` มี `'PASS' != 'NOEXPECT'` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: นักทดสอบไม่นับผ่านเมื่อ log บอกว่าไม่มีเทสต์ให้รัน + เทสต์ (T-06)`
 
-- [ ] **T-07** `flashq.py` ~3293/~3402/~3244 (`doc_added` · `doc_verdict` · `doc_spec`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-07** `flashq.py` ~3293/~3402/~3244 (`doc_added` · `doc_verdict` · `doc_spec`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: ใน `DocTest` เพิ่ม `test_doc_mass_removal_flagged` (ใช้ helper verdict/`w()`/SPEC เดิม): commit `docs/C.md` 50 บรรทัด แล้วให้ fake เขียนทับเหลือ **3 บรรทัดแรกเดิมตรงตัว** (diff จึงมีบรรทัด `-` 47 บรรทัดพอดี) → verdict `"REMOVED"` และเหตุมีเลข `47` · กรณีคุม SPEC + `"max_removed": 0` → `"DRAFT"` และเหตุมีคำ `ลบ 47 บรรทัด` และยังลงท้าย `รอผู้ใช้ดู diff`
   - แดง: `-k "mass_removal"` → `.tmp/T-07.red.log` FAIL ด้วย `'DRAFT' != 'REMOVED'`
   - แก้ (สเปก):
@@ -115,7 +115,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-07.red.log` มี `'DRAFT' != 'REMOVED'` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: ช่างเอกสารที่ลบเนื้อหาเดิมเกิน 40 บรรทัดได้ผล REMOVED ไม่ผ่าน + เทสต์ (T-07)`
 
-- [ ] **T-08** `flashq.py` ~3669 (`cmd_scope`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-08** `flashq.py` ~3669 (`cmd_scope`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_scope_plan_without_tasks_fails`: `git init` ใน `self.proj` + commit แรก (`git -c user.name=t -c user.email=t@t`) · เขียน `PLAN.md` = `"# plan\n"` · เรียก CLI แบบเทสต์ scope เดิม (~347: `subprocess.run([sys.executable, str(REPO / "flashq.py"), "scope", ...])` ใน tempdir + `env=self.env`) ด้วยอาร์กิวเมนต์ `"scope", "PLAN.md", "--project", d` · ทำใน tempdir แบบเทสต์นั้นแทน `self.proj` ได้ → `returncode == 1` · stdout มี `SCOPE_RESULT=FAIL` และ `NOTASK`
   - แดง: `-k "scope_plan_without_tasks"` → `.tmp/T-08.red.log` FAIL ด้วย `0 != 1` หรือ `SCOPE_RESULT=FAIL' not found`
   - แก้: ต่อจากบรรทัด `    bad = 0` ที่อยู่ใต้ `    wanted = [t for t in re.split(r"[,\s]+", " ".join(a.tasks)) if t] or sorted(set(allow) | set(hashes))` เพิ่ม `    if not wanted:` / `        print("SCOPE NOTASK ไม่พบงาน T-xx ในแผน — ตรวจขอบเขตไม่ได้")` / `        bad += 1`
@@ -126,7 +126,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
 ## 2. กลุ่ม D — ใช้ง่าย
 **สาเหตุ/หลักฐาน** (Claude ตรวจแล้ว): งานที่ส่งจากหน้าเว็บ (`build_run_argv` ~5555 · ใช้ทั้งส่งใหม่และส่งซ้ำ) ไม่มี `--submitter` → `want_open_session` (~1469) เปิดหน้าต่าง session ทุกงาน · `_run_once` ~1701 เปิดหน้าต่างทุกรอบที่ retry (QUOTA/NOSTART) · README ~77 ให้รัน `run` ตรง ๆ แต่ใน Claude Code ยาม `run_guard.py` บล็อก foreground · flash-goal.md ~25 "ถาม user ครั้งเดียว" ขัดกับ ~16 ที่ให้ถามได้หลายรอบ
 
-- [ ] **T-09** `flashq.py` ~5650 (`build_run_argv`) + ~1469 (`want_open_session`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-09** `flashq.py` ~5650 (`build_run_argv`) + ~1469 (`want_open_session`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: ใน `test_config_open_session_auto_and_priority` เพิ่ม: job `{"submitter": "ui"}` ค่าเครื่อง auto → `want_open_session` False · ตั้ง config `open_session` on → True · และ `argv, _ = mod.build_run_argv(body)` (body ขั้นต่ำแบบเดียวกับ `test_skip_precheck`) → มีคู่ `"--submitter", "ui"` ติดกัน
   - แดง: `-k "open_session_auto_and_priority"` → `.tmp/T-09.red.log` FAIL ด้วย `True is not false`
   - แก้: ก่อน (2 บรรทัด): `        if body.get("no_open"):` / `            argv.append("--no-open")` → คงไว้ แล้วต่อด้วย `        argv += ["--submitter", "ui"]` (เยื้องเท่า `if`) · ก่อน: `    return job.get("submitter") != "detach"` · หลัง: `    return job.get("submitter") not in ("detach", "ui")` · **ห้ามใช้ `--detach`** (spawn_run แยก process อยู่แล้ว)
@@ -134,7 +134,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: แดง `.tmp/T-09.red.log` มี `True is not false` · เขียว/reg บรรทัดท้าย `passed`
   - commit: `flashq: งานที่ส่งจากหน้าเว็บไม่เปิดหน้าต่าง session เป็นค่าเริ่มต้น + เทสต์ (T-09)`
 
-- [ ] **T-10** `flashq.py` ~1701 (`_run_once`) · แก้ตรง (เปิดหน้าต่างจริงใช้ node + พอร์ต 9333 — ห้ามทดสอบ)
+- [x] **T-10** `flashq.py` ~1701 (`_run_once`) · แก้ตรง (เปิดหน้าต่างจริงใช้ node + พอร์ต 9333 — ห้ามทดสอบ)
   - ก่อน (2 บรรทัด): `                if want_open_session(root, job, no_open):` / `                    open_in_desktop(sid, attach)`
   - หลัง:
     ```
@@ -147,7 +147,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: `.tmp/T-10.log` บรรทัดท้าย `passed` · `git show --stat HEAD` แตะ `flashq.py` ไฟล์เดียว
   - commit: `flashq: เปิดหน้าต่าง session ครั้งเดียวต่องาน ไม่เปิดซ้ำทุกรอบลองใหม่ (T-10)`
 
-- [ ] **T-11** `README.md` ~77 + `claude/commands/flash-goal.md` ~25 · เอกสาร
+- [x] **T-11** `README.md` ~77 + `claude/commands/flash-goal.md` ~25 · เอกสาร
   - ก่อน (README): `python flashq.py run docs/plans/PLAN_X.md T-01..T-03` (ในบล็อกใต้ "### ลองส่งงาน") · หลัง: คงบล็อกเดิม แล้วเพิ่มย่อหน้าใต้บล็อกตามข้อความในบล็อกนี้ตรงตัว:
     ```
     รันจาก terminal ปกติได้ตรง ๆ · ใน Claude Code ต้องรันแบบ background (ยาม `hooks/run_guard.py` บล็อกคำสั่ง run แบบ foreground ที่ส่งผ่าน Claude Code เท่านั้น) — ใช้ `/flash-plan` จะจัดให้เอง
@@ -157,7 +157,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
   - หลักฐานชี้ขาด: `.tmp/T-11.log` มี 2 ไฟล์
   - commit: `flashq: README บอกวิธีรัน run ใน Claude Code · flash-goal ไม่ขัดกันเรื่องจำนวนครั้งที่ถาม (T-11)`
 
-- [ ] **T-12** `CHANGELOG.md` + `docs/REFERENCE.md` + `claude/commands/flash-qa.md` · เอกสารท้ายแผน
+- [x] **T-12** `CHANGELOG.md` + `docs/REFERENCE.md` + `claude/commands/flash-qa.md` · เอกสารท้ายแผน
   - CHANGELOG: ใต้หัวข้อ `## 2026-11-01` (บนสุด) เพิ่ม bullet ละบรรทัด: `FLASH_RUN=OK_UNVERIFIED` + เหตุ (T-02..T-04) · NOT DONE ไม่นับ (T-01) · qa ไม่มีเทสต์ให้รัน = NOEXPECT (T-06) · ช่างเอกสาร `REMOVED` + `max_removed` (T-07) · scope แผนไม่มีงาน = FAIL (T-08) · หน้าเว็บไม่เปิดหน้าต่าง session เป็นค่าเริ่มต้น + เปิดครั้งเดียวต่องาน (T-09, T-10) · และกลุ่มแผน 1 (ล็อกค้าง · fifo กันชน · แผนไม่ระบุไฟล์ = ชน) ถ้ายังไม่มีบรรทัดเหล่านี้
   - REFERENCE: บรรทัดที่มี ``(exit 0 = OK · 1 = ไม่ OK · 3 = ยังไม่จบ)`` เติม `· OK_UNVERIFIED นับเป็น exit 0 แต่มีบรรทัด WARN บอกเหตุ` · บรรทัดที่มี ``· `NOEXPECT` (exit 0 แต่ไม่พบข้อความที่ต้องมี)`` เติมในวงเล็บ `หรือไม่ตั้ง expect แต่ log บอกว่าไม่มีเทสต์ให้รัน` · บรรทัดที่ขึ้นต้น ``- **flashq ตัดสินเองจากไฟล์จริง**`` (ช่างเอกสาร) เติมรายการ `REMOVED` = ลบ/แก้ทับเกิน `max_removed` (ค่าเริ่ม 40 · 0 = ปิด) · บรรทัดที่มี ``- `open_session` (true/false`` เติม `· งานที่ส่งจากหน้าเว็บ (submitter ui) ไม่เปิดเหมือน --detach` · หัวข้อ `### ตรวจขอบเขตไฟล์ (scope)` เพิ่ม bullet `แผนไม่มีงาน T-xx = SCOPE NOTASK → FAIL`
   - flash-qa.md: ต่อท้ายบรรทัด ``- fail-closed: exit 0 แต่ไม่พบข้อความที่ต้องมี`` ด้วย `· ไม่ตั้ง expect แต่ log บอกว่าไม่มีเทสต์ (collected 0 items / no tests ran / 0 tests) = NOEXPECT เช่นกัน`
@@ -177,7 +177,17 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q -x -k "�
 |---|---|---|---|---|
 | T-01 | ✅แก้ | 154a5e6 | `.tmp/T-01.red.log` → `AssertionError: True is not false : NOT DONE` · `.tmp/T-01.green.log` → `1 passed` · `.tmp/T-01.reg.log` → `4 passed` | ✅ผ่าน (`said_done` ตรงสเปก · แตะ flashq.py + tests เท่านั้น · red<green<commit) |
 | T-02 | ✅แก้ (⚠️ ภายหลังพบว่าทำให้ `test_notify_inbox_and_hook` แดง — ไม่อยู่ในชุด reg ที่แผนกำหนด → ต้องออก T-02R) | 03c6e54 | `.tmp/T-02.red.log` → `AssertionError: 'FLASH_RUN=OK_UNVERIFIED' not found` · `.tmp/T-02.green.log` → `2 passed` · `.tmp/T-02.reg.log` → `9 passed` | ⚠️ diff ตรงสเปก แต่ชุด reg ของแผนไม่ครอบ `test_notify_inbox_and_hook` ที่แดงเพราะพฤติกรรมใหม่ (ยืนยันจาก T-03.reg/head log) → ❌ T-02R (แก้เทสต์) |
-| T-03 | ⛔หยุด (โค้ดแก้แล้ว + green ผ่าน แต่ reg แดงด้วยเทสต์เดิมที่ค้างจาก T-02 → ยังไม่ commit · โค้ดถูก revert เก็บเป็น `.tmp/T-03.patch` — รอ T-02R แล้วรัน T-03 ใหม่) | - | `.tmp/T-03.red.log` → `AssertionError: False is not true : งาน flashq job jobu1` · `.tmp/T-03.green.log` → `1 passed` · `.tmp/T-03.reg.log` → `FAILED ...test_notify_inbox_and_hook` `('OK_UNVERIFIED', 's1', 'PLAN.md') != ('OK', 's1', 'PLAN.md')` (rerun `.tmp/T-03.reg2.log` แดงเหมือนกัน) · รันที่ HEAD `03c6e54` แบบไม่มีไฟล์ที่แก้ (`.tmp/T-03.head.log`) ก็แดงแบบเดียวกัน = เทสต์ค้างจาก T-02 ไม่ใช่ผลของ T-03 | ⏸ ยังไม่ตรวจ — ส่งใหม่ต่อจาก T-02R (T-03..T-12 ยังไม่ได้ทำ) |
+| T-02R | ✅แก้ | 312ebd3 | `.tmp/T-02R.red.log` → `AssertionError: Tuples differ: ('OK_UNVERIFIED', 's1', 'PLAN.md') != ('OK', 's1', 'PLAN.md')` · `.tmp/T-02R.green.log` → `1 passed` · `.tmp/T-02R.reg.log` → `6 passed` | |
+| T-03 | ✅แก้ (รอบแรก ⛔หยุดเพราะเทสต์ค้างจาก T-02 → แก้ด้วย T-02R แล้วรันใหม่ผ่าน) | 0d03f3e | `.tmp/T-03.red.log` → `AssertionError: False is not true : งาน flashq job jobu1 จบด้วยสถานะ OK_UNVERIFIED` (บรรทัด `tests\test_flashq.py:1119`) · `.tmp/T-03.green.log` → `1 passed` · `.tmp/T-03.reg.log` → `4 passed` | |
+| T-04 | ✅แก้ | 4a1be2d | `.tmp/T-04.node.log` ว่าง (size=0) · `.tmp/T-04.log` → `3 passed` · `git show --stat` แตะ `flashq.py` + `ui.html` เท่านั้น | |
+| T-05 | ✅แก้ | ba35995 | `.tmp/T-05.log` → `git show --stat HEAD` แสดง 3 ไฟล์ (`claude/commands/flash-check.md`, `claude/commands/flash-investigate.md`, `flashq.py`) · ast.parse ผ่าน | |
+| T-06 | ✅แก้ (หลักฐานแดงเป็นคู่สลับข้าง `'NOEXPECT' != 'PASS'` เพราะ assertEqual(ค่าคาด, ค่าจริง) — ค่าเดียวกัน) | 7255645 | `.tmp/T-06.red.log` → `AssertionError: 'NOEXPECT' != 'PASS'` (`tests\test_flashq.py:4378`, `: collected 0 items`) · `.tmp/T-06.green.log` → `1 passed` · `.tmp/T-06.reg.log` → `23 passed` | |
+| T-07 | ✅แก้ | ca350e8 | `.tmp/T-07.red.log` → `AssertionError: 'DRAFT' != 'REMOVED'` (`tests\test_flashq.py:4932`) · `.tmp/T-07.green.log` → `1 passed` · `.tmp/T-07.reg.log` → `25 passed` | |
+| T-08 | ✅แก้ | 0193499 | `.tmp/T-08.red.log` → `AssertionError: 0 != 1 : SCOPE_RESULT=PASS` (`tests\test_flashq.py:495`) · `.tmp/T-08.green.log` → `1 passed` · `.tmp/T-08.reg.log` → `7 passed` | |
+| T-09 | ✅แก้ | 9af9dbb | `.tmp/T-09.red.log` → `AssertionError: True is not false` (`tests\test_flashq.py:729`) · `.tmp/T-09.green.log` → `1 passed` · `.tmp/T-09.reg.log` → `12 passed` | |
+| T-10 | ✅แก้ | 65b87c4 | `.tmp/T-10.log` → `6 passed` · `git show --stat HEAD` แตะ `flashq.py` ไฟล์เดียว | |
+| T-11 | ✅แก้ | 15e9cc9 | `.tmp/T-11.log` → `git show --stat HEAD` แสดง 2 ไฟล์ (`README.md`, `claude/commands/flash-goal.md`) | |
+| T-12 | ✅แก้ | 6fbfd8e | `.tmp/T-12.log` → `git show --stat HEAD` แสดง 3 ไฟล์ (`CHANGELOG.md`, `claude/commands/flash-qa.md`, `docs/REFERENCE.md`) · bullet `OK_UNVERIFIED`/`NOT DONE`/`NOEXPECT`/`REMOVED`/`SCOPE NOTASK`/`submitter ui` อยู่ใต้ `## 2026-11-01` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - นักทดสอบระดับ 3/4 · worktree แยกต่องาน (รอผู้ใช้ตัดสิน)
