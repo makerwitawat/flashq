@@ -1758,8 +1758,10 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             if sid:
                 job["session"] = sid
                 save_job(job)
-                if want_open_session(root, job, no_open):
+                if want_open_session(root, job, no_open) and not job.get("opened"):
                     open_in_desktop(sid, attach)
+                    job["opened"] = now()
+                    save_job(job)
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
             watch = ShellWatch(shell_idle) if shell_idle and attach.startswith("http") and (os.name == "nt" or os.environ.get("FLASHQ_FAKE_PROCS")) else None
