@@ -1258,6 +1258,23 @@ class FlashqTest(unittest.TestCase):
         spec.loader.exec_module(hook)
         self.assertIn("ยังไม่ยืนยัน", hook.advice({"status": "OK_UNVERIFIED", "plan": "P.md"}))
 
+    def test_ui_rows_show_ok_unverified(self):
+        """แถวงานที่จบฝั่งหน้าเว็บ: result OK_UNVERIFIED → state "ok_unverified" + เหตุ · สถิติแยกช่อง unv ไม่นับรวม ok"""
+        mod = self.load_mod("flashq_ui_unv")
+        base = {"project": str(self.proj), "status": "ok", "created": "2099-01-01 00:00:00",
+                "started": "2099-01-01 00:00:00", "finished": "2099-01-01 00:01:00"}
+        mod.save_job(dict(base, id="J1u", result="OK_UNVERIFIED", unverified=["ไม่มี commit ของงานและไม่มีคำว่า DONE"]))
+        mod.save_job(dict(base, id="J2o", result="OK"))
+        st = mod.ui_state()
+        rows = {r["id"]: r for r in st["history"]}
+        self.assertEqual(rows["J1u"]["state"], "ok_unverified")
+        self.assertIn("ไม่มี commit", rows["J1u"]["reason"])
+        self.assertEqual(rows["J2o"]["state"], "ok")
+        work = {g["name"]: g for g in mod.job_stats(st["history"])["by_kind"]}["work"]
+        self.assertEqual(work["ok"], 1)
+        self.assertEqual(work["unv"], 1)
+        self.assertEqual(work["fail"], 0)
+
     def start_ui(self):
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
@@ -1754,7 +1771,8 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual((job2["plan"], job2["tasks"]), ("docs/plans/PLAN_A_FLASH.md", "T-01..T-02"))
         st = json.loads(self.http(base + "/api/state")[1])
         self.assertEqual(st["stats"]["by_project"][0]["n"], 2)
-        self.assertEqual(st["stats"]["by_project"][0]["ok"], 2)
+        self.assertEqual(st["stats"]["by_project"][0]["ok"], 0)
+        self.assertEqual(st["stats"]["by_project"][0]["unv"], 2)
         self.assertIn(str(self.proj), st["project_paths"])
 
     def test_ui_prune_and_cli(self):

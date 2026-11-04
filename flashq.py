@@ -5601,7 +5601,10 @@ def ui_state() -> dict:
         else:
             row["duration_sec"] = (_secs(j.get("started") or j.get("created", ""), j["finished"])
                                    if j.get("finished") else None)  # งานตายไม่มีเวลาจบ = ไม่รู้ระยะเวลา
-            row["reason"] = job_reason(j, st)
+            if st == "ok" and str(j.get("result") or "").upper() == "OK_UNVERIFIED":
+                row["state"] = "ok_unverified"
+                row["unverified"] = j.get("unverified") or []
+            row["reason"] = job_reason(j, row["state"])
             history.append(row)
     for i, row in enumerate(queued, 1):
         row["position"] = i
@@ -5651,6 +5654,8 @@ def job_reason(j: dict, state: str) -> str:
         return one_line("opencode ปฏิเสธสิทธิ์: " + " · ".join(f"{x.get('kind', '')}: {x.get('path', '')}" for x in (j.get("perm_denied") or [])[:5]), 500)
     if state == "quota":
         return last or "โควตาของโมเดลหมด"
+    if state == "ok_unverified":
+        return one_line("ผลยังไม่ยืนยัน: " + (" · ".join(j.get("unverified") or []) or "ไม่มีหลักฐานงาน"), 500)
     if state == "fail":
         return (f"exit {j.get('rc')} · " if j.get("rc") not in (None, "") else "") + (last or "ไม่มีข้อความท้าย — เปิด log ดู")
     return ""
@@ -5693,15 +5698,16 @@ def job_stats(history: list[dict]) -> dict:
             if r["state"] in ("cancelled", "busy", "queue_timeout") or (only and not only(r)):
                 continue
             name = key(r) or "-"
-            g = acc.setdefault(name, {"name": name, "n": 0, "ok": 0, "secs": []})
+            g = acc.setdefault(name, {"name": name, "n": 0, "ok": 0, "unv": 0, "secs": []})
             g["n"] += 1
             g["ok"] += r["state"] == "ok"
+            g["unv"] += r["state"] == "ok_unverified"
             if r.get("duration_sec") is not None:
                 g["secs"].append(r["duration_sec"])
         out = []
         for g in acc.values():
             secs = g.pop("secs")
-            g.update(fail=g["n"] - g["ok"], avg_sec=int(sum(secs) / len(secs)) if secs else None)
+            g.update(fail=g["n"] - g["ok"] - g["unv"], avg_sec=int(sum(secs) / len(secs)) if secs else None)
             out.append(g)
         return sorted(out, key=lambda g: -g["n"])
     def kind(r) -> str:
