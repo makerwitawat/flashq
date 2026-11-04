@@ -3601,6 +3601,8 @@ function recentCostHTML(f, j) {
   const tip = "จ่ายจริง = ที่ opencode คิดจาก log ของงานนี้ (รวม subagent" + (f.sub_tokens ? ` ${fmtTok(f.sub_tokens)} token` : "") + ") · Claude = ประมาณการสมมติใช้ token เท่ากัน ตามตารางราคาในตัว (จริง ๆ Claude มักใช้น้อยกว่า)";
   return `<div class="muted" title="${esc(tip)}">🪙 ${fmtTok(f.tokens)} token · opencode <b>${usd(f.usd)}</b>${cl ? ` · ถ้าเป็น Claude ≈ ${cl}` : ""}</div>`;
 }
+/* งานที่จบวันนี้ (ไม่นับยกเลิก/BUSY/รอคิวเกิน — ตรงกับ job_stats ใน flashq.py) */
+const todayDone = (hist, today) => (hist || []).filter((h) => h && (h.finished || "").startsWith(today || "") && !["cancelled", "busy", "queue_timeout"].includes(h.state));
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
@@ -3733,7 +3735,7 @@ function officeUpdate() {
   const doneAll = busy || tail;
   setText("ofTE", doneAll ? approx(allEnd) : "—");
   setText("ofTEs", doneAll ? `ราว ${clockAt(allEnd)}${anyRough ? " · ประมาณคร่าว (ข้อมูลเก่ายังน้อย)" : ""}` : "ไม่มีงานค้าง");
-  const today = String(s.now || "").slice(0, 10), td = (s.history || []).filter((h) => (h.finished || "").startsWith(today));
+  const today = String(s.now || "").slice(0, 10), td = todayDone(s.history, today);
   const okN = td.filter((h) => h.state === "ok").length, unvN = td.filter((h) => h.state === "ok_unverified").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
   setText("ofTD", `${td.length} งาน`);
   setText("ofTDs", td.length ? `✓ ${okN} ผ่าน${unvN ? ` · ⚠ ${unvN} ยังไม่ยืนยัน` : ""} · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
