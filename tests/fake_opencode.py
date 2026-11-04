@@ -81,4 +81,7 @@ if mode == "denied":  # เหตุจริง 2026-10-20: กฎ external_dir
         "error": "Subagent failed (task_id: ses_x): The user rejected permission to use this specific tool call."}}}), flush=True)
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "ส่งงานให้ flash-worker ไม่ได้ — ผู้ใช้ปฏิเสธสิทธิ์การใช้ tool call นี้")}}), flush=True)
     sys.exit(0)
+for _seg in os.environ.get("FAKE_TEXT_PARTS", "").split("||"):  # ข้อความหลายส่วนมาก่อน (คั่นด้วย ||) แล้วปิดท้ายด้วย FAKE_TEXT
+    if _seg:
+        print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": _seg}}), flush=True)
 print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "PONG")}}), flush=True)

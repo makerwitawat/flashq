@@ -2103,6 +2103,34 @@ class FlashqTest(unittest.TestCase):
         job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
         self.assertEqual((job["citations"]["ok"], len(job["citations"]["bad"])), (2, 3))
 
+    def test_investigate_cites_all_parts(self):
+        """ผู้สืบอ้างเลขไฟล์:บรรทัดในข้อความก่อนหน้า (ไม่ใช่แค่ข้อความสุดท้าย) → ต้องนับเป็นการอ้าง"""
+        (self.proj / "a.py").write_text(chr(10).join(["x = 1", "y = 2", "z = 3", ""]), encoding="utf-8")
+        r = self.run_q("investigate", "--no-open", "สืบ ขอไฟล์:บรรทัด",
+                       env={"FAKE_TEXT_PARTS": "พบที่ a.py:1", "FAKE_TEXT": "สรุป: ต้นตอตามข้างบน"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        job = json.loads(max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))
+        self.assertGreaterEqual(job["citations"]["ok"], 1)
+        self.assertNotIn("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย", job.get("unverified") or [])
+
+    def test_investigate_brief_gate(self):
+        """เตือน "ไม่อ้างเลย" เฉพาะเมื่อบรีฟขอเลขบรรทัด · อ้างผิดยังต้องเตือนทุกกรณี"""
+        (self.proj / "a.py").write_text(chr(10).join(["x = 1", "y = 2", "z = 3", ""]), encoding="utf-8")
+
+        def last_job():
+            f = max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime)
+            return json.loads(f.read_text(encoding="utf-8"))
+
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": "ไม่พบปัญหา"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย", last_job().get("unverified") or [])
+        r = self.run_q("investigate", "--no-open", "สืบ ขอเลขบรรทัด", env={"FAKE_TEXT": "ไม่พบปัญหา"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย", last_job().get("unverified") or [])
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": "ต้นตอ a.py:999"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(any(x.startswith("ผู้สืบอ้างเลขไฟล์:บรรทัดผิด") for x in last_job().get("unverified") or []))
+
     def test_check_citations_short_names_code_spans_and_clauses(self):
         """ชื่อไฟล์ย่อ · ชื่อซ้ำ · host:port · backtick เหลื่อม · ช่วงบรรทัด · ... · คำปฏิเสธ · `:123` — ต้องไม่ฟ้องผิด แต่คัดผิดจริงยังต้องถูกชี้"""
         sys.path.insert(0, str(REPO))

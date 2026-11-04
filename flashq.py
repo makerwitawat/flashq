@@ -1909,7 +1909,8 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
         and not job_progressed(root, head0, texts + task_out, job)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
             "head0": head0, "head1": _git(root, "rev-parse", "HEAD"), "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
-            "denied": denied, "perm_denied": perm, "recent": recent[-5:], "epipe_done": epipe_done}
+            "denied": denied, "perm_denied": perm, "recent": recent[-5:], "epipe_done": epipe_done,
+            "text_all": "\n".join(texts)}
 
 
 def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
@@ -1995,7 +1996,7 @@ def unverified_reasons(job: dict, res: dict) -> list[str]:
         bad = cites.get("bad") or []
         if bad:
             out.append(f"ผู้สืบอ้างเลขไฟล์:บรรทัดผิด {len(bad)} จุด")
-        elif not cites.get("ok"):
+        elif not cites.get("ok") and re.search(r"file:line|ไฟล์:บรรทัด|เลขบรรทัด", job.get("prompt") or "", re.I):
             out.append("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย")
     return out
 
@@ -2587,7 +2588,7 @@ def cmd_run(a) -> int:
                       + (f" · มีงานอื่นรันในโปรเจกต์เดียวกัน ({', '.join(others)}) อาจเป็นของงานนั้น — ตรวจ git diff ก่อนเชื่อผล" if others
                          else " · ไม่มีงานอื่นในโปรเจกต์นี้ → agent อาจแก้ไฟล์เอง ห้ามเชื่อผล ตรวจ git diff ทันที"), flush=True)
         if kind == "investigate" and res.get("last"):  # ตรวจเลขไฟล์:บรรทัดที่ผู้สืบอ้าง (กลไก · ไม่ใช่การตัดสินว่าเป็นต้นตอจริง)
-            cites = check_citations(res["last"], root)
+            cites = check_citations(res.get("text_all") or res["last"], root)
             job["citations"] = cites
             if cites["ok"] or cites["bad"]:
                 print(f"CITATIONS: ตรงถึงโค้ด {cites['ok_code']} · ตรงแค่ไฟล์/บรรทัด {cites['ok'] - cites['ok_code']} · ผิด {len(cites['bad'])}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด:"), flush=True)
