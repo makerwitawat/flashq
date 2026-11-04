@@ -3087,7 +3087,12 @@ async function officePoll() {
         const resp = await fetch(`/api/log?id=${encodeURIComponent(r.id)}&attempt=0&offset=${L.offset}`, { cache: "no-store" });
         if (!resp.ok) break;
         const d = await resp.json();
-        if (d.reset || (L.attempt && d.attempt && d.attempt !== L.attempt)) { L.tools = 0; L.errs = 0; L.last = ""; L.mention = ""; L.done = new Set(); }
+        if (!d.reset && L.attempt && d.attempt && d.attempt !== L.attempt) {
+          L.tools = 0; L.errs = 0; L.last = ""; L.mention = ""; L.done = new Set();
+          L.offset = 0; L.size = -1; L.attempt = d.attempt;
+          continue;
+        }
+        if (d.reset) { L.tools = 0; L.errs = 0; L.last = ""; L.mention = ""; L.done = new Set(); }
         L.attempt = d.attempt;
         for (const line of d.lines || []) {
           if (line.startsWith("🔧")) L.tools++;
