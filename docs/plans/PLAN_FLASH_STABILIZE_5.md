@@ -119,6 +119,8 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
     - `job_stats` ใต้บรรทัดนับ ok เพิ่ม `g["unv"] += r["state"] == "ok_unverified"` · `flashq.py` ก่อน: `g["ok"] += r["state"] == "ok"`
     - `job_stats` ให้ `fail` = `g["n"] - g["ok"] - g["unv"]` · `flashq.py` ก่อน: `g.update(fail=g["n"] - g["ok"], avg_sec=`
     - ห้ามแก้ `run_stats` (เวลาเฉลี่ยใช้ status ok ซึ่งรวมงานยังไม่ยืนยันอยู่แล้ว = ถูกต้อง)
+    - **แก้เทสต์เดิม (ผู้ตรวจสั่งเพิ่ม · รอบ 1 ล้มเพราะแผนไม่ได้บอก)**: `test_ui_submit_retry_plans` ส่งงาน 2 งานผ่าน fake ที่ตอบ `PONG` ในโปรเจกต์ที่ไม่ใช่ git = ผล `OK_UNVERIFIED` จริง จึงต้องนับเป็น `unv` ไม่ใช่ `ok` · `tests/test_flashq.py` ก่อน (เจอ 1 ที่): `self.assertEqual(st["stats"]["by_project"][0]["ok"], 2)` → หลัง: `self.assertEqual(st["stats"]["by_project"][0]["ok"], 0)` แล้วเพิ่มบรรทัดต่อท้าย `self.assertEqual(st["stats"]["by_project"][0]["unv"], 2)` · ห้ามแก้เทสต์เดิมอื่นนอกจากบรรทัดนี้ · ถ้า reg ล้มที่เทสต์เดิมตัวอื่น = ⛔ หยุด
+    - ผู้ทำใช้ `.tmp/T-08.FAIL.patch` (ส่วนโค้ดของรอบแรก ผ่านสเปกแล้ว) อ้างอิงได้ แต่ต้องทำตามสเปกข้างบนเองและรันขั้นแดง→เขียวใหม่ทั้งหมด
   - เขียว: คำสั่งเดิม → `.tmp/T-08.green.log` · reg `-k "ui or stats or unverified or goal"` → `.tmp/T-08.reg.log`
   - หลักฐานชี้ขาด: red log บรรทัด `'ok' != 'ok_unverified'` (ค่าก่อนแก้ = ok) · green/reg `passed`
   - commit: `flashq: หน้าเว็บแยกสถานะ "ยังไม่ยืนยัน" ของงาน OK_UNVERIFIED พร้อมเหตุ และสถิติไม่นับรวมกับผ่านจริง (T-08)`
@@ -172,14 +174,14 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
 ## 4. ผล (ผู้ทำเติม · ผู้ตรวจเติมช่องขวา)
 | งาน | ผล | commit | หลักฐานชี้ขาด | ตรวจ Claude |
 |---|---|---|---|---|
-| T-01 | DONE | 91ce8fc | `.tmp/T-01.red.log` บรรทัด `AssertionError: True is not false : ห้ามรายงาน DONE` · `.tmp/T-01.green.log` `1 passed, 206 deselected` · `.tmp/T-01.reg.log` `10 passed, 197 deselected` | |
-| T-02 | DONE | 80db5d1 | `.tmp/T-02.red.log` บรรทัด `AssertionError: False is not true` · `.tmp/T-02.green.log` `1 passed, 207 deselected` · `.tmp/T-02.reg.log` `10 passed, 198 deselected` | |
-| T-03 | DONE | 650f159 | `.tmp/T-03.red.log` บรรทัด `AssertionError: 'FLASH_RUN=FAIL' not found` + มี `FLASH_RUN=OK_UNVERIFIED` · `.tmp/T-03.green.log` `2 passed, 208 deselected` · `.tmp/T-03.reg.log` `8 passed, 202 deselected` | |
-| T-04 | DONE | d142f7a | `.tmp/T-04.red.log` บรรทัด `AssertionError: Lists differ: ['งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน'] != []` · `.tmp/T-04.green.log` `2 passed, 210 deselected` · `.tmp/T-04.reg.log` `15 passed, 197 deselected` | |
-| T-05 | DONE | ba050bb | `.tmp/T-05.red.log` บรรทัด `AssertionError: 0 not greater than or equal to 1` · `.tmp/T-05.green.log` `2 passed, 212 deselected` · `.tmp/T-05.reg.log` `10 passed, 204 deselected` | |
-| T-06 | DONE | 977abcf | `.tmp/T-06.red.log` บรรทัด `AssertionError: 'WARN: ผล OK ยังไม่ยืนยัน — …' not found in` · `.tmp/T-06.green.log` `1 passed, 214 deselected` · `.tmp/T-06.reg.log` `16 passed, 199 deselected` | |
-| T-07 | DONE | d41aaf2 | `.tmp/T-07.grep.log` เจอ 2 ไฟล์ (`claude\commands\flash-plan.md:74` · `claude\commands\flash-goal.md:58`) | |
-| T-08 | ⛔ FAIL (reg) | — | `.tmp/T-08.red.log` ผ่าน `'ok' != 'ok_unverified'` · `.tmp/T-08.green.log` `1 passed` · แต่ `.tmp/T-08.reg.log` `test_ui_submit_retry_plans` ล้ม `AssertionError: 0 != 2` (บรรทัด `test_flashq.py:1774` คาด `by_project[0]["ok"] == 2` แต่ 2 งานนั้นเป็น OK_UNVERIFIED จึงย้ายไป `unv` ตามสเปก) · diff ที่ยังไม่ commit เก็บไว้ `.tmp/T-08.FAIL.patch` แล้ว revert working tree | |
+| T-01 | DONE | 91ce8fc | `.tmp/T-01.red.log` บรรทัด `AssertionError: True is not false : ห้ามรายงาน DONE` · `.tmp/T-01.green.log` `1 passed, 206 deselected` · `.tmp/T-01.reg.log` `10 passed, 197 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-02 | DONE | 80db5d1 | `.tmp/T-02.red.log` บรรทัด `AssertionError: False is not true` · `.tmp/T-02.green.log` `1 passed, 207 deselected` · `.tmp/T-02.reg.log` `10 passed, 198 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-03 | DONE | 650f159 | `.tmp/T-03.red.log` บรรทัด `AssertionError: 'FLASH_RUN=FAIL' not found` + มี `FLASH_RUN=OK_UNVERIFIED` · `.tmp/T-03.green.log` `2 passed, 208 deselected` · `.tmp/T-03.reg.log` `8 passed, 202 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-04 | DONE | d142f7a | `.tmp/T-04.red.log` บรรทัด `AssertionError: Lists differ: ['งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน'] != []` · `.tmp/T-04.green.log` `2 passed, 210 deselected` · `.tmp/T-04.reg.log` `15 passed, 197 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-05 | DONE | ba050bb | `.tmp/T-05.red.log` บรรทัด `AssertionError: 0 not greater than or equal to 1` · `.tmp/T-05.green.log` `2 passed, 212 deselected` · `.tmp/T-05.reg.log` `10 passed, 204 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-06 | DONE | 977abcf | `.tmp/T-06.red.log` บรรทัด `AssertionError: 'WARN: ผล OK ยังไม่ยืนยัน — …' not found in` · `.tmp/T-06.green.log` `1 passed, 214 deselected` · `.tmp/T-06.reg.log` `16 passed, 199 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-07 | DONE | d41aaf2 | `.tmp/T-07.grep.log` เจอ 2 ไฟล์ (`claude\commands\flash-plan.md:74` · `claude\commands\flash-goal.md:58`) | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
+| T-08 | ⛔ FAIL (reg) | — | `.tmp/T-08.red.log` ผ่าน `'ok' != 'ok_unverified'` · `.tmp/T-08.green.log` `1 passed` · แต่ `.tmp/T-08.reg.log` `test_ui_submit_retry_plans` ล้ม `AssertionError: 0 != 2` (บรรทัด `test_flashq.py:1774` คาด `by_project[0]["ok"] == 2` แต่ 2 งานนั้นเป็น OK_UNVERIFIED จึงย้ายไป `unv` ตามสเปก) · diff ที่ยังไม่ commit เก็บไว้ `.tmp/T-08.FAIL.patch` แล้ว revert working tree | ❌ แผนผิด (ไม่ได้สั่งแก้เทสต์เดิม `test_ui_submit_retry_plans`) → ส่ง T-08 ซ้ำพร้อมสเปกแก้เทสต์เดิม |
 | T-09 | | | | |
 | T-10 | | | | |
 | T-11 | | | | |
