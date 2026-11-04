@@ -479,7 +479,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
           <label class="muted"><input type="checkbox" id="wrap" checked> ตัดบรรทัด</label>
           <button id="logCopy" title="คัดลอก log ที่แสดง">คัดลอก</button>
           <button id="logOpen" title="เปิด session ใน opencode desktop" hidden>เปิดใน desktop</button>
-          <button id="logClose" title="ปิด log">ปิด</button>
+          <button id="logBackOffice" title="กลับไปหน้าออฟฟิศ (log นี้เปิดจากออฟฟิศ)" hidden>🏢 กลับออฟฟิศ</button><button id="logClose" title="ปิด log">ปิด</button>
         </div>
         <pre id="log" class="wrap">คลิกงานใดก็ได้เพื่อดู log (งานที่กำลังทำจะไหลสด)</pre>
       </div>
@@ -2384,6 +2384,7 @@ function renderLog(appended) {
 }
 
 function openLog(id) {
+  $("logBackOffice").hidden = true;
   logJob = id; logOffset = 0; logAttempt = 0; logLines = []; logDone = false;
   $("logTitle").textContent = id; $("attemptSel").innerHTML = ""; $("log").textContent = ""; $("log").dataset.mode = "all";
   const p = $("logBox"); p.classList.remove("collapsed");
@@ -2431,7 +2432,7 @@ $("wrap").onchange = () => { $("log").classList.toggle("wrap", $("wrap").checked
 $("wrap").checked = store.get("wrap", true); $("log").classList.toggle("wrap", $("wrap").checked);
 $("logCopy").onclick = () => copyText($("log").textContent, "คัดลอก log แล้ว");
 $("logOpen").onclick = async () => { const d = await post("/api/open", { id: logJob }); toast(d.message || "ผิดพลาด"); };
-$("logClose").onclick = () => { logJob = null; clearTimeout(logTimer); logLines = []; $("logTitle").textContent = ""; $("logCount").textContent = "";
+$("logClose").onclick = () => { $("logBackOffice").hidden = true; logJob = null; clearTimeout(logTimer); logLines = []; $("logTitle").textContent = ""; $("logCount").textContent = "";
   $("log").textContent = "คลิกงานใดก็ได้เพื่อดู log"; $("logOpen").hidden = true; if ($("logBox").classList.contains("max")) setMax(null); if (state) render(); };
 $("attemptSel").onchange = () => { logAttempt = +$("attemptSel").value; logOffset = 0; logLines = []; logDone = false; renderLog(); clearTimeout(logTimer); pollLog(); };
 
@@ -3774,7 +3775,8 @@ document.querySelectorAll("#viewTabs button").forEach((b) => { b.onclick = () =>
   document.addEventListener("scenefit", refit);
   if (window.ResizeObserver) new ResizeObserver(refit).observe($("ofScene"));
 }
-function openLogFromOffice(id) { setView("dash"); openLog(id); }
+function openLogFromOffice(id) { setView("dash"); openLog(id); $("logBackOffice").hidden = false; }
+$("logBackOffice").onclick = () => { $("logBackOffice").hidden = true; setView("office"); };
 $("officeView").addEventListener("click", async (e) => {
   const w = e.target.closest("button[data-ofwhy]"); if (!w) return;
   const out = w.parentElement.querySelector("span"); w.disabled = true; out.textContent = "กำลังตรวจ…";
