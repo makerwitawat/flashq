@@ -4,7 +4,7 @@
 
 ## ภาพรวม
 ```
-Claude Code (/flash-plan · /flash-check · /flash-goal · /flash-investigate · /flash-qa · /flash-doc)
+Claude Code (/flash-plan · /flash-check · /flash-goal · /flash-investigate · /flash-qa · /flash-doc · /flash-boss)
    │  python flashq.py run <แผน> <T-xx>        ← CLI (flashq.py) · ชนิดอื่น: verify · investigate · qa · doc
    ▼
 ~/.flashq/jobs/<id>.json  ──คิว──►  ช่องรัน running[-n].lock

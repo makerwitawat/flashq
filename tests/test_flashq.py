@@ -885,6 +885,11 @@ class FlashqTest(unittest.TestCase):
         plan = (claude / "commands" / "flash-plan.md").read_text(encoding="utf-8")
         self.assertIn("flashq:managed", plan)
         self.assertNotIn("{{FLASHQ}}", plan)
+        boss = (claude / "commands" / "flash-boss.md").read_text(encoding="utf-8")  # หัวหน้า: ต้องติดตั้งและไม่เหลือ placeholder
+        self.assertIn("flashq:managed", boss)
+        self.assertNotIn("{{FLASHQ}}", boss)
+        self.assertIn("OK_UNVERIFIED", boss)
+        self.assertTrue((self.tmp / "command" / "flash-boss.md").exists())
         self.assertEqual((claude / "commands" / "flash-check.md").read_text(encoding="utf-8"), "ของผู้ใช้เอง\n")
         self.assertTrue((self.tmp / "command" / "flash.md").exists())
         oc_plan = (self.tmp / "command" / "flash-plan.md").read_text(encoding="utf-8")  # ผู้สั่งฝั่ง opencode สร้างจากต้นฉบับ Claude
