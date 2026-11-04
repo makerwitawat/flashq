@@ -3570,7 +3570,7 @@ function runCardHTML(r, k) {
   return `<article class="of-card${compactRuns()[r.id] ? ' compact' : ''}" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact-run="${esc(r.id)}" title="ย่อ/ขยายการ์ดนี้: ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว">${compactRuns()[r.id] ? '▦ ขยาย' : '▤ ย่อ'}</button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
-    ${fromClaudeHTML(r)}
+    ${fromClaudeHTML(r)}${qaLine(r)}${docLine(r)}
     ${r.goal ? runGoalHTML(r)
       : r.fix_round ? `<div class="of-line muted">🔁 แผนแก้ซ้ำรอบ ${r.fix_round} ของงานทั่วไป — ไม่ใช่รอบของเป้าหมาย (ไม่มีธง)</div>` : ""}
     ${r.goal ? "" : planTrailHTML(r)}
@@ -3605,7 +3605,7 @@ function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
   return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
@@ -3644,7 +3644,7 @@ function officeUpdate() {
   const fit = fitScene();  // กรอบ/ซูมเปลี่ยน = วาดเฉพาะฉากใหม่ตามความกว้างใหม่
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now, j.claude_title]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state]), m.runs.map((r) => [r.id, r.model, r.claude_title]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now, j.claude_title]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state, h.doc && h.doc.state]), m.runs.map((r) => [r.id, r.model, r.claude_title, r.doc && r.doc.phase, r.qa && (r.qa.specs || []).map((x) => x.verdict).join()]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -3763,7 +3763,7 @@ $("officeView").addEventListener("click", async (e) => {
   catch { out.textContent = "ถามไม่ได้ (เซิร์ฟเวอร์ UI ไม่ตอบ)"; }
   w.disabled = false;
 });
-$("officeView").addEventListener("click", (e) => { if (e.target.closest("button[data-runnow],button[data-cancel],button[data-ofwhy],button[data-openclaude]")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
+$("officeView").addEventListener("click", (e) => { if (e.target.closest("button:not([data-oflog])")) return; const t = e.target.closest("[data-oflog]"); if (t) openLogFromOffice(t.dataset.oflog); });
 document.addEventListener("click", async (e) => {  // ปุ่ม "↩ เปิด session": เปิด session Claude ที่สั่งงานนี้ในแอป desktop
   const b = e.target.closest("button[data-openclaude]"); if (!b) return;
   const d = await post("/api/open_claude", { id: b.dataset.openclaude }); toast(d.message || d.error || "ผิดพลาด");
