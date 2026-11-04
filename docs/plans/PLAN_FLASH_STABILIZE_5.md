@@ -23,7 +23,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
 
 ## 1. งาน
 
-- [ ] **T-01** `said_done` เข้มขึ้น · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `said_done` เข้มขึ้น · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์ใหม่ `test_said_done_strict` ต่อจาก `def test_said_done_ignores_negation` · `mod = self.load_mod("flashq_said_done_strict")` แล้วเรียก `mod.said_done(t)` ตรง ๆ
     - ต้องได้ False (ใส่ `t` เป็นข้อความกำกับ assert): `"ห้ามรายงาน DONE"` · `"จะรายงาน DONE เมื่อเทสต์ผ่าน"` · `"รายงาน DONE เมื่อเทสต์ผ่าน"` · `"ถ้าผ่านให้ตอบ DONE"` · `"| T-01 | DONE | abc123 |"` · `"do not write DONE yet"`
     - ต้องได้ True: `"T-01 DONE แล้ว"` · `"สถานะ: DONE"` · `"**DONE**"` · `"DONE"` · `"ห้ามแตะไฟล์อื่น · T-01 DONE"` · `"ข้อ 1 ถ้าผ่านให้ตอบ\nT-01 DONE"`
@@ -37,7 +37,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: `.tmp/T-01.red.log` บรรทัด `AssertionError: True is not false : ห้ามรายงาน DONE` (ค่าก่อนแก้ = True) · green/reg บรรทัดท้าย `passed` ไม่มี `failed`
   - commit: `flashq: คำว่า DONE ในประโยคสั่ง/เงื่อนไข (ห้าม/จะ/เมื่อ/ถ้า/ก่อน) และในแถวตารางไม่นับเป็นงานเสร็จ (T-01)`
 
-- [ ] **T-02** `job_progressed` ใช้ `job["head0"]` ข้ามรอบลองใหม่ · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `job_progressed` ใช้ `job["head0"]` ข้ามรอบลองใหม่ · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์ใหม่ `test_progress_uses_job_head0` ต่อจาก `test_progress_counts_only_own_commits` (คัดลอกส่วน git init + commit "เริ่ม" ของเทสต์นั้น) → `h0` = HEAD · เขียน `x.txt` แล้ว commit ข้อความ `"งาน (T-01)"` → `h1` = HEAD
     - `self.assertTrue(mod.job_progressed(self.proj, h1, [], {"plan": "PLAN.md", "tasks": "T-01", "head0": h0}))` (รอบลองใหม่ head0 ของรอบนั้น = h1 แต่ commit เกิดในรอบแรก)
     - `self.assertFalse(mod.job_progressed(self.proj, h1, [], {"plan": "PLAN.md", "tasks": "T-01"}))` (ไม่มี head0 ใน job = พฤติกรรมเดิม)
@@ -47,7 +47,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `AssertionError: False is not true` (ค่าก่อนแก้ = False) · green/reg `passed`
   - commit: `flashq: นับ commit ของงานตั้งแต่รอบแรก (head0 ของ job) ไม่หายเมื่อรอบลองใหม่ (T-02)`
 
-- [ ] **T-03** EPIPE หลัง DONE ต้องมีหลักฐานเพิ่ม ไม่งั้น FAIL · ไฟล์: `flashq.py` `tests/fake_opencode.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-03** EPIPE หลัง DONE ต้องมีหลักฐานเพิ่ม ไม่งั้น FAIL · ไฟล์: `flashq.py` `tests/fake_opencode.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - fake: เพิ่ม `FAKE_COMMIT=<ข้อความ>` — ต่อจากลูป `FAKE_WRITE` (ต้องมี `--dir`) รัน `git -c user.name=t -c user.email=t@t add -A` แล้ว `git ... commit -q -m <ข้อความ>` ใน `--dir` ด้วย `subprocess.run(..., check=False)` · เพิ่ม `import subprocess` ด้านบน · เพิ่มคำอธิบายใน docstring 1 บรรทัด · `tests/fake_opencode.py` ก่อน: `_f.write(os.environ.get("FAKE_WRITE_TEXT", "x"))`
   - เทสต์เดิม `test_epipe_after_done_not_fail`: เพิ่ม `"FAKE_STEP_REASON": "stop"` ใน env (assert เดิมคงไว้ทั้งหมด) · `tests/test_flashq.py` ก่อน: `r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ"})`
   - เทสต์ใหม่ต่อจากเทสต์นั้น:
@@ -59,7 +59,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `'FLASH_RUN=FAIL' not found` + มี `FLASH_RUN=OK_UNVERIFIED` · green/reg `passed`
   - commit: `flashq: opencode ล้มด้วย EPIPE หลังตอบ DONE ต้องมี step_finish=stop หรือ commit ของงานด้วย ไม่งั้นเป็น FAIL (T-03)`
 
-- [ ] **T-04** งานอ่านอย่างเดียวที่ไฟล์เปลี่ยนเพราะงานอื่น = WARN เท่านั้น · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-04** งานอ่านอย่างเดียวที่ไฟล์เปลี่ยนเพราะงานอื่น = WARN เท่านั้น · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์ใหม่ต่อจาก `test_readonly_job_warns_when_files_change_and_agent_timeout`:
     1. `test_readonly_modified_by_others_warn_only` (unit): `mod = self.load_mod("flashq_ro_others")` · `self.assertEqual(mod.unverified_reasons({"readonly": True, "modified": ["a.txt"], "modified_others": ["J2"]}, {}), [])` · และ `{"readonly": True, "modified": ["a.txt"]}` ต้องได้ `["งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน"]`
     2. `test_readonly_modified_others_recorded` (รวม): `git init` ใน proj (เหมือนเทสต์ต้นแบบ) · รัน `verify PLAN.md T-01 --no-open` หนึ่งครั้งเพื่ออ่าน `job["project"]` จาก JSON ล่าสุด · เขียนไฟล์ `self.home / "jobs" / "J2other.json"` = `{"id": "J2other", "project": <ค่าที่อ่านได้>, "status": "ok", "readonly": False, "kind": "work", "created": "2099-01-01 00:00:00", "started": "2099-01-01 00:00:00", "finished": "2099-01-01 00:00:01"}` · รัน verify อีกครั้งด้วย env `{"FAKE_WRITE": "sneaky3.txt"}` → job ล่าสุด: `self.assertEqual(job.get("modified_others"), ["J2other"])` และ `assertNotIn("งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน", job.get("unverified") or [])` · stdout ยังมี `WARN: งานอ่านอย่างเดียวนี้ไฟล์ในโปรเจกต์เปลี่ยน`
@@ -72,7 +72,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `Lists differ` (ค่าก่อนแก้ = มีเหตุ "งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน") · green/reg `passed`
   - commit: `flashq: งานอ่านอย่างเดียวที่ไฟล์เปลี่ยนขณะมีงานอื่นในโปรเจกต์เดียวกัน เตือน WARN อย่างเดียว ไม่ลดผลเป็น OK_UNVERIFIED (T-04)`
 
-- [ ] **T-05** ตรวจเลขไฟล์:บรรทัดของผู้สืบจากทุกข้อความ · บังคับอ้างเฉพาะเมื่อบรีฟขอ · ไฟล์: `flashq.py` `tests/fake_opencode.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-05** ตรวจเลขไฟล์:บรรทัดของผู้สืบจากทุกข้อความ · บังคับอ้างเฉพาะเมื่อบรีฟขอ · ไฟล์: `flashq.py` `tests/fake_opencode.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - fake: ถ้ามี `FAKE_TEXT_PARTS` (คั่นด้วย `||`) ให้พิมพ์ event text ทีละส่วน (รูปแบบเดียวกับบรรทัด text สุดท้าย) **ก่อน** ข้อความ `FAKE_TEXT` สุดท้าย · `tests/fake_opencode.py` ก่อน: `print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "PONG")}}), flush=True)`
   - เทสต์ใหม่ต่อจาก `test_investigate_checks_citations` (คัดลอกวิธีสร้างไฟล์ในโปรเจกต์ + รูปแบบอ้างจากเทสต์นั้น · ตัวอย่างด้านล่างใช้ `a.py` ที่มี 3 บรรทัด):
     1. `test_investigate_cites_all_parts`: `investigate --no-open "สืบ ขอไฟล์:บรรทัด"` env `{"FAKE_TEXT_PARTS": "พบที่ a.py:1", "FAKE_TEXT": "สรุป: ต้นตอตามข้างบน"}` → `assertGreaterEqual(job["citations"]["ok"], 1)` · `assertNotIn("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย", job.get("unverified") or [])`
@@ -86,7 +86,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `0 not greater than or equal to 1` (ค่าก่อนแก้ citations ok = 0 เพราะตรวจแค่ข้อความสุดท้าย) · green/reg `passed`
   - commit: `flashq: ตรวจเลขไฟล์:บรรทัดของผู้สืบจากทุกข้อความ และเตือน "ไม่อ้างเลย" เฉพาะเมื่อบรีฟขอเลขบรรทัด (T-05)`
 
-- [ ] **T-06** `wait` / `log` พิมพ์บรรทัด WARN ของผลยังไม่ยืนยัน · ไฟล์: `flashq.py` `tests/test_flashq.py` `docs/REFERENCE.md` · แบบ: เทสต์ก่อน
+- [x] **T-06** `wait` / `log` พิมพ์บรรทัด WARN ของผลยังไม่ยืนยัน · ไฟล์: `flashq.py` `tests/test_flashq.py` `docs/REFERENCE.md` · แบบ: เทสต์ก่อน
   - เทสต์ใหม่ `test_wait_and_log_show_unverified_warn` ต่อจาก `test_wait_blocks_until_done_and_reports`: `self.run_q(*self.base())` (โปรเจกต์ไม่ใช่ git + ข้อความ `PONG` = OK_UNVERIFIED เหตุไม่มี commit) · อ่าน job id จาก JSON ล่าสุดใน `self.home / "jobs"` · `r2 = self.run_q("wait", jid, "--poll", "0.5")` และ `r3 = self.run_q("log", jid)` → ทั้งคู่ `assertIn("WARN: ผล OK ยังไม่ยืนยัน — ไม่มี commit ของงานและไม่มีคำว่า DONE", r.stdout)`
   - แดง: `-k "wait_and_log_show_unverified"` → `.tmp/T-06.red.log` ต้องมี `AssertionError: 'WARN: ผล OK ยังไม่ยืนยัน` … `not found in`
   - แก้ (สเปก): ทั้งสองคำสั่ง ถ้า `str(j.get("result") or "").upper() == "OK_UNVERIFIED"` และมี `j.get("unverified")` → `print("WARN: ผล OK ยังไม่ยืนยัน — " + " · ".join(j["unverified"]))` (รูปแบบเดียวกับที่ `run` พิมพ์)
@@ -98,7 +98,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `not found in` (ค่าก่อนแก้ = ไม่มีบรรทัด WARN ใน wait/log) · green/reg `passed`
   - commit: `flashq: wait/log พิมพ์บรรทัด WARN บอกเหตุของผล OK_UNVERIFIED (T-06)`
 
-- [ ] **T-07** คู่มือคำสั่ง Claude รู้จัก OK_UNVERIFIED · ไฟล์: `claude/commands/flash-plan.md` `claude/commands/flash-goal.md` · แบบ: แก้เอกสาร (ไม่มีเทสต์)
+- [x] **T-07** คู่มือคำสั่ง Claude รู้จัก OK_UNVERIFIED · ไฟล์: `claude/commands/flash-plan.md` `claude/commands/flash-goal.md` · แบบ: แก้เอกสาร (ไม่มีเทสต์)
   - `claude/commands/flash-plan.md` ก่อน: `ทุกสถานะ: OK · FAIL · DENIED · QUOTA · TIMEOUT · NOSTART · BUSY` → เป็น `ทุกสถานะ: OK · OK_UNVERIFIED · FAIL · DENIED · QUOTA · TIMEOUT · NOSTART · BUSY` และต่อท้ายวงเล็บเดิมของบรรทัดนั้นด้วย ` · OK_UNVERIFIED = จบแต่ยังไม่มีหลักฐาน อ่านบรรทัด `WARN:` แล้ว `/flash-check` ตามปกติ` (ถ้าวางต่อท้ายแล้วประโยคอ่านไม่รู้เรื่อง ให้วางเป็นประโยคใหม่ท้าย bullet เดียวกัน)
   - `claude/commands/flash-goal.md` ก่อน: `` - `FLASH_RUN=QUOTA` (สลับครบแล้ว) / `NOSTART` ซ้ำ / `BUSY` → หยุด รายงาน `` → เพิ่ม bullet ใหม่ใต้บรรทัดนี้: `` - `FLASH_RUN=OK_UNVERIFIED` = Flash จบแต่ยังไม่มีหลักฐาน → อ่านบรรทัด `WARN:` (จาก `wait`/`log`) แล้ว `/flash-check` ก่อน `goal verify` · ห้ามนับว่าผ่านจากคำบอกของ Flash ``
   - ตรวจ: `Select-String -Path claude/commands/flash-plan.md,claude/commands/flash-goal.md -Pattern OK_UNVERIFIED > .tmp/T-07.grep.log` ต้องเจอทั้ง 2 ไฟล์
@@ -172,14 +172,14 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
 ## 4. ผล (ผู้ทำเติม · ผู้ตรวจเติมช่องขวา)
 | งาน | ผล | commit | หลักฐานชี้ขาด | ตรวจ Claude |
 |---|---|---|---|---|
-| T-01 | | | | |
-| T-02 | | | | |
-| T-03 | | | | |
-| T-04 | | | | |
-| T-05 | | | | |
-| T-06 | | | | |
-| T-07 | | | | |
-| T-08 | | | | |
+| T-01 | DONE | 91ce8fc | `.tmp/T-01.red.log` บรรทัด `AssertionError: True is not false : ห้ามรายงาน DONE` · `.tmp/T-01.green.log` `1 passed, 206 deselected` · `.tmp/T-01.reg.log` `10 passed, 197 deselected` | |
+| T-02 | DONE | 80db5d1 | `.tmp/T-02.red.log` บรรทัด `AssertionError: False is not true` · `.tmp/T-02.green.log` `1 passed, 207 deselected` · `.tmp/T-02.reg.log` `10 passed, 198 deselected` | |
+| T-03 | DONE | 650f159 | `.tmp/T-03.red.log` บรรทัด `AssertionError: 'FLASH_RUN=FAIL' not found` + มี `FLASH_RUN=OK_UNVERIFIED` · `.tmp/T-03.green.log` `2 passed, 208 deselected` · `.tmp/T-03.reg.log` `8 passed, 202 deselected` | |
+| T-04 | DONE | d142f7a | `.tmp/T-04.red.log` บรรทัด `AssertionError: Lists differ: ['งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน'] != []` · `.tmp/T-04.green.log` `2 passed, 210 deselected` · `.tmp/T-04.reg.log` `15 passed, 197 deselected` | |
+| T-05 | DONE | ba050bb | `.tmp/T-05.red.log` บรรทัด `AssertionError: 0 not greater than or equal to 1` · `.tmp/T-05.green.log` `2 passed, 212 deselected` · `.tmp/T-05.reg.log` `10 passed, 204 deselected` | |
+| T-06 | DONE | 977abcf | `.tmp/T-06.red.log` บรรทัด `AssertionError: 'WARN: ผล OK ยังไม่ยืนยัน — …' not found in` · `.tmp/T-06.green.log` `1 passed, 214 deselected` · `.tmp/T-06.reg.log` `16 passed, 199 deselected` | |
+| T-07 | DONE | d41aaf2 | `.tmp/T-07.grep.log` เจอ 2 ไฟล์ (`claude\commands\flash-plan.md:74` · `claude\commands\flash-goal.md:58`) | |
+| T-08 | ⛔ FAIL (reg) | — | `.tmp/T-08.red.log` ผ่าน `'ok' != 'ok_unverified'` · `.tmp/T-08.green.log` `1 passed` · แต่ `.tmp/T-08.reg.log` `test_ui_submit_retry_plans` ล้ม `AssertionError: 0 != 2` (บรรทัด `test_flashq.py:1774` คาด `by_project[0]["ok"] == 2` แต่ 2 งานนั้นเป็น OK_UNVERIFIED จึงย้ายไป `unv` ตามสเปก) · diff ที่ยังไม่ commit เก็บไว้ `.tmp/T-08.FAIL.patch` แล้ว revert working tree | |
 | T-09 | | | | |
 | T-10 | | | | |
 | T-11 | | | | |
