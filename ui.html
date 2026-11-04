@@ -536,10 +536,16 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
   <div class="of-body">
   <div class="of-colL">
   <div class="of-scene" id="ofScene"></div>
-  <section class="panel" id="ofLegendBox" data-panel="oflegend">
+  <section class="panel collapsed" id="ofLegendBox" data-panel="oflegend">
     <div class="ph"><h2>วิธีอ่านภาพ</h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
     <div class="pb">
       <ul class="of-legend">
+        <li>🧑‍💻 <b>โต๊ะ</b> = งานที่กำลังทำ (1 โต๊ะ = 1 ช่อง · โต๊ะว่าง = ยังไม่มีงาน)</li>
+        <li>🧍 <b>แถวซ้าย</b> = งานรอคิว (#1 = ถัดไป · ถือป้าย ⏸ = รอเพราะไฟล์ชน)</li>
+        <li>🛋 <b>โซฟา</b> = ผู้ช่วยที่ว่าง (ผู้ตรวจ · ผู้สืบ · ยาม · นักทดสอบ · ช่างเอกสาร)</li>
+        <li>🚩 <b>ธง</b> = เป้าหมาย (ธงสูงตามเกณฑ์ที่ผ่าน · ธงเหลือง 👀 = รอคุณตรวจ)</li>
+      </ul>
+      <details class="of-legend-more"><summary>ศัพท์ละเอียด (สีเสื้อ · ผู้ตรวจ · ยาม · ท่าทาง ฯลฯ)</summary><ul class="of-legend">
         <li>🧑‍💻 <b>นั่งโต๊ะ</b> = งานกำลังทำ (เลขช่องอยู่ที่โต๊ะ) · <b>โต๊ะว่าง</b> = ยังไม่มีงาน</li>
         <li>🎨 <b>สีเสื้อ</b> = โปรเจกต์ (โปรเจกต์เดียวกันสีเดียวกัน)</li>
         <li>🔍 <b>ใส่แว่น + ถือแว่นขยาย</b> = ผู้ตรวจ (verify · อ่านอย่างเดียว ไม่ชนงานอื่น) · ป้ายหน้างานเขียนว่า "ตรวจ"</li>
@@ -555,7 +561,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · 🚫 = DENIED (opencode ปฏิเสธสิทธิ์ งานไม่ได้ทำ — ดูทางแก้ในกล่อง log) · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
         <li>😴 <b>นอนที่เก้าอี้มุมซ้ายล่าง</b> ("⚠ process ตาย") = งานที่ process ตาย (คลิกที่เก้าอี้เพื่อรับทราบ หรือดูแผงเตือนในแดชบอร์ด) · ไม่เกี่ยวกับโซฟาห้องพัก</li>
         <li>⏱ ทุก <b>เวลาที่ประมาณ</b> มาจากประวัติงานที่ผ่านมา (ค่ากลางต่อ T-xx) ไม่ใช่ค่ารับประกัน — คิวจริงอาจเร็ว/ช้ากว่านี้ได้</li>
-      </ul>
+      </ul></details>
       <p class="of-note">คลิกตัวละคร/การ์ดเพื่อไปดู log สดของงานนั้น</p>
     </div>
   </section>
