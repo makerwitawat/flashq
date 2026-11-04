@@ -105,7 +105,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: `.tmp/T-07.grep.log` มี 2 ไฟล์ (ค่าก่อนแก้ = ไม่เจอเลย) · `git diff --stat` เปลี่ยนเฉพาะ 2 ไฟล์
   - commit: `flash-plan: คู่มือ flash-plan/flash-goal รู้จักผล OK_UNVERIFIED (อ่าน WARN แล้วตรวจก่อนเชื่อ) (T-07)`
 
-- [ ] **T-08** แถวงานบนหน้าเว็บมีสถานะแสดงผล `ok_unverified` + เหตุ + สถิติ · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-08** แถวงานบนหน้าเว็บมีสถานะแสดงผล `ok_unverified` + เหตุ + สถิติ · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์ใหม่ `test_ui_rows_show_ok_unverified` ต่อจาก `test_unverified_routes_like_ok_with_warning`:
     - `mod = self.load_mod("flashq_ui_unv")` · บันทึก 2 งานด้วย `mod.save_job(...)`: `{"id": "J1u", "project": str(self.proj), "status": "ok", "result": "OK_UNVERIFIED", "unverified": ["ไม่มี commit ของงานและไม่มีคำว่า DONE"], "created": "2099-01-01 00:00:00", "started": "2099-01-01 00:00:00", "finished": "2099-01-01 00:01:00"}` และ `J2o` แบบเดียวกันแต่ `"result": "OK"` ไม่มี unverified
     - `st = mod.ui_state()` → แถว J1u ใน `st["history"]` มี `state == "ok_unverified"` และ `"ไม่มี commit" in reason` · แถว J2o `state == "ok"` · `mod.job_stats(st["history"])["by_kind"]` กลุ่ม `work` มี `ok == 1`, `unv == 1`, `fail == 0`
@@ -125,7 +125,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `'ok' != 'ok_unverified'` (ค่าก่อนแก้ = ok) · green/reg `passed`
   - commit: `flashq: หน้าเว็บแยกสถานะ "ยังไม่ยืนยัน" ของงาน OK_UNVERIFIED พร้อมเหตุ และสถิติไม่นับรวมกับผ่านจริง (T-08)`
 
-- [ ] **T-09** การ์ดเป้าหมาย: รอบที่ FAIL ไม่ขึ้น "รอ Claude ตรวจ" · ป้ายรอบยังไม่ยืนยัน · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-09** การ์ดเป้าหมาย: รอบที่ FAIL ไม่ขึ้น "รอ Claude ตรวจ" · ป้ายรอบยังไม่ยืนยัน · ไฟล์: `flashq.py` `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: เพิ่มใน `test_goal_published_for_ui` ต่อจากบรรทัดนี้ · `tests/test_flashq.py` ก่อน: `self.assertIn("รอบ 1 Flash ทำเสร็จแล้วแต่ยังไม่ได้ goal verify", g["phase"]["notes"][0]["t"])`
     - `g = mod.ui_goals([], [dict(done, state="fail")])[0]` → `assertEqual(g["unverified"], [])` · `assertNotEqual(g["phase"]["step"], "review")` · `assertIn("FAIL", g["phase"]["label"])` (ข้อความขั้นอยู่ในคีย์ `label` ของ `ph(...)`)
     - `g = mod.ui_goals([], [dict(done, state="ok_unverified")])[0]` → `assertEqual((g["unverified"], g["ok_unverified"]), ([1], [1]))` · `assertEqual(g["phase"]["step"], "review")` · `assertIn("ยังไม่ยืนยัน", g["phase"]["label"])`
@@ -138,7 +138,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: red log บรรทัด `[1] != []` (ค่าก่อนแก้ = รอบ FAIL นับเป็นรอบรอตรวจ) · green/reg `passed`
   - commit: `flashq: การ์ดเป้าหมายไม่ขึ้น "รอ Claude ตรวจ" เมื่อรอบนั้น Flash จบไม่ผ่าน และบอกรอบที่ผลยังไม่ยืนยัน (T-09)`
 
-- [ ] **T-10** หน้าเว็บแสดงสถานะ "ยังไม่ยืนยัน" · ไฟล์: `ui.html` · แบบ: แก้หน้าเว็บ + ตรวจ syntax (ไม่มี pytest)
+- [x] **T-10** หน้าเว็บแสดงสถานะ "ยังไม่ยืนยัน" · ไฟล์: `ui.html` · แบบ: แก้หน้าเว็บ + ตรวจ syntax (ไม่มี pytest)
   - แก้ (สเปก · ข้อความไทย · สีใช้ตัวแปรที่มีอยู่):
     - CSS เพิ่ม `.s-unv { background: var(--quota); color: #1d2430; }` ต่อท้ายบรรทัด · `ui.html` ก่อน: `.s-ok { background: var(--ok); }`
     - `STATUS` เพิ่ม `ok_unverified: ["ยังไม่ยืนยัน", "s-unv"],` ต่อจาก ok · `ui.html` ก่อน: `const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"]`
@@ -156,7 +156,7 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
   - หลักฐานชี้ขาด: `.tmp/T-10.node.log` ว่าง + exit 0 · Grep `ok_unverified` ใน ui.html เจอ ≥ 6 ที่ (ค่าก่อนแก้ = 0) · reg `passed`
   - commit: `ui: แสดงสถานะ "ยังไม่ยืนยัน" (ป้ายสีเหลือง · สรุปวันนี้ · สถิติ · เส้นทางแผน) แยกจากผ่านจริง (T-10)`
 
-- [ ] **T-11** CHANGELOG + รันทั้งชุด · ไฟล์: `CHANGELOG.md` · แบบ: เอกสาร + ตรวจรวม
+- [x] **T-11** CHANGELOG + รันทั้งชุด · ไฟล์: `CHANGELOG.md` · แบบ: เอกสาร + ตรวจรวม
   - เพิ่มหัวข้อ `## 2026-11-04` เหนือหัวข้อเดิม (ใหม่สุดอยู่บน) · `CHANGELOG.md` ก่อน: `## 2026-11-01`
     - bullet (ไทย · รูปแบบเดียวกับหัวข้อเดิม): (1) หน้าเว็บแยกสถานะ "ยังไม่ยืนยัน" + เหตุ + สถิติ (T-08, T-10) · (2) งานอ่านอย่างเดียวที่ไฟล์เปลี่ยนเพราะงานอื่นในโปรเจกต์ = WARN ไม่ลดผล · เก็บ `modified_others` (T-04) · (3) `wait`/`log` พิมพ์ WARN ของ OK_UNVERIFIED (T-06, T-07) · (4) DONE ในประโยคสั่ง/เงื่อนไข/แถวตารางไม่นับ · EPIPE หลัง DONE ต้องมี step_finish=stop หรือ commit (T-01, T-03) · (5) นับ commit ข้ามรอบลองใหม่ (T-02) · (6) ผู้สืบ: ตรวจเลขบรรทัดจากทุกข้อความ · "ไม่อ้างเลย" เฉพาะบรีฟที่ขอ (T-05) · (7) การ์ดเป้าหมาย: รอบ FAIL ไม่ขึ้นรอตรวจ (T-09)
   - รันทั้งชุด (timeout ≥ 600 วิ): `$env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T-11.full.log 2>&1` ต้อง `passed` ไม่มี `failed` · มีพัง → ⛔ หยุด บันทึกชื่อเทสต์ใน §4 (ห้ามแก้โค้ดในงานนี้)
@@ -181,10 +181,11 @@ flashq-exclusive: flashq.py, ui.html, tests/test_flashq.py, tests/fake_opencode.
 | T-05 | DONE | ba050bb | `.tmp/T-05.red.log` บรรทัด `AssertionError: 0 not greater than or equal to 1` · `.tmp/T-05.green.log` `2 passed, 212 deselected` · `.tmp/T-05.reg.log` `10 passed, 204 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
 | T-06 | DONE | 977abcf | `.tmp/T-06.red.log` บรรทัด `AssertionError: 'WARN: ผล OK ยังไม่ยืนยัน — …' not found in` · `.tmp/T-06.green.log` `1 passed, 214 deselected` · `.tmp/T-06.reg.log` `16 passed, 199 deselected` | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
 | T-07 | DONE | d41aaf2 | `.tmp/T-07.grep.log` เจอ 2 ไฟล์ (`claude\commands\flash-plan.md:74` · `claude\commands\flash-goal.md:58`) | ✅ ตรวจ diff + log แดง→เขียวตรงสเปก |
-| T-08 | ⛔ FAIL (reg) | — | `.tmp/T-08.red.log` ผ่าน `'ok' != 'ok_unverified'` · `.tmp/T-08.green.log` `1 passed` · แต่ `.tmp/T-08.reg.log` `test_ui_submit_retry_plans` ล้ม `AssertionError: 0 != 2` (บรรทัด `test_flashq.py:1774` คาด `by_project[0]["ok"] == 2` แต่ 2 งานนั้นเป็น OK_UNVERIFIED จึงย้ายไป `unv` ตามสเปก) · diff ที่ยังไม่ commit เก็บไว้ `.tmp/T-08.FAIL.patch` แล้ว revert working tree | ❌ แผนผิด (ไม่ได้สั่งแก้เทสต์เดิม `test_ui_submit_retry_plans`) → ส่ง T-08 ซ้ำพร้อมสเปกแก้เทสต์เดิม |
-| T-09 | | | | |
-| T-10 | | | | |
-| T-11 | | | | |
+| T-08 | DONE | c3e737e | `.tmp/T-08.red.log` บรรทัด `AssertionError: 'ok' != 'ok_unverified'` (`1 failed, 215 deselected`) · `.tmp/T-08.green.log` `1 passed, 215 deselected` · `.tmp/T-08.reg.log` `51 passed, 165 deselected` · แตะเฉพาะ `flashq.py` + `tests/test_flashq.py` | |
+
+| T-09 | DONE | 35dfbf1 | `.tmp/T-09.red.log` บรรทัด `AssertionError: Lists differ: [1] != []` · `.tmp/T-09.green.log` `1 passed, 215 deselected` · `.tmp/T-09.reg.log` `16 passed, 200 deselected` · แตะเฉพาะ `flashq.py` + `tests/test_flashq.py` | |
+| T-10 | DONE | c395cac | `.tmp/T-10.node.log` ว่าง 0 ไบต์ + exit 0 · Grep `ok_unverified` ใน `ui.html` 9 บรรทัด (ก่อนแก้ 0) · `.tmp/T-10.reg.log` `36 passed, 180 deselected` · `.reason` เป็น tooltip อยู่แล้ว (ไม่ต้องแก้) · แตะเฉพาะ `ui.html` | |
+| T-11 | DONE | 5970e0c | `.tmp/T-11.full.log` บรรทัดท้าย `216 passed in 791.27s (0:13:11)` · `.tmp/T-11.smoke.log` `UI_SMOKE OK (3 ความกว้าง: 1280, 700, 390px)` exit 0 · แตะเฉพาะ `CHANGELOG.md` | |
 
 ## 5. หลังทำครบ (session หลัก · ไม่ใช่ผู้ทำ)
 - `/flash-check docs/plans/PLAN_FLASH_STABILIZE_5.md` → merge เข้า master → `python flashq.py install` จาก checkout หลัก `D:\MyCode\flashq` (T-07 แก้ `claude/commands/`) → รีสตาร์ต `flashq ui` พอร์ต 4097
