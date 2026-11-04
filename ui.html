@@ -96,7 +96,7 @@ tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--hover); }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
 .badge { display: inline-block; padding: 0 0.55rem; border-radius: 1rem; font-size: 0.82rem; font-weight: 600; color: #fff; white-space: nowrap; }
-.s-ok { background: var(--ok); } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; } .s-denied { background: var(--denied); }
+.s-ok { background: var(--ok); } .s-unv { background: var(--quota); color: #1d2430; } .s-fail { background: var(--fail); } .s-quota { background: var(--quota); color: #1d2430; } .s-denied { background: var(--denied); }
 .deny { color: var(--denied); font-size: 0.85em; font-weight: 600; white-space: normal; }
 .s-timeout { background: var(--timeout); } .s-nostart { background: var(--nostart); color: #10262a; } .s-other { background: var(--other); }
 .s-running { background: var(--accent); color: var(--accent-text); } .s-queued { background: var(--other); }
@@ -684,10 +684,10 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem("flashq." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("flashq." + k, JSON.stringify(v)); } catch (e) {} },
 };
-const STATUS = { ok: ["OK", "s-ok"], fail: ["FAIL", "s-fail"], denied: ["DENIED", "s-denied"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
+const STATUS = { ok: ["OK", "s-ok"], ok_unverified: ["ยังไม่ยืนยัน", "s-unv"], fail: ["FAIL", "s-fail"], denied: ["DENIED", "s-denied"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
   nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
   dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
-const FINAL = ["ok", "fail", "denied", "quota", "timeout", "nostart"];
+const FINAL = ["ok", "ok_unverified", "fail", "denied", "quota", "timeout", "nostart"];
 const badge = (st, why) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}"${why ? ` title="${esc(why)}"` : ""}>${esc(t)}</span>`; };
 /* opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ) → บอก path ที่ถูกปฏิเสธบนแถวงาน · ทางแก้เต็มอยู่ในกล่อง log (denied_help) */
 const denyNote = (j) => (j.perm_denied || []).length ? `<div class="deny" title="opencode ปฏิเสธสิทธิ์ · ทางแก้: external_dirs ใน .flash.json หรือ permission.external_directory ใน opencode.json (ดูกล่อง log)">🚫 ปฏิเสธสิทธิ์: ${esc(j.perm_denied.join(" · "))}</div>` : "";
@@ -2114,7 +2114,7 @@ function render() {
 
   const statTable = (title, rows) => rows.length ? `<div class="table-wrap"><table class="stats"><tr><th>${title}</th><th>งาน</th><th>ผ่าน</th><th></th><th>เฉลี่ย</th></tr>
     ${rows.map((g) => { const pct = Math.round(g.ok * 100 / g.n); return `<tr><td class="mono" style="overflow-wrap:anywhere">${esc(g.name)}</td><td>${g.n}</td>
-      <td>${pct}%</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
+      <td>${pct}%${g.unv > 0 ? ` · ⚠${g.unv}` : ""}</td><td style="width:20%"><div class="bar"><i style="width:${pct}%"></i></div></td><td>${dur(g.avg_sec)}</td></tr>`; }).join("")}</table></div>` : "";
   const st = s.stats || { by_project: [], by_model: [], by_kind: [] };
   const KIND_TH = { work: "ทำตามแผน", verify: "🔍 ตรวจ", investigate: "🕵️ สืบ", qa: "🧪 ทดสอบ (นักทดสอบ)", doc: "📝 เอกสาร (ช่างเอกสาร)", test: "ข้อความทดสอบ" };
   const kindRows = (st.by_kind || []).map((g) => ({ ...g, name: KIND_TH[g.name] || g.name }));
@@ -2154,7 +2154,7 @@ function beep(notes) {
 }
 function playFinish(st) {
   if (!soundOn) return;
-  if (st === "ok") beep([[660, 0.14], [880, 0.22]]);
+  if (st === "ok" || st === "ok_unverified") beep([[660, 0.14], [880, 0.22]]);
   else if (st === "quota") beep([[440, 0.3]]);
   else beep([[440, 0.16], [300, 0.3]]);
 }
@@ -3012,7 +3012,7 @@ function parseTasks(s) {
 
 /* --- ประมาณการเวลา: จากประวัติงานที่จบ OK (ค่ากลาง · ต่อ 1 T-xx × จำนวนงาน) --- */
 function estimate(j) {
-  const hist = (state?.history || []).filter((h) => h.state === "ok" && h.duration_sec >= 5);
+  const hist = (state?.history || []).filter((h) => (h.state === "ok" || h.state === "ok_unverified") && h.duration_sec >= 5);
   const isMsg = !!j.message, k = kindOf(j);
   const n = Math.max(1, parseTasks(j.tasks).length);
   const same = hist.filter((h) => h.project === j.project && kindOf(h) === k && (isMsg ? h.message === j.message : (h.plan === j.plan && h.tasks === j.tasks)));
@@ -3029,7 +3029,7 @@ const estWhy = (e) => !e ? "ยังไม่มีประวัติให�
   : e.scope === "same" ? `ประมาณจากงานเดิมที่เคยจบ OK ${e.n} ครั้ง → คาดว่าใช้ ${approx(e.sec)}${estRough(e) ? " (คร่าว)" : ""}`
   : e.scope === "project" ? `ประมาณจากประวัติ ${e.n} งานของโปรเจกต์นี้ (ค่ากลางต่องาน × จำนวนงาน) คาดว่าใช้ ${approx(e.sec)}${estRough(e) ? " (คร่าว)" : ""}`
   : `ประมาณจากงานทุกโปรเจกต์ ${e.n} งาน คาดว่าใช้ ${approx(e.sec)} (คร่าวมาก)`;
-const fallbackSec = () => median((state?.history || []).filter((h) => h.state === "ok" && h.duration_sec >= 5).map((h) => h.duration_sec)) ?? 600;
+const fallbackSec = () => median((state?.history || []).filter((h) => (h.state === "ok" || h.state === "ok_unverified") && h.duration_sec >= 5).map((h) => h.duration_sec)) ?? 600;
 
 /* --- ความคืบหน้าของงานที่กำลังทำ --- */
 function runInfo(r) {
@@ -3204,6 +3204,7 @@ const LOUNGE = [{ k: "insp", ico: "🔍", name: "ผู้ตรวจ", role: "
 const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
   quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
   denied: { pose: "sit", mood: "sad", icon: "🚫", text: "ถูกปฏิเสธสิทธิ์ (DENIED)", cls: "of-st-bad" },
+  ok_unverified: { pose: "cheer", mood: "flat", icon: "⚠", text: "เสร็จแต่ยังไม่ยืนยัน", cls: "of-st-quota" },
   nostart: { pose: "sit", mood: "sad", icon: "❓", text: "ไม่เริ่มทำงาน (NOSTART)", cls: "of-st-bad" } };
 
 function deskSVG(i, cx, cy, r, c) {
@@ -3480,7 +3481,7 @@ function runGoalHTML(r) {
     ${gl.id ? `<div class="of-line muted of-full">ตรวจแล้ว ${(gl.rounds || []).length}/${gl.rounds_max} รอบ · ผ่าน ${gl.passed}/${gl.machine} เกณฑ์ (นับเมื่อ goal verify ท้ายรอบ)${unv}</div>` : ""}`;
 }
 /* งานแผนทั่วไป: ขั้นของแผน 🕵️ สืบ → ✍️ แผน → 🧑‍💻 Flash ทำ → 🔍 ตรวจ → 🏁 ผล + งานที่เกี่ยวข้อง (ผู้สืบก่อนแผน · เคยรัน · ผลตรวจ) */
-const TRAIL_ICON = { ok: "✅", fail: "❌", denied: "🚫", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
+const TRAIL_ICON = { ok: "✅", ok_unverified: "⚠", fail: "❌", denied: "🚫", quota: "⛔", timeout: "⏱", cancelled: "✖", pass: "✅", reviewing: "🔍" };
 /* บรรทัด token ของ Claude ต่อแผน/ธง (จาก `flashq usage` → ~/.flashq/usage/<stem>.json · ไม่เคยรัน = ไม่แสดง) */
 const USAGE_PHASES = [["plan", "วางแผน"], ["check", "ตรวจ"], ["fix", "รอบแก้"], ["goal", "เป้าหมาย"], ["other", "อื่น ๆ"]];
 function usageLineHTML(u) {
@@ -3594,7 +3595,7 @@ function queueHTML(m) {
 }
 /* บรรทัดราคาของงานที่จบ: ที่ opencode คิดจริง (Flash) เทียบกับถ้า Claude ทำ token เท่ากัน (ประมาณ · ต่อรุ่นใน flash_compare) */
 function recentCostHTML(f, j) {
-  if (!f) return j && j.state !== "ok" && j.state !== "cancelled" && j.finished
+  if (!f) return j && j.state !== "ok" && j.state !== "ok_unverified" && j.state !== "cancelled" && j.finished
     ? `<div class="muted" title="log ของงานนี้ไม่มีรอบที่โมเดลตอบจบเลย (มักค้างตั้งแต่ส่งคำขอ) จึงไม่มี token ให้นับ">🪙 ยังไม่มี token — โมเดลยังไม่ตอบรอบไหนเลย</div>` : "";
   const cl = (f.compare || []).map((c) => `${esc(c.model.replace(/^claude-/, ""))} ${usd(c.usd)}`).join(" · ");
   const tip = "จ่ายจริง = ที่ opencode คิดจาก log ของงานนี้ (รวม subagent" + (f.sub_tokens ? ` ${fmtTok(f.sub_tokens)} token` : "") + ") · Claude = ประมาณการสมมติใช้ token เท่ากัน ตามตารางราคาในตัว (จริง ๆ Claude มักใช้น้อยกว่า)";
@@ -3733,9 +3734,9 @@ function officeUpdate() {
   setText("ofTE", doneAll ? approx(allEnd) : "—");
   setText("ofTEs", doneAll ? `ราว ${clockAt(allEnd)}${anyRough ? " · ประมาณคร่าว (ข้อมูลเก่ายังน้อย)" : ""}` : "ไม่มีงานค้าง");
   const today = String(s.now || "").slice(0, 10), td = (s.history || []).filter((h) => (h.finished || "").startsWith(today));
-  const okN = td.filter((h) => h.state === "ok").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
+  const okN = td.filter((h) => h.state === "ok").length, unvN = td.filter((h) => h.state === "ok_unverified").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
   setText("ofTD", `${td.length} งาน`);
-  setText("ofTDs", td.length ? `✓ ${okN} ผ่าน · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
+  setText("ofTDs", td.length ? `✓ ${okN} ผ่าน${unvN ? ` · ⚠ ${unvN} ยังไม่ยืนยัน` : ""} · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
 }
 
 /* --- สลับมุมมอง --- */
