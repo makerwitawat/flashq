@@ -2189,6 +2189,32 @@ class FlashqTest(unittest.TestCase):
         spec.loader.exec_module(mod)
         self.assertEqual(mod.DEFAULTS["agent_timeout_min"], 30)
 
+    def test_readonly_modified_by_others_warn_only(self):
+        """ไฟล์เปลี่ยนขณะมีงานอื่นในโปรเจกต์เดียวกัน → ไม่นับเป็นเหตุ OK_UNVERIFIED (แสดง WARN อย่างเดียว)"""
+        mod = self.load_mod("flashq_ro_others")
+        self.assertEqual(mod.unverified_reasons({"readonly": True, "modified": ["a.txt"], "modified_others": ["J2"]}, {}), [])
+        self.assertEqual(mod.unverified_reasons({"readonly": True, "modified": ["a.txt"]}, {}),
+                         ["งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน"])
+
+    def test_readonly_modified_others_recorded(self):
+        """งาน readonly เห็นไฟล์เปลี่ยนเพราะมีงานอื่นในโปรเจกต์เดียวกัน → บันทึก modified_others + WARN แต่ผลไม่เป็น OK_UNVERIFIED"""
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.proj, check=True)
+        r = self.run_q("verify", "PLAN.md", "T-01", "--no-open")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        latest = lambda: json.loads(max((f for f in (self.home / "jobs").glob("*.json")),  # noqa: E731
+                                        key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))
+        project = latest()["project"]
+        (self.home / "jobs" / "J2other.json").write_text(json.dumps(
+            {"id": "J2other", "project": project, "status": "ok", "readonly": False, "kind": "work",
+             "created": "2099-01-01 00:00:00", "started": "2099-01-01 00:00:00", "finished": "2099-01-01 00:00:01"}),
+            encoding="utf-8")
+        r = self.run_q("verify", "PLAN.md", "T-01", "--no-open", env={"FAKE_WRITE": "sneaky3.txt"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        job = latest()
+        self.assertEqual(job.get("modified_others"), ["J2other"])
+        self.assertNotIn("งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน", job.get("unverified") or [])
+        self.assertIn("WARN: งานอ่านอย่างเดียวนี้ไฟล์ในโปรเจกต์เปลี่ยน", r.stdout)
+
     def test_tree_live_pulse(self):
         """ชีพจรงานทดสอบ: tree_live รวม CPU/I/O + นับโปรเซสลูกหลาน + ชื่อไม่ซ้ำ (ไม่รวม shell) · pid ไม่พบ = None"""
         import importlib.util

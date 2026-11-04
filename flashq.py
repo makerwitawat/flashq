@@ -1988,7 +1988,7 @@ def unverified_reasons(job: dict, res: dict) -> list[str]:
         out.append(res["epipe_done"])
     if res.get("no_progress"):
         out.append("ไม่มี commit ของงานและไม่มีคำว่า DONE")
-    if job.get("readonly") and job.get("modified"):
+    if job.get("readonly") and job.get("modified") and not job.get("modified_others"):
         out.append("งานอ่านอย่างเดียวแต่ไฟล์ในโปรเจกต์เปลี่ยน")
     if job.get("kind") == "investigate":
         cites = job.get("citations") or {}
@@ -2579,8 +2579,10 @@ def cmd_run(a) -> int:
             changed = snapshot_changes(snap0, after) if after is not None else []
             if changed:
                 others = [j["id"] for j in jobs() if j.get("id") != jid and j.get("project") == str(root) and not j.get("readonly")
-                          and live_state(j) == "running"]
+                          and (live_state(j) == "running" or (j.get("finished") or "") >= (job.get("started") or "9"))]
                 job["modified"] = changed[:50]
+                if others:
+                    job["modified_others"] = others[:10]
                 print(f"WARN: งานอ่านอย่างเดียวนี้ไฟล์ในโปรเจกต์เปลี่ยน {len(changed)} ไฟล์: " + ", ".join(changed[:8])
                       + (f" · มีงานอื่นรันในโปรเจกต์เดียวกัน ({', '.join(others)}) อาจเป็นของงานนั้น — ตรวจ git diff ก่อนเชื่อผล" if others
                          else " · ไม่มีงานอื่นในโปรเจกต์นี้ → agent อาจแก้ไฟล์เอง ห้ามเชื่อผล ตรวจ git diff ทันที"), flush=True)
