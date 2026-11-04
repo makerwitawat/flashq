@@ -3579,6 +3579,11 @@ function fromClaudeChip(j) {  // แบบเล็กสำหรับแถ�
   if (!j.claude_session) return "";
   return `<div><span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(trunc(j.claude_title || "(ไม่พบชื่อ session)", 50))}</span> ${openClaudeBtn(j)}</div>`;
 }
+const ofMoreOpen = new Set();  // <details> "รายละเอียดทางเทคนิค" ที่เปิดอยู่ (การ์ดสร้างใหม่เมื่อ sig เปลี่ยน → จำสถานะไว้)
+$("ofRuns").addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (d.dataset && d.dataset.more) d.open ? ofMoreOpen.add(d.dataset.more) : ofMoreOpen.delete(d.dataset.more);
+}, true);
 function runCardHTML(r, k) {
   const plan = (isVerify(r) ? roleTag(r) : "") + (isQa(r) ? "" : r.message && !isSleuth(r) ? "ทดสอบ --message" : isSleuth(r) && r.message ? trunc(r.message, 60) : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card${compactRuns()[r.id] ? ' compact' : ''}" id="ofC${k}">
@@ -3593,11 +3598,12 @@ function runCardHTML(r, k) {
     <div class="of-line of-full"><b id="ofCP${k}">…</b> <span class="muted" id="ofCS${k}"></span></div>
     <div class="of-line of-full">🛠 <span id="ofCT${k}">กำลังอ่าน log…</span></div>
     <div class="of-line of-full">⏱ <span id="ofCE${k}"></span></div>
+    <details class="of-more of-full" data-more="${esc(r.id)}"${ofMoreOpen.has(r.id) ? " open" : ""}><summary class="muted" id="ofCD${k}">รายละเอียดทางเทคนิค</summary>
     <div class="of-full">${modelChip(r)}${thinkChip(r)}</div>
     <div class="of-line muted of-full" id="ofCM${k}"></div>
     <div class="of-line muted of-full" id="ofCA${k}"></div>
     <div class="of-line muted of-full" id="ofCG${k}"></div>
-    <div class="of-line of-full"><button data-ofwhy="${esc(r.id)}" title="ถามเซิร์ฟเวอร์ว่า tool/subagent ยังทำงานอยู่ไหม และค้างที่อะไร">🔍 ตรวจสาเหตุ</button> <span class="muted" id="ofCW${k}"></span></div></article>`;
+    <div class="of-line of-full"><button data-ofwhy="${esc(r.id)}" title="ถามเซิร์ฟเวอร์ว่า tool/subagent ยังทำงานอยู่ไหม และค้างที่อะไร">🔍 ตรวจสาเหตุ</button> <span class="muted" id="ofCW${k}"></span></div></details></article>`;
 }
 function queueHTML(m) {
   if (!m.queue.length) return `<div class="empty">ไม่มีงานรอคิว</div>`;
@@ -3717,7 +3723,7 @@ function officeUpdate() {
       "🛠 " + trunc(act, 60), quiet ? `⚠ log เงียบ ${dur(Math.floor(idleMs / 1000))}` : "", swAlert].filter(Boolean).join(" · ");
     setText("ofCX" + k, mini);
     const cx = $("ofCX" + k); if (cx) { cx.classList.toggle("of-warn", !!quiet || !!swAlert || ri.severe); if (cx.getAttribute("title") !== mini && cx.dataset.tip !== mini) cx.title = mini; }
-    const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet);
+    const ca = $("ofCA" + k); if (ca) ca.classList.toggle("of-warn", !!quiet); const cd = $("ofCD" + k); if (cd) cd.classList.toggle("of-warn", !!quiet);
     if (i >= 0) {
       setText("ofB" + i, trunc(act, 24));
       const pb = $("ofPB" + i);
