@@ -575,7 +575,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
   <div class="of-cards" id="ofRuns"></div>
   <div class="of-two">
     <section class="panel"><div class="ph"><h2>คิวรอ + เวลาที่คาดว่าจะเริ่ม/เสร็จ</h2></div><div class="pb" id="ofQueue"></div></section>
-    <section class="panel"><div class="ph"><h2>เพิ่งจบ</h2></div><div class="pb" id="ofRecent"></div></section>
+    <section class="panel"><div class="ph"><h2>เพิ่งจบ <span class="muted" id="ofRecentHead"></span></h2></div><div class="pb" id="ofRecent"></div></section>
   </div>
   </div>
   </div>
@@ -3614,11 +3614,13 @@ function recentCostHTML(f, j) {
 }
 /* งานที่จบวันนี้ (ไม่นับยกเลิก/BUSY/รอคิวเกิน — ตรงกับ job_stats ใน flashq.py) */
 const todayDone = (hist, today) => (hist || []).filter((h) => h && (h.finished || "").startsWith(today || "") && !["cancelled", "busy", "queue_timeout"].includes(h.state));
+/* นับงานที่จบแล้วแต่ยังรอคุณตรวจ (แถว "เพิ่งจบ" 8 แถวแรก + เป้าหมาย) */
+const reviewWait = (hist, goals) => (hist || []).slice(0, 8).filter((h) => h && (h.state === "ok_unverified" || (h.doc && h.doc.state === "pending"))).length + (goals || []).filter((g) => g && g.verdict === "DONE_NEEDS_USER").length;
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
-  return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th></tr>
-    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td><td class="nw">${dur(j.duration_sec)}</td></tr>`).join("")}</table></div>`;
+  return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th><th></th></tr>
+    ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
@@ -3750,6 +3752,8 @@ function officeUpdate() {
   const okN = td.filter((h) => h.state === "ok").length, unvN = td.filter((h) => h.state === "ok_unverified").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
   setText("ofTD", `${td.length} งาน`);
   setText("ofTDs", td.length ? `✓ ${okN} ผ่าน${unvN ? ` · ⚠ ${unvN} ยังไม่ยืนยัน` : ""} · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
+  const rw = reviewWait(s.history, m.goals);
+  setText("ofRecentHead", rw ? `· 👀 รอคุณตรวจ ${rw}` : "");
 }
 
 /* --- สลับมุมมอง --- */
