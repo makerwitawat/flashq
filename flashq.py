@@ -1949,6 +1949,7 @@ def said_done(text: str) -> bool:
 def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None = None) -> bool:
     """งานสำเร็จบางส่วนไหม: มี commit ของงานนี้ (ข้อความระบุ T-xx ที่อยู่ในแผน หรือแตะไฟล์แผน) หรือ worker/subagent รายงาน DONE
     (flash.md ให้ worker ตอบ `DONE`/`FAIL`) · commit ของ session อื่นในโปรเจกต์เดียวกันไม่นับ"""
+    head0 = (job or {}).get("head0") or head0
     head1 = _git(root, "rev-parse", "HEAD")
     if head0 and head1 and head0 != head1:
         plan = (job or {}).get("plan")

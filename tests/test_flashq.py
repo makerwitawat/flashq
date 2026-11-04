@@ -162,6 +162,22 @@ class FlashqTest(unittest.TestCase):
         self.assertTrue(mod.job_progressed(self.proj, head1, [], job))  # แตะไฟล์แผน = นับ
         self.assertTrue(mod.job_progressed(self.proj, head0, []))  # ไม่ส่ง job = พฤติกรรมเดิม
 
+    def test_progress_uses_job_head0(self):
+        """job_progressed: ใช้ head0 ที่บันทึกไว้ใน job — commit ของงานในรอบแรกยังนับเมื่อผู้เรียกส่ง head0 ของรอบลองใหม่"""
+        mod = self.load_mod("flashq_progress_head0")
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.proj,  # noqa: E731
+                                        capture_output=True, text=True, encoding="utf-8", check=True)
+        git("init", "-q", "-b", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "เริ่ม")
+        h0 = git("rev-parse", "HEAD").stdout.strip()
+        (self.proj / "x.txt").write_text("a\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "งาน (T-01)")
+        h1 = git("rev-parse", "HEAD").stdout.strip()
+        self.assertTrue(mod.job_progressed(self.proj, h1, [], {"plan": "PLAN.md", "tasks": "T-01", "head0": h0}))
+        self.assertFalse(mod.job_progressed(self.proj, h1, [], {"plan": "PLAN.md", "tasks": "T-01"}))
+
     def test_said_done_ignores_negation(self):
         """DONE ที่ถูกปฏิเสธ (NOT DONE / ยังไม่ DONE / ไม่ได้ DONE) ต้องไม่นับเป็นงานเสร็จ"""
         mod = self.load_mod("flashq_said_done")
