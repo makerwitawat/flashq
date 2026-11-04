@@ -7355,8 +7355,12 @@ def goal_phase(gl: dict, verdict: str, last: dict | None, busy: dict, runs: list
     if fresh and verdict != "DONE" and last_job.get("state") == "cancelled":  # งานรอบนั้นถูกหยุด ไม่ใช่ทำเสร็จ
         return ph("plan", f"🚫 งาน Flash รอบ {last_job['round']} ถูกยกเลิกก่อนเสร็จ — ต้องส่งแผนรอบนี้เข้าคิวใหม่ (ไม่ต้อง goal verify)",
                   last_job.get("ago_sec"), "ยกเลิกมา", True, rnd=last_job["round"])
+    if fresh and verdict != "DONE" and last_job.get("state") not in ("ok", "ok_unverified"):
+        return ph("plan", f"❌ งาน Flash รอบ {last_job['round']} จบด้วย {str(last_job.get('state', '')).upper()} — ดู log แล้วแก้แผน/ส่งใหม่ (ไม่ต้อง goal verify)",
+                  last_job.get("ago_sec"), "จบมา", True, rnd=last_job["round"])
     if fresh and verdict != "DONE":
-        return ph("review", f"📥 Flash ทำรอบ {last_job['round']} เสร็จแล้ว — รอ Claude ตรวจ (goal verify)",
+        return ph("review", f"📥 Flash ทำรอบ {last_job['round']} เสร็จแล้ว — รอ Claude ตรวจ (goal verify)"
+                            + (" · ⚠ ผลยังไม่ยืนยัน" if last_job.get("state") == "ok_unverified" else ""),
                   sess_ago if act else last_job.get("ago_sec"), "เคลื่อนไหวล่าสุด" if act else "Flash เสร็จมา", sess_warn or (not act and (last_job.get("ago_sec") or 0) > 1800))
     age = _secs(gl.get("updated", "")) or 0
     if verdict == "DONE":
@@ -7447,8 +7451,11 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
         last = (gl.get("rounds") or [None])[-1]
         since = (last or {}).get("at") or gl.get("started", "")
         unv = sorted({r["goal"]["round"] for r in rows if id(r) in rn and (r.get("goal") or {}).get("id") == gl["id"]
-                      and r.get("finished", "") > since and r.get("state") not in ("cancelled", "busy", "queue_timeout")
+                      and r.get("finished", "") > since and r.get("state") in ("ok", "ok_unverified")
                       and not any(r is x for x in running + queued)})
+        ok_unv = sorted({r["goal"]["round"] for r in rows if id(r) in rn and (r.get("goal") or {}).get("id") == gl["id"]
+                         and r.get("finished", "") > since and r.get("state") == "ok_unverified"
+                         and not any(r is x for x in running + queued)})
         if gl.get("archived"):  # กด ✖ เก็บแล้ว (goal check/verify ครั้งใหม่เขียนทับ = กลับมาเอง) — ป้ายงานยังติดให้
             continue
         verdict = last["verdict"] if last else "START"
@@ -7474,7 +7481,7 @@ def ui_goals(running: list[dict], history: list[dict] | None = None, queued: lis
         out.append(dict(gl, owner=own, busy=busy, verdict=verdict, age_sec=upd, usage=usage_brief_topic(topic),
                         elapsed_sec=_secs(gl.get("started", ""), end) if final else _secs(gl.get("started", "")),
                         passed=sum(1 for i in machine if res.get(i["id"], {}).get("ok")), machine=len(machine),
-                        jobs=jobs_now, last_job=lj, phase=phase, unverified=unv,
+                        jobs=jobs_now, last_job=lj, phase=phase, unverified=unv, ok_unverified=ok_unv,
                         project_name=Path(gl.get("project", "")).name))
     for r in rows:
         if id(r) in rn and not r.get("goal"):
