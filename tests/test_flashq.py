@@ -81,7 +81,7 @@ class FlashqTest(unittest.TestCase):
 
     def test_epipe_after_done_not_fail(self):
         """opencode รายงาน DONE แล้วตายด้วย EPIPE (rc=1, stderr เป็น traceback EPIPE ล้วน) = OK_UNVERIFIED ไม่ใช่ FAIL · rc ที่บันทึกยังเป็น 1"""
-        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ"})
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ", "FAKE_STEP_REASON": "stop"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)
         self.assertNotIn("FLASH_RUN=FAIL", r.stdout)
@@ -90,6 +90,23 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(job["result"], "OK_UNVERIFIED")
         self.assertEqual(job["rc"], 1)
         self.assertTrue(any("EPIPE" in x for x in job["unverified"]), job["unverified"])
+
+    def test_epipe_done_without_evidence_fail(self):
+        """EPIPE หลัง DONE แต่ไม่มีหลักฐาน (ไม่มี step_finish=stop · ไม่มี commit ของงาน) = FAIL"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE — ครบ"})
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_epipe_done_with_commit_ok(self):
+        """EPIPE หลัง DONE ที่มี commit ของงาน (T-xx) = OK_UNVERIFIED (ตัวกันถอย: หลักฐานจาก commit นับ)"""
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.proj,  # noqa: E731
+                                        capture_output=True, text=True, encoding="utf-8", check=True)
+        git("init", "-q", "-b", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "เริ่ม")
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "epipe", "FAKE_TEXT": "DONE", "FAKE_WRITE": "a.txt",
+                                          "FAKE_COMMIT": "flashq: งาน (T-01)"})
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout)
 
     def test_epipe_without_done_still_fail(self):
         """EPIPE กลางงาน (ยังไม่มี DONE) = ยังต้อง FAIL"""

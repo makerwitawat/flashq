@@ -1888,7 +1888,8 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     perm = perm_denials(errtxt, tool_denied)
     epipe_done = ""
     if status == "OK" and (rc != 0 or errors):
-        if not errors and rc != 0 and epipe_only(errtxt) and said_done(last):
+        if not errors and rc != 0 and epipe_only(errtxt) and said_done(last) \
+                and (last_finish == "stop" or job_progressed(root, head0, [], job)):  # DONE ต้องมีหลักฐาน (ตอบจบ หรือ commit ของงาน) — ไม่งั้นเป็น FAIL
             epipe_done = f"opencode ล้มด้วย EPIPE หลังรายงาน DONE (rc={rc}) — ตรวจงานด้วย /flash-check"
         elif not errors and rc != 0 and epipe_only(errtxt) and (job.get("readonly") or job.get("kind") in ("verify", "investigate")) \
                 and last_finish == "stop" and last:  # งานอ่านอย่างเดียวที่โมเดลตอบจบแล้ว (step_finish=stop) ไม่เขียน DONE ก็ถือว่าจบ

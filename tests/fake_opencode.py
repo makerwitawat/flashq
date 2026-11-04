@@ -7,9 +7,11 @@
   FAKE_ENV_OUT=<path>   เขียนค่า OPENCODE_CONFIG_CONTENT ที่ได้รับลงไฟล์ (ว่าง = ไม่ได้รับ)
   FAKE_MODELS=a/b|c/d    รายชื่อที่ `opencode models` ตอบ (คั่นด้วย |)
   FAKE_SET_MODEL=<model> (คู่ FAKE_MODE=quota) เขียนโมเดลนี้ลง FLASHQ_OPENCODE_CONFIG ก่อนตอบ quota
+  FAKE_COMMIT=<ข้อความ>  commit ทุกไฟล์ใน --dir ด้วยข้อความนี้ (จำลอง worker ที่ commit งานเอง · ต้องมี --dir)
 """
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -30,6 +32,10 @@ if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agen
         os.makedirs(os.path.dirname(_path), exist_ok=True)
         with open(_path, "w", encoding="utf-8") as _f:
             _f.write(os.environ.get("FAKE_WRITE_TEXT", "x"))
+if os.environ.get("FAKE_COMMIT") and "--dir" in sys.argv:  # จำลอง worker ที่ commit งานในโปรเจกต์ (ข้อความ = FAKE_COMMIT)
+    _cwd = sys.argv[sys.argv.index("--dir") + 1]
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], cwd=_cwd, check=False)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", os.environ["FAKE_COMMIT"]], cwd=_cwd, check=False)
 if mode == "nostart":
     time.sleep(600)
     sys.exit(0)
