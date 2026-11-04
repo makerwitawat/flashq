@@ -254,6 +254,9 @@ body[data-of="2"] .of-cards, body[data-of="2"] .of-two { grid-template-columns: 
 /* ย่อการ์ด: เหลือหัว · ธง/ขั้น · แถบ · บรรทัดสรุปเดียว (% · ขั้น · เวลา · กำลังทำ · ⚠) */
 .of-mini { display: none; }
 .of-role { display: inline-block; margin-left: 0.4rem; padding: 0 0.35rem; border: 1px solid var(--line); border-radius: 0.5rem; color: var(--muted); font-size: 0.72rem; font-weight: 400; vertical-align: middle; white-space: nowrap; }  /* ชิปบทบาทบนหัวการ์ด: เล็ก ขอบบาง ไม่ใช้สีเสื้อของตัวละคร */
+.of-boss { margin-bottom: 0.5rem; font-size: 0.85rem; }
+.of-boss ul { margin: 0.2rem 0 0; padding-left: 1.1rem; }
+.of-boss li { margin: 0.15rem 0; }
 .of-card.compact .of-full { display: none; }
 .of-card.compact .of-mini { display: block; }
 .of-card.compact { gap: 0.2rem; padding: 0.45rem 0.7rem; }
@@ -571,6 +574,10 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
   <section class="panel" id="ofGoalBox" hidden data-panel="ofgoals">
     <div class="ph"><h2>🚩 เป้าหมาย <span class="muted" id="ofGcount"></span></h2><span class="sp"></span><button data-compact="goals" title="ย่อการ์ดธง: เหลือหัวเรื่อง · รอบ · ผ่าน · ขั้นตอน (ซ่อนรายการเกณฑ์/ปุ่ม)">▤ ย่อ</button><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
     <div class="pb" id="ofGoals"></div>
+  </section>
+  <section class="panel" id="ofBossBox" hidden data-panel="ofboss">
+    <div class="ph"><h2>👔 หัวหน้า · ใบสั่งงาน <span class="muted" id="ofBossN"></span></h2><span class="sp"></span><button class="ico" data-collapse title="พับ/กาง">▾</button></div>
+    <div class="pb" id="ofBoss"></div>
   </section>
   <div class="of-runs-bar" id="ofRunsBar" hidden><span class="muted">การ์ดงาน <b id="ofRunsN"></b> ช่อง</span><span class="sp"></span><button data-compact-all="1" title="ย่อการ์ดงานทุกช่องเหลือแถบสถานะ + บรรทัดสรุปเดียว">▤ ย่อทั้งหมด</button><button data-compact-all="0" title="ขยายการ์ดงานทุกช่องให้เห็นครบ">▦ ขยายทั้งหมด</button></div>
   <div class="of-cards" id="ofRuns"></div>
@@ -3625,6 +3632,41 @@ function recentCostHTML(f, j) {
 const todayDone = (hist, today) => (hist || []).filter((h) => h && (h.finished || "").startsWith(today || "") && !["cancelled", "busy", "queue_timeout"].includes(h.state));
 /* นับงานที่จบแล้วแต่ยังรอคุณตรวจ (แถว "เพิ่งจบ" 8 แถวแรก + เป้าหมาย) */
 const reviewWait = (hist, goals) => (hist || []).slice(0, 8).filter((h) => h && (h.state === "ok_unverified" || (h.doc && h.doc.state === "pending"))).length + (goals || []).filter((g) => g && g.verdict === "DONE_NEEDS_USER").length;
+/* ใบสั่งงาน: จัดกลุ่มงานที่กำลังทำ/รอคิว/เป้าหมาย ตาม session ที่สั่ง (ไม่มี session = กลุ่มเดียวของโปรเจกต์) */
+function bossGroups(runs, queue, goals) {
+  const list = [], by = {};
+  const put = (key, proj, nm, item) => {
+    let g = by[key];
+    if (!g) { g = by[key] = { key, proj: "", nm: "", items: [] }; list.push(g); }
+    if (!g.nm && nm) g.nm = String(nm).trim();
+    if (!g.proj && proj) g.proj = String(proj);
+    g.items.push(item);
+  };
+  (runs || []).forEach((j) => {
+    if (!j) return;
+    put(j.claude_session || "solo:" + (j.project_name || "-"), j.project_name, j.claude_title, { id: j.id || "", role: roleName(j), what: shortWhat(j), st: "ทำ" });
+  });
+  (queue || []).forEach((j) => {
+    if (!j) return;
+    put(j.claude_session || "solo:" + (j.project_name || "-"), j.project_name, j.claude_title, { id: j.id || "", role: roleName(j), what: shortWhat(j), st: "รอ" });
+  });
+  (goals || []).forEach((g) => {
+    if (!g) return;
+    if (g.verdict === "DONE" || g.verdict === "STOP" || g.verdict === "CANCELLED") return;
+    const key = (g.owner && g.owner.session) || "solo:" + (g.project_name || "-");
+    put(key, g.project_name, g.owner && g.owner.title, { id: "", role: "🚩 เป้าหมาย", what: trunc(g.title || g.goal || "-", 40), st: g.verdict === "DONE_NEEDS_USER" ? "รอตรวจ" : "ทำ" });
+  });
+  return list.map((g) => {
+    let name = trunc(g.nm || "ไม่ทราบผู้สั่ง", 50);
+    if (String(g.key).startsWith("solo:")) name += " · " + (g.proj || "-");
+    return { key: g.key, name, items: g.items };
+  });
+}
+function bossHTML(groups) {
+  groups = groups || [];
+  if (!groups.length) return "";
+  return groups.map((g) => `<div class="of-boss"><b>👔 ${esc(g.name)}</b> <span class="muted">· ${(g.items || []).length} งาน</span><ul>${(g.items || []).map((it) => `<li${it.id ? ` class="click" data-oflog="${esc(it.id)}"` : ""}>${esc(it.role)} ${esc(it.what)} <span class="muted">${esc(it.st)}</span></li>`).join("")}</ul></div>`).join("");
+}
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
@@ -3668,7 +3710,7 @@ function officeUpdate() {
   const fit = fitScene();  // กรอบ/ซูมเปลี่ยน = วาดเฉพาะฉากใหม่ตามความกว้างใหม่
   const m = officeModel();
   const sig = JSON.stringify([m.N, m.desks.map((r) => r && [r.id, r.slot]), Object.entries(m.celeAt).map(([d, c]) => [d, c.id, c.state]),
-    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now, j.claude_title]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state, h.doc && h.doc.state]), m.runs.map((r) => [r.id, r.model, r.claude_title, r.doc && r.doc.phase, r.qa && (r.qa.specs || []).map((x) => x.verdict).join()]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length]);
+    m.queue.map((j) => [j.id, j.position, j.wait_reason, j.run_now, j.claude_title]), m.dead.map((j) => j.id), (state.history || []).slice(0, 8).map((h) => [h.id, h.state, h.doc && h.doc.state]), m.runs.map((r) => [r.id, r.model, r.claude_title, r.doc && r.doc.phase, r.qa && (r.qa.specs || []).map((x) => x.verdict).join()]), m.reviews.map((r) => r.id), m.reviewFin && m.reviewFin.id, m.watched.map((r) => [r.id, r.shell_watch.state, r.shell_watch.cmd]), m.kill && [m.kill.job, m.kill.at], m.lounge.map((p) => [p.k, p.away, p.sleepy]), m.goals.map((x) => [x.id, x.verdict, x.passed, (x.rounds || []).length, Math.floor((x.age_sec || 0) / 600), x.phase && [x.phase.step, x.phase.round, x.phase.warn], x.unverified]), m.runs.map((r) => r.goal && r.goal.round), state.current_model, (state.accounts || []).length, m.runs.concat(m.queue).map((j) => [j.claude_session, j.kind, j.agent]), m.goals.map((x) => [x.id, x.owner && x.owner.session, x.owner && x.owner.title, x.title])]);
   if (sig !== ofSig) {
     ofSig = sig;
     $("ofScene").innerHTML = sceneSVG(m);
@@ -3677,6 +3719,7 @@ function officeUpdate() {
     applyCompact();  // ป้ายปุ่มย่อ/ขยายบนการ์ดที่สร้างใหม่
     $("ofQueue").innerHTML = queueHTML(m);
     $("ofRecent").innerHTML = recentHTML();
+    const bg = bossGroups(m.runs, m.queue, m.goals); $("ofBossBox").hidden = !bg.length; setText("ofBossN", bg.length ? `${bg.length} คนสั่ง` : ""); setHTML("ofBoss", bossHTML(bg));
   } else if (fit) $("ofScene").innerHTML = sceneSVG(m);
   const now = Date.now();
   setText("ofClock", "🕒 " + new Date().toLocaleTimeString("en-GB"));
