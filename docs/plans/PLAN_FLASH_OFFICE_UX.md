@@ -152,17 +152,17 @@ print("EVAL=" + str(r)); sys.exit(0 if r == "OK" else 1)
 
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
-| T-01 | ✅แก้ | 9fdf194 | `.tmp/T-01.node.log` ว่าง · `.tmp/T-01.smoke.log` `UI_SMOKE OK` · `.tmp/T-01.eval.log` `EVAL=OK` · นับ `docLine(` = 4 · `qaLine(` = 4 | |
-| T-02 | ✅แก้ | b190641 | `.tmp/T-02.node.log` ว่าง · `.tmp/T-02.smoke.log` `UI_SMOKE OK` · `.tmp/T-02.eval.log` `EVAL=OK` · นับ `queue_timeout` = 3 | |
-| T-03 | ✅แก้ | 265b1bb | `.tmp/T-03.node.log` ว่าง · `.tmp/T-03.eval.log` `EVAL=OK` (มี `หาต้นตอการ์ดว่าง` · ยังมี `PLAN_X.md`) | |
-| T-04 | ✅แก้ | c7caa90 | `.tmp/T-04.node.log` ว่าง · นับ `L.offset = 0` = 1 · `continue;` อยู่ในลูป `for (let k = 0; k < 6; k++)` — ตรวจจากโค้ด (ทดสอบสดไม่ได้) | |
-| T-05 | ✅แก้ | 08ae9ec | `.tmp/T-05.node.log` ว่าง · `.tmp/T-05.smoke.log` `UI_SMOKE OK` · นับ `ศัพท์ละเอียด` = 1 · `<li>🧑‍💻 <b>นั่งโต๊ะ</b>` = 1 (หมายเหตุ: `Select-String -SimpleMatch` บน PowerShell 5.1 ให้ `.Matches.Count` = 0 เสมอ — worker นับด้วย regex แทน) | |
-| T-06 | ✅แก้ | a8186ab | `.tmp/T-06.node.log` ว่าง · `.tmp/T-06.smoke.log` `UI_SMOKE OK` · `.tmp/T-06.eval.log` `EVAL=OK` · นับ `ofRecentHead` = 2 | |
-| T-07 | ✅แก้ | ee38d27 | `.tmp/T-07.node.log` ว่าง · `.tmp/T-07.smoke.log` `UI_SMOKE OK` · `.tmp/T-07.eval.log` `EVAL=OK` · นับ `ช่างโค้ด` = 2 | |
-| T-08 | ✅แก้ | c994259 | `.tmp/T-08.node.log` ว่าง · `.tmp/T-08.smoke.log` `UI_SMOKE OK` · `.tmp/T-08.eval.log` `EVAL=OK` · นับ `logBackOffice` = 6 | |
-| T-09 | ✅แก้ | 9a06609 | `.tmp/T-09.node.log` ว่าง · `.tmp/T-09.smoke.log` `UI_SMOKE OK` · `.tmp/T-09.eval.log` `EVAL=OK` · นับ `of-more` = 1 | |
-| T-10 | ✅แก้ | e2a7169 | `.tmp/T-10.node.log` ว่าง · `.tmp/T-10.smoke.log` `UI_SMOKE OK` · `.tmp/T-10.eval.log` `EVAL=OK` · นับ `ofBoss` = 7 | |
-| T-11 | ✅แก้ | 90cb282 | `.tmp/T-11.smoke.log` `UI_SMOKE OK` · `docs/REFERENCE.md` `หัวหน้า · ใบสั่งงาน` = 1 · `CHANGELOG.md` `## 2026-11-04` = 1 · `ออฟฟิศใช้ง่ายขึ้น` = 1 | |
+| T-01 | ✅แก้ | 9fdf194 | `.tmp/T-01.node.log` ว่าง · `.tmp/T-01.smoke.log` `UI_SMOKE OK` · `.tmp/T-01.eval.log` `EVAL=OK` · นับ `docLine(` = 4 · `qaLine(` = 4 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-02 | ✅แก้ | b190641 | `.tmp/T-02.node.log` ว่าง · `.tmp/T-02.smoke.log` `UI_SMOKE OK` · `.tmp/T-02.eval.log` `EVAL=OK` · นับ `queue_timeout` = 3 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-03 | ✅แก้ | 265b1bb | `.tmp/T-03.node.log` ว่าง · `.tmp/T-03.eval.log` `EVAL=OK` (มี `หาต้นตอการ์ดว่าง` · ยังมี `PLAN_X.md`) |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-04 | ✅แก้ | c7caa90 | `.tmp/T-04.node.log` ว่าง · นับ `L.offset = 0` = 1 · `continue;` อยู่ในลูป `for (let k = 0; k < 6; k++)` — ตรวจจากโค้ด (ทดสอบสดไม่ได้) |  ✅ผ่าน (ตรวจจากโค้ด: รีเซ็ต offset จริง · ทดสอบสดไม่ได้) |
+| T-05 | ✅แก้ | 08ae9ec | `.tmp/T-05.node.log` ว่าง · `.tmp/T-05.smoke.log` `UI_SMOKE OK` · นับ `ศัพท์ละเอียด` = 1 · `<li>🧑‍💻 <b>นั่งโต๊ะ</b>` = 1 (หมายเหตุ: `Select-String -SimpleMatch` บน PowerShell 5.1 ให้ `.Matches.Count` = 0 เสมอ — worker นับด้วย regex แทน) |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-06 | ✅แก้ | a8186ab | `.tmp/T-06.node.log` ว่าง · `.tmp/T-06.smoke.log` `UI_SMOKE OK` · `.tmp/T-06.eval.log` `EVAL=OK` · นับ `ofRecentHead` = 2 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-07 | ✅แก้ | ee38d27 | `.tmp/T-07.node.log` ว่าง · `.tmp/T-07.smoke.log` `UI_SMOKE OK` · `.tmp/T-07.eval.log` `EVAL=OK` · นับ `ช่างโค้ด` = 2 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-08 | ✅แก้ | c994259 | `.tmp/T-08.node.log` ว่าง · `.tmp/T-08.smoke.log` `UI_SMOKE OK` · `.tmp/T-08.eval.log` `EVAL=OK` · นับ `logBackOffice` = 6 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-09 | ✅แก้ | 9a06609 | `.tmp/T-09.node.log` ว่าง · `.tmp/T-09.smoke.log` `UI_SMOKE OK` · `.tmp/T-09.eval.log` `EVAL=OK` · นับ `of-more` = 1 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-10 | ✅แก้ | e2a7169 | `.tmp/T-10.node.log` ว่าง · `.tmp/T-10.smoke.log` `UI_SMOKE OK` · `.tmp/T-10.eval.log` `EVAL=OK` · นับ `ofBoss` = 7 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
+| T-11 | ✅แก้ | 90cb282 | `.tmp/T-11.smoke.log` `UI_SMOKE OK` · `docs/REFERENCE.md` `หัวหน้า · ใบสั่งงาน` = 1 · `CHANGELOG.md` `## 2026-11-04` = 1 · `ออฟฟิศใช้ง่ายขึ้น` = 1 |  ✅ผ่าน (ตรวจ commit/ไฟล์ที่แตะ/เวลา log/ข้อความหลักใน diff) |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - ผู้สืบเสนอเพิ่ม: คีย์สีเสื้อ = โปรเจกต์ (`ofProjKey`) · คำอธิบาย "ช่อง/คิว" ใต้ tile + เปลี่ยนชื่อ tile ประหยัด · ปุ่ม "ดูทั้งหมด" ในแผงเพิ่งจบ · ตัวหัวหน้าในฉาก SVG — ยังไม่สั่งรอบนี้
