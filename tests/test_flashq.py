@@ -286,6 +286,15 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
 
+    def test_wait_and_log_show_unverified_warn(self):
+        """wait/log พิมพ์บรรทัด WARN บอกเหตุของผล OK_UNVERIFIED เหมือนที่ run พิมพ์"""
+        self.run_q(*self.base())
+        jid = json.loads(max((self.home / "jobs").glob("*.json"), key=lambda f: f.stat().st_mtime).read_text(encoding="utf-8"))["id"]
+        r2 = self.run_q("wait", jid, "--poll", "0.5")
+        r3 = self.run_q("log", jid)
+        for r in (r2, r3):
+            self.assertIn("WARN: ผล OK ยังไม่ยืนยัน — ไม่มี commit ของงานและไม่มีคำว่า DONE", r.stdout)
+
     def test_shrink_image(self):
         """shrink ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ด้านยาว ≤ --max · พื้นโปร่งเป็นขาว"""
         try:

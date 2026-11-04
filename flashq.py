@@ -4289,6 +4289,8 @@ def cmd_wait(a) -> int:
         if j.get("perm_denied"):
             for ln in perm_fix_lines(j["perm_denied"], partial=res != "DENIED"):
                 print(ln)
+        if str(j.get("result") or "").upper() == "OK_UNVERIFIED" and j.get("unverified"):
+            print("WARN: ผล OK ยังไม่ยืนยัน — " + " · ".join(j["unverified"]))
         print("---- สรุปท้าย ----")
         print((j.get("last") or "(ไม่มีข้อความ)")[-1500:])
         if res not in ("OK", "OK_UNVERIFIED"):
@@ -4463,6 +4465,8 @@ def cmd_log(a) -> int:
     if not j:
         return 1
     print(json.dumps({k: v for k, v in j.items() if k != "last"}, ensure_ascii=False, indent=1))
+    if str(j.get("result") or "").upper() == "OK_UNVERIFIED" and j.get("unverified"):
+        print("WARN: ผล OK ยังไม่ยืนยัน — " + " · ".join(j["unverified"]))
     print("---- ข้อความท้าย ----")
     if j.get("kind") == "qa" and (j.get("qa") or {}).get("verdict"):  # สรุปเต็ม (ใน last ถูกตัดที่ 1500 ตัวอักษร)
         head, body = qa_summary(j["qa"])
