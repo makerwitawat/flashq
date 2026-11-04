@@ -1924,11 +1924,23 @@ def perm_denials(errtxt: str, tool_denied: list[str]) -> list[dict]:
 
 
 def said_done(text: str) -> bool:
-    """มี DONE ที่ไม่ได้ถูกปฏิเสธไหม — "NOT DONE" / "ยังไม่ DONE" / "ไม่ได้ DONE" / "ไม่ DONE" ไม่นับ"""
+    """มี DONE ที่ไม่ได้ถูกปฏิเสธไหม — "NOT DONE" / "ยังไม่ DONE" / "ไม่ได้ DONE" / "ไม่ DONE" ไม่นับ
+    และ DONE ในประโยคสั่ง/เงื่อนไข (ห้าม/จะ/เมื่อ/ถ้า/ก่อน) หรือในแถวตาราง markdown ก็ไม่นับ"""
     for m in re.finditer(r"\bDONE\b", text):
         start = text.rfind("\n", 0, m.start()) + 1
+        end_line = text.find("\n", m.start())
+        line = text[start:end_line if end_line != -1 else len(text)]
+        if line.lstrip(" \t").startswith("|"):
+            continue
         prev = text[start:m.start()].rstrip(" \t\r\n*_\"'")
         if prev.lower().endswith("not") or prev.endswith(("ยังไม่", "ไม่ได้", "ไม่")):
+            continue
+        clause = re.split(r"[.!?·;—|]", text[start:m.start()])[-1]
+        if re.search(r"จะ|เมื่อ|ห้าม|ถ้า|ก่อน|หาก|\b(?:will|if|when|before|don'?t|do not)\b", clause, re.I):
+            continue
+        rest = text[m.end():end_line if end_line != -1 else len(text)]
+        tail = re.split(r"[.!?·;—|\n]", rest)[0]
+        if re.search(r"เมื่อ|ถ้า|หาก|\bif\b|\bwhen\b", tail, re.I):
             continue
         return True
     return False

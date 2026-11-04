@@ -170,6 +170,16 @@ class FlashqTest(unittest.TestCase):
         for t in ("T-01 DONE แล้ว", "สถานะ: DONE", "**DONE**"):
             self.assertTrue(mod.job_progressed(self.proj, "", [t]), t)
 
+    def test_said_done_strict(self):
+        """DONE ในประโยคสั่ง/เงื่อนไข (ห้าม/จะ/เมื่อ/ถ้า/ก่อน) และแถวตารางไม่นับเป็นงานเสร็จ"""
+        mod = self.load_mod("flashq_said_done_strict")
+        for t in ("ห้ามรายงาน DONE", "จะรายงาน DONE เมื่อเทสต์ผ่าน", "รายงาน DONE เมื่อเทสต์ผ่าน",
+                  "ถ้าผ่านให้ตอบ DONE", "| T-01 | DONE | abc123 |", "do not write DONE yet"):
+            self.assertFalse(mod.said_done(t), t)
+        for t in ("T-01 DONE แล้ว", "สถานะ: DONE", "**DONE**", "DONE",
+                  "ห้ามแตะไฟล์อื่น · T-01 DONE", "ข้อ 1 ถ้าผ่านให้ตอบ\nT-01 DONE"):
+            self.assertTrue(mod.said_done(t), t)
+
     def test_missing_plan(self):
         r = self.run_q("run", "NOPE.md", "T-01", "--attach", "none", "--no-open")
         self.assertEqual(r.returncode, 1)
