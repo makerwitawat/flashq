@@ -3566,7 +3566,7 @@ function fromClaudeChip(j) {  // แบบเล็กสำหรับแถ�
   return `<div><span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(trunc(j.claude_title || "(ไม่พบชื่อ session)", 50))}</span> ${openClaudeBtn(j)}</div>`;
 }
 function runCardHTML(r, k) {
-  const plan = (isVerify(r) ? roleTag(r) : "") + (isQa(r) ? "" : r.message && !isSleuth(r) ? "ทดสอบ --message" : String(r.plan || "").split(/[\\/]/).pop());
+  const plan = (isVerify(r) ? roleTag(r) : "") + (isQa(r) ? "" : r.message && !isSleuth(r) ? "ทดสอบ --message" : isSleuth(r) && r.message ? trunc(r.message, 60) : String(r.plan || "").split(/[\\/]/).pop());
   return `<article class="of-card${compactRuns()[r.id] ? ' compact' : ''}" id="ofC${k}">
     <div class="of-ch"><span class="dot"></span><b>ช่อง ${r.slot || k + 1}</b><span class="of-proj" style="--h:${hueOf(r.project_name)}">${esc(r.project_name)}</span>
       <span class="muted mono of-plan" title="${esc(plan + " " + (r.message ? "" : r.tasks || ""))}">${esc(plan)} ${esc(r.message ? "" : r.tasks)}</span><span class="of-acts"><button data-compact-run="${esc(r.id)}" title="ย่อ/ขยายการ์ดนี้: ย่อ = เหลือแถบสถานะ + บรรทัดสรุปเดียว">${compactRuns()[r.id] ? '▦ ขยาย' : '▤ ย่อ'}</button><button data-oflog="${esc(r.id)}">ดู log สด</button></span></div>
