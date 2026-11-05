@@ -57,7 +57,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - หลักฐานชี้ขาด: red บรรทัด `KeyError: 'unresolved'` · green/reg บรรทัดท้าย `passed` ไม่มี `failed`
   - commit: `flashq: ตรวจ citation แยก ผิดจริง/ตรวจไม่ได้/เลขเพี้ยน (path ย่อ · ชื่อเปล่า · ห่างไม่เกิน 40 บรรทัดบอกเลขที่ถูก) (T-01)`
 
-- [ ] **T-02** `flashq.py` ~562 (`_cite_file`) + ~607 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` ~562 (`_cite_file`) + ~607 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_check_citations_ambiguous_tries_all` (repo จำลอง: `a/app.js` = `["var a = 1;", "function boot() {", "}"]` · `b/app.js` = `["var b = 2;", "x = 0;", "function render(p) {", "}"]` · ไม่มี citation path เต็มอื่นเป็น anchor):
     1. ``"`app.js:3` — `function render(p) {`"`` → ok 1, ok_code 1, unresolved []
     2. ``"`app.js:2` — `function boot() {`"`` → ok_code 1 (ตรงใน a/app.js)
@@ -131,7 +131,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | - | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
+| T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
+| T-02 | ✅แก้ | - | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)

@@ -2271,6 +2271,38 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual(len(r["bad"]), 1)
             self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][0])
 
+    def test_check_citations_ambiguous_tries_all(self):
+        """ชื่อไฟล์กำกวม: ลองเทียบข้อความคัดกับทุกไฟล์ที่ชื่อตรงก่อนตัดสิน (ตรง/ไม่ตรงเลย/ไม่มีข้อความคัด)"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            files = {
+                "a/app.js": ["var a = 1;", "function boot() {", "}"],
+                "b/app.js": ["var b = 2;", "x = 0;", "function render(p) {", "}"],
+            }
+            for rel, ls in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text("\n".join(ls) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            r = chk("`app.js:3` — `function render(p) {`")
+            self.assertEqual(r["ok"], 1)
+            self.assertEqual(r["ok_code"], 1)
+            self.assertEqual(r["unresolved"], [])
+            r = chk("`app.js:2` — `function boot() {`")
+            self.assertEqual(r["ok_code"], 1)
+            r = chk("`app.js:1` — `const ghost = 9;`")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ทุกไฟล์ที่ชื่อตรง", r["bad"][0])
+            r = chk("`app.js:1` ดู")
+            self.assertEqual(len(r["unresolved"]), 1)
+            self.assertIn("กำกวม", r["unresolved"][0])
+
     def test_readonly_job_warns_when_files_change_and_agent_timeout(self):
         """งาน readonly แล้วไฟล์ในโปรเจกต์เปลี่ยน → WARN · ไม่เปลี่ยน → เงียบ · ผู้สืบ/ผู้ตรวจ timeout ค่าเริ่มต้นสั้นกว่างานทำจริง"""
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.proj, check=True)

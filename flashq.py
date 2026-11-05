@@ -560,13 +560,13 @@ CITE_DRIFT = 40 # ข้อความที่คัดไม่ตรงบ�
 CITE_NEG_RE = re.compile(r"ไม่|ขาด|หาย")  # "ไม่มีคีย์ `source`" = อ้างว่าบรรทัดนี้ไม่มีสิ่งนั้น ไม่ใช่การคัดโค้ด
 
 
-def _cite_file(rel: str, root: Path, tracked: list[str], anchors: list[str]) -> tuple[Path | None, str]:
-    """หาไฟล์ที่ citation หมายถึง → (ไฟล์, "") หรือ (None, เหตุผล) · ชื่อย่อ (`viewer.py` = `rig_std_viewer.py`) ใช้ได้เมื่อชี้ไฟล์เดียว
+def _cite_file(rel: str, root: Path, tracked: list[str], anchors: list[str]) -> tuple[Path | None, str, list[str]]:
+    """หาไฟล์ที่ citation หมายถึง → (ไฟล์, "", []) หรือ (None, เหตุผล, รายชื่อผู้สมัครเมื่อกำกวม) · ชื่อย่อ (`viewer.py` = `rig_std_viewer.py`) ใช้ได้เมื่อชี้ไฟล์เดียว
     ไฟล์ชื่อซ้ำหลายที่ → เลือกอันที่อยู่ใต้โฟลเดอร์เดียวกับ citation อื่นที่ระบุ path ครบในรายงาน (anchors) · ยังเลือกไม่ได้ = กำกวม ไม่เดา"""
     f = root / rel
     try:
         if f.resolve().is_relative_to(root) and f.is_file():
-            return f, ""
+            return f, "", []
     except OSError:
         pass
     base = rel.rsplit("/", 1)[-1]
@@ -585,11 +585,11 @@ def _cite_file(rel: str, root: Path, tracked: list[str], anchors: list[str]) -> 
     else:
         pick = []
     if pick:
-        return root / pick[0], ""
+        return root / pick[0], "", []
     pool = exact + loose
     if not pool:
-        return None, "ไม่พบไฟล์"
-    return None, f"ชื่อไฟล์กำกวม (ตรง {len(pool)} ไฟล์ เช่น {', '.join(pool[:2])}) — ต้องระบุ path เต็ม"
+        return None, "ไม่พบไฟล์", []
+    return None, f"ชื่อไฟล์กำกวม (ตรง {len(pool)} ไฟล์ เช่น {', '.join(pool[:2])}) — ต้องระบุ path เต็ม", pool
 
 
 def _cite_snippet_ok(snippet: str, window: str) -> bool | None:
@@ -603,6 +603,47 @@ def _cite_snippet_ok(snippet: str, window: str) -> bool | None:
     # คัดไม่ตรงตัวแต่ถูกคำ (เช่น `ValueError: ข้อความ` จากโค้ด ValueError('ข้อความ…')) → มีคำ ≥3 ตัวอักษรอย่างน้อย 2 คำและทุกคำต้องอยู่ในหน้าต่าง
     words = [w for p in parts for w in re.split(r"[\s()\[\]{}:;,='\"+*<>|&!?/\\.\-]+", p) if len(w) >= 3]
     return len(words) >= 2 and all(w in window for w in words)  # คำเดียว (เช่น `int z = 5;` → int) หลวมเกินไป ต้องตรงตัวเท่านั้น
+
+
+def _cite_spans(region: str) -> tuple[list[str], list[str]]:
+    """แยกข้อความคัดจาก region → (ใกล้ citation, ไกล citation ที่หน้าตาเป็นโค้ด)"""
+    near, far = [], []
+    for sp in re.finditer(r"`([^`]*)`", region):  # แยกทุก code span (สั้นก็นับ) กันคู่ backtick เหลื่อม
+        x = sp.group(1).strip()
+        if len(x) < 4 or x.endswith(("()", "/")) or CITE_NEG_RE.search(region[max(0, sp.start() - 14):sp.start()]):
+            continue
+        if sp.start() > CITE_NEAR:
+            if CITE_CODEISH_RE.search(x):  # คำเดี่ยวไกล ๆ (`mesh`) มักเป็นคำพูดถึงของอื่น ไม่ใช่โค้ดที่คัด → เอาเฉพาะที่หน้าตาเป็นโค้ด/path
+                far.append(x)
+        else:
+            near.append(x)
+    return near, far
+
+
+def _cite_judge(near: list[str], far: list[str], line: int, last: int, lines: list[str]) -> tuple[str, str | None, int | None, bool]:
+    """ตัดสิน citation กับไฟล์เดียว → (ผล, ข้อความคัด, บรรทัดที่เจอ, มีข้อความคัดเทียบไหม) · ผล = ok/drift/bad/bad_far"""
+    window = re.sub(r"\s+", " ", " ".join(lines[max(0, line - 4):last + 3]))
+    verdicts = [(x, _cite_snippet_ok(x, window)) for x in near]
+    verdicts = [(x, v) for x, v in verdicts if v is not None]
+    miss = [x for x, v in verdicts if not v]
+    if verdicts and len(miss) == len(verdicts):
+        found = None
+        for d in range(0, CITE_DRIFT + 1):  # เรียงจากใกล้ไปไกล · เทียบบรรทัดเดียว (หน้าต่าง ±3 ครอบไปแล้ว)
+            for n in ([line] if d == 0 else [line - d, line + d]):
+                if 1 <= n <= len(lines) and _cite_snippet_ok(miss[0], lines[n - 1]):
+                    found = n
+                    break
+            if found is not None:
+                break
+        if found is not None:
+            return "drift", miss[0], found, True
+        return "bad", miss[0], None, True
+    if not verdicts and far:  # ไม่มีข้อความติด citation แต่มีที่ห่างออกไปในประโยคเดียวกัน → เทียบทั้งไฟล์ (เทียบ ±3 ไม่ได้ เพราะอาจเป็นของอีกจุด) · ไม่มีในไฟล์เลย = ผิดแน่
+        whole = re.sub(r"\s+", " ", " ".join(lines))
+        fv = [(x, v) for x in far for v in [_cite_snippet_ok(x, whole)] if v is not None]
+        if fv and not any(v for _, v in fv):
+            return "bad_far", fv[0][0], None, False
+    return "ok", None, None, bool(verdicts)
 
 
 def check_citations(text: str, root: Path) -> dict:
@@ -637,12 +678,45 @@ def check_citations(text: str, root: Path) -> dict:
             for e in CITE_ELLIPSIS_RE.finditer(target):
                 last = e
             target = (target[last.end():] if last else target).lstrip("/")
-        f, why = _cite_file(target, root, tracked, anchors)
+        eol = text.find("\n", m.end())
+        region = text[m.end():min(len(text) if eol < 0 else eol, cites[i + 1].start() if i + 1 < len(cites) else len(text))]
+        if m.start() and text[m.start() - 1] == "`" and "`" in region:  # citation อยู่ใน code span → backtick แรกหลังนี้คือตัวปิด (ไม่ใช่ตัวเปิดของข้อความคัด)
+            region = region[region.index("`") + 1:]
+        cut = CITE_CLAUSE_RE.search(region)  # ข้อความหลัง · / → / `:123` เป็นของประเด็นอื่น ไม่ใช่ของ citation นี้
+        region = region[:cut.start()] if cut else region
+        near, far = _cite_spans(region)
+        last = max(line, int(m.group(3) or 0))  # ช่วง `a.py:48-53` → หน้าต่างครอบถึงบรรทัดท้ายช่วง
+        f, why, pool = _cite_file(target, root, tracked, anchors)
         if f is None or not f.is_file():
             if short:
                 unresolved.append(f"{rel}:{line} — path ย่อ ตรวจไม่ได้ — ต้องระบุ path เต็มจากรากโปรเจกต์")
             elif why.startswith("ชื่อไฟล์กำกวม"):
-                unresolved.append(f"{rel}:{line} — {why}")
+                hits, drifts = [], []
+                for p in pool:
+                    try:
+                        plines = (root / p).read_text(encoding="utf-8-sig", errors="replace").splitlines()
+                    except OSError:
+                        continue
+                    if not 1 <= line <= len(plines):
+                        continue
+                    kind, snip, found, vflag = _cite_judge(near, far, line, last, plines)
+                    if kind == "ok" and vflag:
+                        hits.append(p)
+                    elif kind == "drift":
+                        drifts.append((p, snip, found))
+                if hits:
+                    ok += 1
+                    code += 1
+                    continue
+                if drifts:
+                    p, snip, found = drifts[0]
+                    drift.append(f"{rel}:{line} → {p}:{found} — ข้อความที่คัดอยู่ที่บรรทัด {found} (ห่าง {abs(found - line)} บรรทัด · เลขเพี้ยน): `{snip[:60]}`")
+                    continue
+                snips = [x for x in near if _cite_snippet_ok(x, "") is not None]
+                if not snips:
+                    unresolved.append(f"{rel}:{line} — {why}")
+                    continue
+                bad.append(f"{rel}:{line} — ข้อความที่คัดไม่อยู่ในทุกไฟล์ที่ชื่อตรง ({len(pool)} ไฟล์): `{snips[0][:60]}`")
             elif "/" in rel:
                 bad.append(f"{rel}:{line} — {why or 'ไม่พบไฟล์'}")
             else:
@@ -656,48 +730,18 @@ def check_citations(text: str, root: Path) -> dict:
         if not 1 <= line <= len(lines):
             bad.append(f"{rel}:{line} — เลขบรรทัดเกินไฟล์ (มี {len(lines)} บรรทัด)")
             continue
-        eol = text.find("\n", m.end())
-        region = text[m.end():min(len(text) if eol < 0 else eol, cites[i + 1].start() if i + 1 < len(cites) else len(text))]
-        if m.start() and text[m.start() - 1] == "`" and "`" in region:  # citation อยู่ใน code span → backtick แรกหลังนี้คือตัวปิด (ไม่ใช่ตัวเปิดของข้อความคัด)
-            region = region[region.index("`") + 1:]
-        last = max(line, int(m.group(3) or 0))  # ช่วง `a.py:48-53` → หน้าต่างครอบถึงบรรทัดท้ายช่วง
-        window = re.sub(r"\s+", " ", " ".join(lines[max(0, line - 4):last + 3]))
-        cut = CITE_CLAUSE_RE.search(region)  # ข้อความหลัง · / → / `:123` เป็นของประเด็นอื่น ไม่ใช่ของ citation นี้
-        region = region[:cut.start()] if cut else region
-        verdicts, far = [], []
-        for sp in re.finditer(r"`([^`]*)`", region):  # แยกทุก code span (สั้นก็นับ) กันคู่ backtick เหลื่อม
-            x = sp.group(1).strip()
-            if len(x) < 4 or x.endswith(("()", "/")) or CITE_NEG_RE.search(region[max(0, sp.start() - 14):sp.start()]):
-                continue
-            if sp.start() > CITE_NEAR:
-                if CITE_CODEISH_RE.search(x):  # คำเดี่ยวไกล ๆ (`mesh`) มักเป็นคำพูดถึงของอื่น ไม่ใช่โค้ดที่คัด → เอาเฉพาะที่หน้าตาเป็นโค้ด/path
-                    far.append(x)
-            else:
-                verdicts.append((x, _cite_snippet_ok(x, window)))
-        verdicts = [(x, v) for x, v in verdicts if v is not None]
-        miss = [x for x, v in verdicts if not v]
-        if verdicts and len(miss) == len(verdicts):
-            found = None
-            for d in range(0, CITE_DRIFT + 1):  # เรียงจากใกล้ไปไกล · เทียบบรรทัดเดียว (หน้าต่าง ±3 ครอบไปแล้ว)
-                for n in ([line] if d == 0 else [line - d, line + d]):
-                    if 1 <= n <= len(lines) and _cite_snippet_ok(miss[0], lines[n - 1]):
-                        found = n
-                        break
-                if found is not None:
-                    break
-            if found is not None:
-                drift.append(f"{rel}:{line} — ข้อความที่คัดอยู่ที่บรรทัด {found} (ห่าง {abs(found - line)} บรรทัด · เลขเพี้ยน): `{miss[0][:60]}`")
-            else:
-                bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{miss[0][:60]}`")
+        kind, snip, found, vflag = _cite_judge(near, far, line, last, lines)
+        if kind == "drift":
+            drift.append(f"{rel}:{line} — ข้อความที่คัดอยู่ที่บรรทัด {found} (ห่าง {abs(found - line)} บรรทัด · เลขเพี้ยน): `{snip[:60]}`")
             continue
-        if not verdicts and far:  # ไม่มีข้อความติด citation แต่มีที่ห่างออกไปในประโยคเดียวกัน → เทียบทั้งไฟล์ (เทียบ ±3 ไม่ได้ เพราะอาจเป็นของอีกจุด) · ไม่มีในไฟล์เลย = ผิดแน่
-            whole = re.sub(r"\s+", " ", " ".join(lines))
-            fv = [(x, v) for x in far for v in [_cite_snippet_ok(x, whole)] if v is not None]
-            if fv and not any(v for _, v in fv):
-                bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่มีในไฟล์นี้เลย: `{fv[0][0][:60]}`")
-                continue
+        if kind == "bad":
+            bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{snip[:60]}`")
+            continue
+        if kind == "bad_far":
+            bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่มีในไฟล์นี้เลย: `{snip[:60]}`")
+            continue
         ok += 1
-        code += 1 if verdicts else 0  # ตรงถึงตัวโค้ด (มีข้อความคัดและตรง) ต่างจากตรงแค่ไฟล์/เลขบรรทัด
+        code += 1 if vflag else 0  # ตรงถึงตัวโค้ด (มีข้อความคัดและตรง) ต่างจากตรงแค่ไฟล์/เลขบรรทัด
     return {"ok": ok, "ok_code": code, "bad": bad, "unresolved": unresolved, "drift": drift}
 
 
