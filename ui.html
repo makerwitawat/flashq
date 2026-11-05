@@ -94,23 +94,29 @@ td.act { white-space: nowrap; text-align: right; }
 td.act button { margin-left: 0.2rem; }
 /* ตาราง "เพิ่งจบ": ปุ่มซ้อนเป็นแนวตั้งในคอลัมน์แคบ · ข้อความยาวตัดบรรทัด ไม่ดันตารางล้นจอ */
 /* "เพิ่งจบ": รายการการ์ดแถวละงาน — บรรทัด 1 สถานะ·ชื่องาน·เวลา · 2 ชิป · 3 สรุปโมเดล/token บรรทัดเดียว · 4 ปุ่มเล็ก */
-.rc-list { display: grid; }
-.rc { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 0.6rem; row-gap: 0.25rem; align-items: center; padding: 0.6rem 0.5rem 0.6rem 0.6rem; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; }
-.rc:last-child { border-bottom: 0; }
-.rc:hover { background: var(--hover); }
-.rc.wait { border-left-color: var(--quota); background: color-mix(in srgb, var(--quota) 10%, transparent); }  /* รอคุณตรวจ = แถบเหลืองซ้าย */
-.rc > .rc-sub { grid-column: 1 / -1; min-width: 0; }
-.rc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.rc-title .mono { font-weight: 400; color: var(--muted); margin-left: 0.3rem; }
-.rc-time { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
-.rc-chips { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
-.rc-chips .of-from-sm { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "เพิ่งจบ": ตาราง 4 คอลัมน์ (สถานะ · โปรเจกต์·งาน · ใช้เวลา · ปุ่มไอคอน) คอลัมน์งานได้พื้นที่ที่เหลือและตัดบรรทัดเอง ไม่ล้นจอ */
+table.recent { table-layout: fixed; }
+table.recent th:nth-child(1) { width: 5.6rem; }
+table.recent th:nth-child(3) { width: 5.4rem; }
+table.recent th:nth-child(4) { width: 2.9rem; }
+table.recent td { min-width: 0; overflow: hidden; }
+table.recent td:nth-child(3) { white-space: normal; color: var(--muted); font-size: 0.88rem; }
+table.recent td.act { text-align: right; padding-left: 0.2rem; padding-right: 0.3rem; }
+table.recent td.act button.ic { display: block; width: 2rem; height: 1.7rem; padding: 0; margin: 0 0 0.25rem auto; font-size: 1rem; line-height: 1; text-align: center; }
+table.recent td.act button.ic:last-child { margin-bottom: 0; }
+table.recent tr.wait td { background: color-mix(in srgb, var(--quota) 10%, transparent); }
+table.recent tr.wait td:first-child { box-shadow: inset 3px 0 0 var(--quota); }  /* รอคุณตรวจ = แถบเหลืองซ้าย */
+.rc-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-title .mono { margin-left: 0.3rem; color: var(--muted); }
+.rc-chip { margin: 0.25rem 0; overflow: hidden; }
+.rc-chip .of-from-sm { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-chips { display: flex; align-items: center; gap: 0.35rem; margin: 0.25rem 0; min-width: 0; }
+.rc-chips .of-from-sm { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-chips > * { flex: none; }
+.rc-chips > .of-from-btn { margin-left: 0; }
 .rc-chips > .of-from-sm { flex: 0 1 auto; }
-.rc-meta { color: var(--muted); font-size: 0.84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-meta { color: var(--muted); font-size: 0.84rem; overflow-wrap: anywhere; }  /* ยาวก็ขึ้นบรรทัดใหม่ ไม่ตัดข้อมูลทิ้ง */
 .rc-meta b { color: var(--text); }
-.rc-acts { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-.rc-acts button { padding: 0.2rem 0.65rem; font-size: 0.82rem; }
 tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--hover); }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
@@ -2054,11 +2060,12 @@ function setMax(panel) {
 $("backdrop").onclick = () => setMax(null);
 
 /* ---------- render ---------- */
-function actBtns(j, { retry = true, short = true, check = false } = {}) {
+function actBtns(j, { retry = true, short = true, check = false, icon = false } = {}) {  // icon = ปุ่มไอคอนเล็ก (ตาราง "เพิ่งจบ") · ชื่อเต็มอยู่ใน title
   let h = "";
-  if (check) h += `<button class="primary" data-cc="${esc(j.id)}" title="เปิด session Claude ใหม่ที่โฟลเดอร์โปรเจกต์ พร้อมข้อความตรวจผลงานนี้ (งาน OK = /flash-check · ล้ม = ดูสาเหตุ) — กด Enter ในแอปเพื่อเริ่ม">${short ? "เปิด Claude" : "เปิด Claude ตรวจ"}</button>`;
-  if (j.plan) h += `<button data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอก /flash-check ${esc(j.plan)}">${short ? "คัดลอก" : "คัดลอก /flash-check"}</button>`;
-  if (retry) h += `<button data-retry="${esc(j.id)}" title="ส่งงานเดิมเข้าคิวอีกครั้ง">สั่งซ้ำ</button>`;
+  const ic = icon ? ' class="ic"' : "";
+  if (check) h += `<button class="primary${icon ? " ic" : ""}" data-cc="${esc(j.id)}" title="เปิด session Claude ใหม่ที่โฟลเดอร์โปรเจกต์ พร้อมข้อความตรวจผลงานนี้ (งาน OK = /flash-check · ล้ม = ดูสาเหตุ) — กด Enter ในแอปเพื่อเริ่ม" aria-label="เปิด Claude">${icon ? "↗" : short ? "เปิด Claude" : "เปิด Claude ตรวจ"}</button>`;
+  if (j.plan) h += `<button${ic} data-copy="${esc("/flash-check " + j.plan)}" title="คัดลอก /flash-check ${esc(j.plan)}" aria-label="คัดลอก">${icon ? "⧉" : short ? "คัดลอก" : "คัดลอก /flash-check"}</button>`;
+  if (retry) h += `<button${ic} data-retry="${esc(j.id)}" title="ส่งงานเดิมเข้าคิวอีกครั้ง" aria-label="สั่งซ้ำ">${icon ? "↻" : "สั่งซ้ำ"}</button>`;
   return h;
 }
 
@@ -3689,22 +3696,15 @@ function bossHTML(groups) {
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
-  return `<div class="rc-list">${h.map((j) => {
+  return `<div class="table-wrap"><table class="recent"><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th><th></th></tr>${h.map((j) => {
     const f = j.flash, wait = j.state === "ok_unverified" || (j.doc && j.doc.state === "pending");
     const cl0 = f && (f.compare || [])[0];
     const meta = [modelShort(j) ? "🤖 " + esc(modelShort(j)) : "", thinkShort(j) ? "🧠 " + esc(thinkShort(j)) : "", f ? `🪙 ${fmtTok(f.tokens)} · <b>${usd(f.usd)}</b>${cl0 ? ` · ≈ ${esc(cl0.model.replace(/^claude-/, ""))} ${usd(cl0.usd)}` : ""}` : ""].filter(Boolean).join(" · ");
     const tip = [modelText(j), thinkText(j) ? "🧠 " + thinkText(j) : "", f ? "จ่ายจริง " + usd(f.usd) + " · ถ้าเป็น Claude ≈ " + (f.compare || []).map((c) => c.model.replace(/^claude-/, "") + " " + usd(c.usd)).join(" · ") : ""].filter(Boolean).join(" | ");
-    const chips = (j.claude_session ? `<span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(j.claude_title || "(ไม่พบชื่อ session)")}</span>` + openClaudeBtn(j) : "") + roundTag(j);
+    const chips = (j.claude_session ? `<div class="rc-chip"><span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(j.claude_title || "(ไม่พบชื่อ session)")}</span></div>` : "") + (j.claude_session || roundTag(j) ? `<div class="rc-chips">${j.claude_session ? openClaudeBtn(j) : ""}${roundTag(j)}</div>` : "");
     const extra = (f ? "" : recentCostHTML(f, j)) + denyNote(j) + qaLine(j) + docLine(j);
-    return `<div class="rc${wait ? " wait" : ""}" data-oflog="${esc(j.id)}">
-      <span>${badge(j.state, j.reason)}</span>
-      <div class="rc-title" title="${esc(j.project_name + " " + shortWhat(j))}">${esc(j.project_name)}<span class="mono">${esc(shortWhat(j))}</span></div>
-      <span class="rc-time">${dur(j.duration_sec)}</span>
-      ${chips ? `<div class="rc-sub rc-chips">${chips}</div>` : ""}
-      ${meta ? `<div class="rc-sub rc-meta" title="${esc(tip)}">${meta}</div>` : ""}
-      ${extra ? `<div class="rc-sub">${extra}</div>` : ""}
-      <div class="rc-sub rc-acts">${actBtns(j, { check: true })}</div></div>`;
-  }).join("")}</div>`;
+    return `<tr class="click${wait ? " wait" : ""}" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td><div class="rc-title" title="${esc(j.project_name + " " + shortWhat(j))}">${esc(j.project_name)}<span class="mono">${esc(shortWhat(j))}</span></div>${chips}${meta ? `<div class="rc-meta" title="${esc(tip)}">${meta}</div>` : ""}${extra}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true, icon: true })}</td></tr>`;
+  }).join("")}</table></div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
