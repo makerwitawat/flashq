@@ -131,13 +131,13 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
-| T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
-| T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
-| T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
-| T-05 | ✅แก้ | ad022a2 | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
-| T-06 | ✅แก้ | 095423e | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | |
-| T-07 | ✅แก้ | 1867410 | `.tmp/T-07.grep.txt` 1 บรรทัด (`:32` `↕ (เลขเพี้ยน) ใช้เลขที่ถูก`) — ค่าก่อนแก้ 0 ที่ | |
+| T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | ✅ผ่าน |
+| T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | ✅ผ่าน |
+| T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | ✅ผ่าน |
+| T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | ✅ผ่าน |
+| T-05 | ✅แก้ | ad022a2 | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | ✅ผ่าน |
+| T-06 | ✅แก้ | 095423e | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | ✅ผ่าน |
+| T-07 | ✅แก้ | 1867410 | `.tmp/T-07.grep.txt` 1 บรรทัด (`:32` `↕ (เลขเพี้ยน) ใช้เลขที่ถูก`) — ค่าก่อนแก้ 0 ที่ | ✅ผ่าน |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
