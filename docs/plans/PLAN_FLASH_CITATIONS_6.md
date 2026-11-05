@@ -73,7 +73,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - หลักฐานชี้ขาด: red บรรทัด `AssertionError: 0 != 1` · green/reg บรรทัดท้าย `passed` ไม่มี `failed`
   - commit: `flashq: ชื่อไฟล์กำกวมลองเทียบข้อความกับทุกไฟล์ที่ชื่อตรงก่อนตัดสิน (T-02)`
 
-- [ ] **T-03** `flashq.py` ~1985 (`unverified_reasons`) + ~2593 (พิมพ์ `CITATIONS:`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-03** `flashq.py` ~1985 (`unverified_reasons`) + ~2593 (พิมพ์ `CITATIONS:`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_unverified_reasons_citation_groups` (ใช้ `self.load_mod("flashq_cite_groups")`) · `c(**kw)` = `{"kind": "investigate", "prompt": "ขอ file:line", "citations": {"ok": 0, "ok_code": 0, "bad": [], "unresolved": [], "drift": [], **kw}}`:
     1. `ok=2, ok_code=2, unresolved=["u"], drift=["d"]` → `[]`
     2. `ok=1, ok_code=1, bad=["b"]` → มีข้อความขึ้นต้น `ผู้สืบอ้างเลขไฟล์:บรรทัดผิด 1 จุด`
@@ -132,7 +132,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
 | T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
-| T-02 | ✅แก้ | - | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
+| T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
+| T-03 | ✅แก้ | - | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)

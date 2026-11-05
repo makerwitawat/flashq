@@ -2130,6 +2130,7 @@ class FlashqTest(unittest.TestCase):
         r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": report})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("CITATIONS: ตรงถึงโค้ด 1 · ตรงแค่ไฟล์/บรรทัด 1 · ผิด 3", r.stdout)
+        self.assertIn("· ตรวจไม่ได้ 0 · เลขเพี้ยน 0", r.stdout)
         for needle in ("เลขบรรทัดเกินไฟล์", "ไม่พบไฟล์", "ไม่อยู่ในบรรทัดนี้"):
             self.assertIn(needle, r.stdout)
         job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
@@ -2302,6 +2303,24 @@ class FlashqTest(unittest.TestCase):
             r = chk("`app.js:1` ดู")
             self.assertEqual(len(r["unresolved"]), 1)
             self.assertIn("กำกวม", r["unresolved"][0])
+
+    def test_unverified_reasons_citation_groups(self):
+        """ลดผลเฉพาะ citation ผิดจริง · ตรวจไม่ได้เกินครึ่งและไม่มีข้อตรงถึงโค้ดจึงลดผล · งานเก่าที่ไม่มี key ใหม่ต้องไม่พัง"""
+        mod = self.load_mod("flashq_cite_groups")
+
+        def c(**kw):
+            return {"kind": "investigate", "prompt": "ขอ file:line",
+                    "citations": {"ok": 0, "ok_code": 0, "bad": [], "unresolved": [], "drift": [], **kw}}
+
+        self.assertEqual(mod.unverified_reasons(c(ok=2, ok_code=2, unresolved=["u"], drift=["d"]), {}), [])
+        r = mod.unverified_reasons(c(ok=1, ok_code=1, bad=["b"]), {})
+        self.assertTrue(any(x.startswith("ผู้สืบอ้างเลขไฟล์:บรรทัดผิด 1 จุด") for x in r))
+        self.assertEqual(mod.unverified_reasons(c(unresolved=["u1", "u2", "u3"], drift=["d"]), {}),
+                         ["ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)"])
+        self.assertEqual(mod.unverified_reasons(c(ok=1, ok_code=0, unresolved=["u"]), {}), [])
+        self.assertEqual(mod.unverified_reasons(c(), {}), ["ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย"])
+        self.assertEqual(mod.unverified_reasons(
+            {"kind": "investigate", "prompt": "ขอ file:line", "citations": {"ok": 1, "ok_code": 1, "bad": []}}, {}), [])
 
     def test_readonly_job_warns_when_files_change_and_agent_timeout(self):
         """งาน readonly แล้วไฟล์ในโปรเจกต์เปลี่ยน → WARN · ไม่เปลี่ยน → เงียบ · ผู้สืบ/ผู้ตรวจ timeout ค่าเริ่มต้นสั้นกว่างานทำจริง"""

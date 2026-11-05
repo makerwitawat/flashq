@@ -2065,10 +2065,15 @@ def unverified_reasons(job: dict, res: dict) -> list[str]:
     if job.get("kind") == "investigate":
         cites = job.get("citations") or {}
         bad = cites.get("bad") or []
+        unres = cites.get("unresolved") or []
+        drift = cites.get("drift") or []
+        total = (cites.get("ok") or 0) + len(bad) + len(unres) + len(drift)
         if bad:
             out.append(f"ผู้สืบอ้างเลขไฟล์:บรรทัดผิด {len(bad)} จุด")
-        elif not cites.get("ok") and re.search(r"file:line|ไฟล์:บรรทัด|เลขบรรทัด", job.get("prompt") or "", re.I):
+        elif total == 0 and re.search(r"file:line|ไฟล์:บรรทัด|เลขบรรทัด", job.get("prompt") or "", re.I):
             out.append("ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย")
+        elif len(unres) * 2 > total and not cites.get("ok_code"):
+            out.append(f"ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ {len(unres)} จาก {total} จุด)")
     return out
 
 
@@ -2661,10 +2666,18 @@ def cmd_run(a) -> int:
         if kind == "investigate" and res.get("last"):  # ตรวจเลขไฟล์:บรรทัดที่ผู้สืบอ้าง (กลไก · ไม่ใช่การตัดสินว่าเป็นต้นตอจริง)
             cites = check_citations(res.get("text_all") or res["last"], root)
             job["citations"] = cites
-            if cites["ok"] or cites["bad"]:
-                print(f"CITATIONS: ตรงถึงโค้ด {cites['ok_code']} · ตรงแค่ไฟล์/บรรทัด {cites['ok'] - cites['ok_code']} · ผิด {len(cites['bad'])}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด:"), flush=True)
+            if cites["ok"] or cites["bad"] or cites.get("unresolved") or cites.get("drift"):
+                unres = cites.get("unresolved") or []
+                drift = cites.get("drift") or []
+                print(f"CITATIONS: ตรงถึงโค้ด {cites['ok_code']} · ตรงแค่ไฟล์/บรรทัด {cites['ok'] - cites['ok_code']} · ผิด {len(cites['bad'])} · ตรวจไม่ได้ {len(unres)} · เลขเพี้ยน {len(drift)}" + ("" if not cites["bad"] else " — Claude ต้องไม่เชื่อข้อที่ผิด (✗):"), flush=True)
                 for b in cites["bad"][:10]:
                     print("  ✗", b, flush=True)
+                for d in drift[:10]:
+                    print("  ↕", d, flush=True)
+                for u in unres[:5]:
+                    print("  ?", u, flush=True)
+                if len(unres) > 5:
+                    print(f"  ? … อีก {len(unres) - 5} จุด", flush=True)
     finally:
         verdict = res.get("status")
         reasons = unverified_reasons(job, res) if verdict == "OK" else []
