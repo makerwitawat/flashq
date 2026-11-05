@@ -105,7 +105,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - หลักฐานชี้ขาด: green มี `passed` · full.log บรรทัดท้าย `N passed` ไม่มี `failed`/`error` (ถ้ามีเทสต์ล้มที่ไม่เกี่ยว citation → จดชื่อใน §4 แล้ว ⛔ ไม่แก้)
   - commit: `flashq: เทสต์งานสืบที่มี citation ตรวจไม่ได้/เลขเพี้ยนยังได้ผล OK (T-05)`
 
-- [ ] **T-06** `docs/REFERENCE.md` + `CHANGELOG.md` + `claude/commands/flash-investigate.md` (+ `claude/commands/flash-plan.md` เป็นงาน T-07 แยก commit เพื่อไม่เกิน 3 ไฟล์)
+- [x] **T-06** `docs/REFERENCE.md` + `CHANGELOG.md` + `claude/commands/flash-investigate.md` (+ `claude/commands/flash-plan.md` เป็นงาน T-07 แยก commit เพื่อไม่เกิน 3 ไฟล์)
   - `docs/REFERENCE.md` ก่อน: `` - `CITATIONS:` ของผู้สืบ = "ตรงถึงโค้ด" `` (บรรทัดเดียว) → หลัง: อธิบาย 5 ช่อง ตรงถึงโค้ด · ตรงแค่ไฟล์/บรรทัด · **ผิด** (ลดผลเป็น OK_UNVERIFIED) · **ตรวจไม่ได้** (ชื่อกำกวม/path ย่อ/ไม่ใช่ไฟล์ — ไม่ลดผล เว้นแต่เกินครึ่งและไม่มีข้อที่ตรงถึงโค้ด) · **เลขเพี้ยน** (ข้อความอยู่ห่าง ≤40 บรรทัด บอกเลขที่ถูก — ไม่ลดผล) · คงประโยค "พิสูจน์ได้แค่ว่าโค้ดที่อ้างมีจริง…"
   - `CHANGELOG.md`: เพิ่มหัว `## 2026-11-05` เหนือ `## 2026-11-04` + 1 bullet: **CITATIONS แยก ผิด/ตรวจไม่ได้/เลขเพี้ยน** — งานสืบลดเป็น OK_UNVERIFIED เฉพาะอ้างผิดจริง · ชื่อกำกวมลองทุกไฟล์ที่ชื่อตรง · ผู้สืบต้องอ้าง path เต็ม (T-01..T-07)
   - `claude/commands/flash-investigate.md` ก่อน: `` - บรรทัด `CITATIONS: ตรงถึงโค้ด N · ตรงแค่ไฟล์/บรรทัด K · ผิด M` `` → หลัง: รูปบรรทัดใหม่ 5 ช่อง · ✗ = ห้ามเชื่อ · ↕ = ใช้เลขบรรทัดที่ถูกแทน · ? = ส่งผู้สืบรอบใหม่ให้อ้าง path เต็ม (เฉพาะข้อที่เป็นข้อสรุปหลัก) · ข้อ `6. CITATIONS ไม่มีข้อผิดในข้อสรุปหลัก` → `6. CITATIONS ไม่มี ✗ (ผิด) ในข้อสรุปหลัก · ? ในข้อสรุปหลัก = ขอ path เต็ม`
@@ -135,7 +135,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 | T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
 | T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
 | T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
-| T-05 | ✅แก้ | - | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
+| T-05 | ✅แก้ | ad022a2 | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
+| T-06 | ✅แก้ | - | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
