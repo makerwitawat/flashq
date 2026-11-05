@@ -2194,11 +2194,11 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual((r["ok"], r["ok_code"], r["bad"]), (3, 2, []))
             # ไม่มี anchor + ซ้ำ → กำกวม ไม่เดา · ชื่อที่ไม่มีเลย → ไม่พบไฟล์
             r = chk("`index.html:1` ดู", "`ghost.py:1` ดู")
-            self.assertEqual(len(r["bad"]), 2)
-            self.assertIn("กำกวม", r["bad"][0])
-            self.assertIn("ไม่พบไฟล์", r["bad"][1])
+            self.assertEqual((r["bad"], len(r["unresolved"])), ([], 2))
+            self.assertIn("กำกวม", r["unresolved"][0])
+            self.assertIn("ไม่พบ", r["unresolved"][1])
             # host:port ไม่ใช่ citation
-            self.assertEqual(chk("เปิด `127.0.0.1:8219/api/rigs` แล้วดู http://localhost:8219"), {"ok": 0, "ok_code": 0, "bad": []})
+            self.assertEqual(chk("เปิด `127.0.0.1:8219/api/rigs` แล้วดู http://localhost:8219"), {"ok": 0, "ok_code": 0, "bad": [], "unresolved": [], "drift": []})
             # citation ในโค้ดสแปน + ข้อความคัดสั้น (<4) ไม่ทำให้ backtick จับคู่เหลื่อม
             r = chk("- `tool/rig_viewer.py:3` `n` ใช้ค่า `name=n` ตรง · `tool/rig_catalog.py:1` \"ตัวละคร `h_w`\" + `:261` `ไม่อยู่ในไฟล์เลย`")
             self.assertEqual(r["bad"], [])
@@ -2225,10 +2225,51 @@ class FlashqTest(unittest.TestCase):
                     "`tool/rig_viewer.py:5` — `raise ValueError('ไม่มีจริง')` ผิด",
                     "`tool/rig_catalog.py:99` — เกินไฟล์")
             self.assertEqual(r["ok"], 1)
-            self.assertEqual(len(r["bad"]), 3)
+            self.assertEqual((len(r["bad"]), len(r["drift"])), (2, 1))
             self.assertIn("ไม่อยู่ในบรรทัดนี้", r["bad"][0])
-            self.assertIn("ไม่อยู่ในบรรทัดนี้", r["bad"][1])
-            self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][2])
+            self.assertIn("บรรทัด 2", r["drift"][0])
+            self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][1])
+
+    def test_check_citations_groups(self):
+        """แยก citation เป็น ผิดจริง / ตรวจไม่ได้ / เลขเพี้ยน — path ย่อ · ชื่อเปล่า · ชื่อกำกวม · ข้อความอยู่ห่างไม่เกิน 40 บรรทัด"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            a = [f"x_{n} = {n}" for n in range(1, 61)]
+            a[9] = "def target():"
+            (root / "src").mkdir(parents=True)
+            (root / "src" / "a.py").write_text("\n".join(a) + "\n", encoding="utf-8")
+            (root / "lib").mkdir()
+            (root / "lib" / "util.py").write_text("u1 = 1\nu2 = 2\nu3 = 3\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            r = chk("`src/a.py:10` — `def target():`")
+            self.assertEqual((r["ok"], r["ok_code"], r["bad"], r["unresolved"], r["drift"]), (1, 1, [], [], []))
+            r = chk("`src/a.py:20` — `def target():`")
+            self.assertEqual((r["ok"], r["bad"]), (0, []))
+            self.assertEqual(len(r["drift"]), 1)
+            self.assertIn("บรรทัด 10", r["drift"][0])
+            r = chk("`src/a.py:58` — `def target():`", "`src/a.py:10` — `def ghost_fn():`")
+            self.assertEqual((len(r["bad"]), r["drift"]), (2, []))
+            r = chk("`.../src/a.py:10` — `def target():`")
+            self.assertEqual((r["bad"], r["ok_code"]), ([], 1))
+            r = chk("`.../nope/zz.js:5` ดู")
+            self.assertEqual(len(r["unresolved"]), 1)
+            self.assertIn("path ย่อ", r["unresolved"][0])
+            self.assertEqual(r["bad"], [])
+            r = chk("`grid.show:298` ดู", "`path_icon.txt:3` ดู")
+            self.assertEqual((len(r["unresolved"]), r["bad"]), (2, []))
+            r = chk("`src/ghost.py:1` ดู")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ไม่พบไฟล์", r["bad"][0])
+            r = chk("`src/a.py:999` ดู")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][0])
 
     def test_readonly_job_warns_when_files_change_and_agent_timeout(self):
         """งาน readonly แล้วไฟล์ในโปรเจกต์เปลี่ยน → WARN · ไม่เปลี่ยน → เงียบ · ผู้สืบ/ผู้ตรวจ timeout ค่าเริ่มต้นสั้นกว่างานทำจริง"""

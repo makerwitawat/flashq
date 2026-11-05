@@ -556,6 +556,7 @@ CITE_ELLIPSIS_RE = re.compile(r"\.{3}|…")
 CITE_CLAUSE_RE = re.compile(r"(?:`|\s|\()?:\d+(?:[-–,]\d+)*|\s·\s|\s→\s")  # ขอบประเด็น: `:585` (เลขบรรทัดของที่อื่น) · " · " · " → "
 CITE_CODEISH_RE = re.compile(r"[()\[\]{}=<>/\\.:;'\"+*|]")
 CITE_NEAR = 40 # ข้อความที่คัดต้องอยู่ห่างจาก citation ไม่เกินกี่ตัวอักษร (ไกลกว่านี้มักเป็นของอีกประโยค)
+CITE_DRIFT = 40 # ข้อความที่คัดไม่ตรงบรรทัดที่อ้าง แต่เจอในไฟล์ห่างไม่เกินกี่บรรทัด = เลขเพี้ยน (ไม่ใช่ผิดจริง)
 CITE_NEG_RE = re.compile(r"ไม่|ขาด|หาย")  # "ไม่มีคีย์ `source`" = อ้างว่าบรรทัดนี้ไม่มีสิ่งนั้น ไม่ใช่การคัดโค้ด
 
 
@@ -620,7 +621,7 @@ def check_citations(text: str, root: Path) -> dict:
                     anchors.append(d)
         except OSError:
             pass
-    ok, code, bad, seen = 0, 0, [], set()
+    ok, code, bad, unresolved, drift, seen = 0, 0, [], [], [], set()
     for i, m in enumerate(cites):
         rel, line = m.group(1).replace("\\", "/"), int(m.group(2))
         if (rel, line) in seen:
@@ -628,9 +629,24 @@ def check_citations(text: str, root: Path) -> dict:
         seen.add((rel, line))
         if tracked is None:
             tracked = _git(root, "ls-files").splitlines()
-        f, why = _cite_file(rel, root, tracked, anchors)
+        short = ("..." in rel or "…" in rel or rel.startswith("/")
+                 or (m.start() > 0 and text[m.start() - 1] == "…"))  # path ย่อ เช่น .../src/a.py · D:/.../Tool/x.py
+        target = rel
+        if short:
+            last = None
+            for e in CITE_ELLIPSIS_RE.finditer(target):
+                last = e
+            target = (target[last.end():] if last else target).lstrip("/")
+        f, why = _cite_file(target, root, tracked, anchors)
         if f is None or not f.is_file():
-            bad.append(f"{rel}:{line} — {why or 'ไม่พบไฟล์'}")
+            if short:
+                unresolved.append(f"{rel}:{line} — path ย่อ ตรวจไม่ได้ — ต้องระบุ path เต็มจากรากโปรเจกต์")
+            elif why.startswith("ชื่อไฟล์กำกวม"):
+                unresolved.append(f"{rel}:{line} — {why}")
+            elif "/" in rel:
+                bad.append(f"{rel}:{line} — {why or 'ไม่พบไฟล์'}")
+            else:
+                unresolved.append(f"{rel}:{line} — ไม่พบในไฟล์ที่ git ติดตาม (อาจไม่ใช่ไฟล์/ไฟล์ untracked)")
             continue
         try:
             lines = f.read_text(encoding="utf-8-sig", errors="replace").splitlines()
@@ -661,7 +677,18 @@ def check_citations(text: str, root: Path) -> dict:
         verdicts = [(x, v) for x, v in verdicts if v is not None]
         miss = [x for x, v in verdicts if not v]
         if verdicts and len(miss) == len(verdicts):
-            bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{miss[0][:60]}`")
+            found = None
+            for d in range(0, CITE_DRIFT + 1):  # เรียงจากใกล้ไปไกล · เทียบบรรทัดเดียว (หน้าต่าง ±3 ครอบไปแล้ว)
+                for n in ([line] if d == 0 else [line - d, line + d]):
+                    if 1 <= n <= len(lines) and _cite_snippet_ok(miss[0], lines[n - 1]):
+                        found = n
+                        break
+                if found is not None:
+                    break
+            if found is not None:
+                drift.append(f"{rel}:{line} — ข้อความที่คัดอยู่ที่บรรทัด {found} (ห่าง {abs(found - line)} บรรทัด · เลขเพี้ยน): `{miss[0][:60]}`")
+            else:
+                bad.append(f"{rel}:{line} — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): `{miss[0][:60]}`")
             continue
         if not verdicts and far:  # ไม่มีข้อความติด citation แต่มีที่ห่างออกไปในประโยคเดียวกัน → เทียบทั้งไฟล์ (เทียบ ±3 ไม่ได้ เพราะอาจเป็นของอีกจุด) · ไม่มีในไฟล์เลย = ผิดแน่
             whole = re.sub(r"\s+", " ", " ".join(lines))
@@ -671,7 +698,7 @@ def check_citations(text: str, root: Path) -> dict:
                 continue
         ok += 1
         code += 1 if verdicts else 0  # ตรงถึงตัวโค้ด (มีข้อความคัดและตรง) ต่างจากตรงแค่ไฟล์/เลขบรรทัด
-    return {"ok": ok, "ok_code": code, "bad": bad}
+    return {"ok": ok, "ok_code": code, "bad": bad, "unresolved": unresolved, "drift": drift}
 
 
 def dirty_snapshot(root: Path) -> dict | None:

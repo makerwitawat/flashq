@@ -32,7 +32,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 - `check_citations` ~607: ทุกกรณีลง `bad` รวมกัน · `unverified_reasons` ~1985: `if bad:` → OK_UNVERIFIED ทันทีแม้ 1 จุด
 - ผู้เรียก `check_citations`: ~2591 (งานสืบ · พิมพ์ `CITATIONS:`) และ ~3531 (ตรวจเอกสาร flash-doc · ใช้แค่ `["bad"]` — ไม่แตะ)
 
-- [ ] **T-01** `flashq.py` ~607 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` ~607 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_check_citations_groups` (repo จำลอง: `src/a.py` 60 บรรทัด โดยบรรทัด 10 = `def target():` บรรทัดอื่น `x_<n> = <n>` · `lib/util.py` 3 บรรทัด) ตรวจว่า dict ที่คืนมี key `ok` `ok_code` `bad` `unresolved` `drift` (list ของข้อความ) และ:
     1. ``"`src/a.py:10` — `def target():`"`` → ok 1, ok_code 1
     2. ``"`src/a.py:20` — `def target():`"`` (ห่าง 10 ≤ 40) → `drift` 1 รายการ มีคำ `บรรทัด 10` · ไม่นับใน ok/bad
@@ -131,6 +131,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | - | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
