@@ -93,17 +93,24 @@ td.nw { white-space: nowrap; }
 td.act { white-space: nowrap; text-align: right; }
 td.act button { margin-left: 0.2rem; }
 /* ตาราง "เพิ่งจบ": ปุ่มซ้อนเป็นแนวตั้งในคอลัมน์แคบ · ข้อความยาวตัดบรรทัด ไม่ดันตารางล้นจอ */
-table.recent { table-layout: fixed; }  /* คอลัมน์กว้างตายตัว (สถานะ/เวลา/ปุ่ม) · คอลัมน์งานได้ที่เหลือและตัดบรรทัดเอง ไม่ดันตารางล้นจอ */
-table.recent th:nth-child(1) { width: 6.6rem; }
-table.recent th:nth-child(3) { width: 6.4rem; }
-table.recent th:nth-child(4) { width: 8.2rem; }
-table.recent td { min-width: 0; overflow-wrap: anywhere; }
-table.recent td.nw { overflow-wrap: normal; white-space: normal; }
-table.recent td.act { white-space: normal; text-align: right; }
-table.recent td.act button { display: block; width: 100%; margin: 0 0 0.25rem 0; padding-left: 0.3rem; padding-right: 0.3rem; }
-table.recent td.act button:last-child { margin-bottom: 0; }
-table.recent tr.wait td { background: color-mix(in srgb, var(--quota) 9%, transparent); }
-table.recent tr.wait td:first-child { box-shadow: inset 3px 0 0 var(--quota); }  /* แถวที่รอคุณตรวจ = แถบเหลืองซ้าย */
+/* "เพิ่งจบ": รายการการ์ดแถวละงาน — บรรทัด 1 สถานะ·ชื่องาน·เวลา · 2 ชิป · 3 สรุปโมเดล/token บรรทัดเดียว · 4 ปุ่มเล็ก */
+.rc-list { display: grid; }
+.rc { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 0.6rem; row-gap: 0.25rem; align-items: center; padding: 0.6rem 0.5rem 0.6rem 0.6rem; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; }
+.rc:last-child { border-bottom: 0; }
+.rc:hover { background: var(--hover); }
+.rc.wait { border-left-color: var(--quota); background: color-mix(in srgb, var(--quota) 10%, transparent); }  /* รอคุณตรวจ = แถบเหลืองซ้าย */
+.rc > .rc-sub { grid-column: 1 / -1; min-width: 0; }
+.rc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.rc-title .mono { font-weight: 400; color: var(--muted); margin-left: 0.3rem; }
+.rc-time { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.rc-chips { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.rc-chips .of-from-sm { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-chips > * { flex: none; }
+.rc-chips > .of-from-sm { flex: 0 1 auto; }
+.rc-meta { color: var(--muted); font-size: 0.84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-meta b { color: var(--text); }
+.rc-acts { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.rc-acts button { padding: 0.2rem 0.65rem; font-size: 0.82rem; }
 tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--hover); }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
@@ -3682,8 +3689,22 @@ function bossHTML(groups) {
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
-  return `<div class="table-wrap"><table class="recent"><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th><th></th></tr>
-    ${h.map((j) => `<tr class="click${j.state === "ok_unverified" || (j.doc && j.doc.state === "pending") ? " wait" : ""}" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}</table></div>`;
+  return `<div class="rc-list">${h.map((j) => {
+    const f = j.flash, wait = j.state === "ok_unverified" || (j.doc && j.doc.state === "pending");
+    const cl0 = f && (f.compare || [])[0];
+    const meta = [modelShort(j) ? "🤖 " + esc(modelShort(j)) : "", thinkShort(j) ? "🧠 " + esc(thinkShort(j)) : "", f ? `🪙 ${fmtTok(f.tokens)} · <b>${usd(f.usd)}</b>${cl0 ? ` · ≈ ${esc(cl0.model.replace(/^claude-/, ""))} ${usd(cl0.usd)}` : ""}` : ""].filter(Boolean).join(" · ");
+    const tip = [modelText(j), thinkText(j) ? "🧠 " + thinkText(j) : "", f ? "จ่ายจริง " + usd(f.usd) + " · ถ้าเป็น Claude ≈ " + (f.compare || []).map((c) => c.model.replace(/^claude-/, "") + " " + usd(c.usd)).join(" · ") : ""].filter(Boolean).join(" | ");
+    const chips = (j.claude_session ? `<span class="of-from-sm" title="${esc("สั่งงานจาก session Claude Code · รหัส " + j.claude_session)}">💬 ${esc(j.claude_title || "(ไม่พบชื่อ session)")}</span>` + openClaudeBtn(j) : "") + roundTag(j);
+    const extra = (f ? "" : recentCostHTML(f, j)) + denyNote(j) + qaLine(j) + docLine(j);
+    return `<div class="rc${wait ? " wait" : ""}" data-oflog="${esc(j.id)}">
+      <span>${badge(j.state, j.reason)}</span>
+      <div class="rc-title" title="${esc(j.project_name + " " + shortWhat(j))}">${esc(j.project_name)}<span class="mono">${esc(shortWhat(j))}</span></div>
+      <span class="rc-time">${dur(j.duration_sec)}</span>
+      ${chips ? `<div class="rc-sub rc-chips">${chips}</div>` : ""}
+      ${meta ? `<div class="rc-sub rc-meta" title="${esc(tip)}">${meta}</div>` : ""}
+      ${extra ? `<div class="rc-sub">${extra}</div>` : ""}
+      <div class="rc-sub rc-acts">${actBtns(j, { check: true })}</div></div>`;
+  }).join("")}</div>`;
 }
 
 /* --- ตัวขับหลัก: โครงสร้างสร้างใหม่เมื่อเปลี่ยนจริง · ส่วนที่ขยับ (เวลา/แถบ/ข้อความ) อัปเดตทุกวินาที --- */
