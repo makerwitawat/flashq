@@ -113,7 +113,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - หลักฐานชี้ขาด: `.tmp/T-06.grep.txt` มีครบ 3 ไฟล์ (ค่าก่อนแก้ = 0)
   - commit: `flashq: เอกสาร CITATIONS 3 กลุ่ม (ผิด/ตรวจไม่ได้/เลขเพี้ยน) + CHANGELOG (T-06)`
 
-- [ ] **T-07** `claude/commands/flash-plan.md` ~32 และ ~35
+- [x] **T-07** `claude/commands/flash-plan.md` ~32 และ ~35
   - ก่อน: `` บรรทัด `CITATIONS ... ผิด` = ข้อนั้นห้ามเชื่อ `` → หลัง: `` บรรทัด `CITATIONS` ข้อ ✗ (ผิด) = ห้ามเชื่อ · ↕ (เลขเพี้ยน) ใช้เลขที่ถูก · ? (ตรวจไม่ได้) ในข้อสรุปหลัก = สืบใหม่ให้อ้าง path เต็ม ``
   - ~35: คำ `CITATIONS ผิด` (2 ที่ในบรรทัด "ผลสืบไม่พอ/กำกวม/CITATIONS ผิด" และ "CITATIONS ไม่ผิด") คงไว้ได้ (ความหมายยังตรง "ผิด" = ✗) — ไม่แก้
   - ยืนยัน: Grep `เลขเพี้ยน` ใน `claude/commands/flash-plan.md` → 1 ที่ → `.tmp/T-07.grep.txt`
@@ -136,7 +136,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 | T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
 | T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
 | T-05 | ✅แก้ | ad022a2 | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
-| T-06 | ✅แก้ | - | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | |
+| T-06 | ✅แก้ | 095423e | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | |
+| T-07 | ✅แก้ | - | `.tmp/T-07.grep.txt` 1 บรรทัด (`:32` `↕ (เลขเพี้ยน) ใช้เลขที่ถูก`) — ค่าก่อนแก้ 0 ที่ | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
