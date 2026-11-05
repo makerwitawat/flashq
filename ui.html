@@ -92,6 +92,17 @@ td.mono { overflow-wrap: anywhere; min-width: 12rem; }
 td.nw { white-space: nowrap; }
 td.act { white-space: nowrap; text-align: right; }
 td.act button { margin-left: 0.2rem; }
+/* ตาราง "เพิ่งจบ": ปุ่มซ้อนเป็นแนวตั้งในคอลัมน์แคบ · ข้อความยาวตัดบรรทัด ไม่ดันตารางล้นจอ */
+table.recent, table.recent tbody { display: block; }
+table.recent tr:first-child { display: none; }  /* หัวตารางซ่อน: แต่ละงานเป็นการ์ดเล็ก */
+table.recent tr { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "st tm" "pj pj" "ac ac"; align-items: center; gap: 0.2rem 0.6rem; padding: 0.5rem 0.3rem; border-bottom: 1px solid var(--line); }
+table.recent td { display: block; border: 0; padding: 0; min-width: 0; overflow-wrap: anywhere; }
+table.recent td:nth-child(1) { grid-area: st; }
+table.recent td:nth-child(2) { grid-area: pj; }
+table.recent td:nth-child(3) { grid-area: tm; color: var(--muted); }
+table.recent td.act { grid-area: ac; white-space: normal; text-align: left; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+table.recent td.act button { margin: 0; white-space: nowrap; }
+table.recent tr.click:hover, table.recent tr.sel { background: var(--hover); }
 tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--hover); }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.86rem; }
@@ -3670,7 +3681,7 @@ function bossHTML(groups) {
 function recentHTML() {
   const h = (state.history || []).slice(0, 8);
   if (!h.length) return `<div class="empty">ยังไม่มีงานที่จบ</div>`;
-  return `<div class="table-wrap"><table><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th><th></th></tr>
+  return `<div class="table-wrap"><table class="recent"><tr><th>สถานะ</th><th>โปรเจกต์ · งาน</th><th>ใช้เวลา</th><th></th></tr>
     ${h.map((j) => `<tr class="click" data-oflog="${esc(j.id)}"><td>${badge(j.state, j.reason)}</td><td>${esc(j.project_name)} <span class="mono muted">${esc(shortWhat(j))}</span>${roundTag(j)}${fromClaudeChip(j)}${modelText(j) ? `<div class="muted">🤖 ${esc(modelText(j))}${thinkText(j) ? " · 🧠 " + esc(thinkText(j)) : ""}</div>` : ""}${recentCostHTML(j.flash, j)}${denyNote(j)}${qaLine(j)}${docLine(j)}</td><td class="nw">${dur(j.duration_sec)}</td><td class="act">${actBtns(j, { check: true })}</td></tr>`).join("")}</table></div>`;
 }
 
