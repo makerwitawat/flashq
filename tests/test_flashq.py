@@ -2231,6 +2231,26 @@ class FlashqTest(unittest.TestCase):
             self.assertIn("บรรทัด 2", r["drift"][0])
             self.assertIn("เลขบรรทัดเกินไฟล์", r["bad"][1])
 
+    def test_investigate_unresolved_does_not_downgrade(self):
+        """citation ตรวจไม่ได้/เลขเพี้ยน ต้องไม่ทำผลเป็น OK_UNVERIFIED (ไม่ใช่ผู้สืบอ้างผิด) · drift ต้องบอกเลขบรรทัดที่ถูก"""
+        (self.proj / "src").mkdir()
+        (self.proj / "src" / "a.cpp").write_text(chr(10).join(
+            ["int x = 0;"] * 4 + ["int target = 1;"] + ["int y = 0;"] * 25), encoding="utf-8")
+        report = chr(10).join([
+            "หลักฐาน: src/a.cpp:5 — `int target = 1;` ตรง",
+            "หลักฐาน: src/a.cpp:15 — `int target = 1;` เลขเพี้ยน",
+            "หลักฐาน: .../x.js:7 ดู",
+        ])
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_TEXT": report})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ผิด 0 · ตรวจไม่ได้ 1 · เลขเพี้ยน 1", r.stdout)
+        self.assertIn("บรรทัด 5", r.stdout)
+        job = next(json.loads(f.read_text(encoding="utf-8")) for f in (self.home / "jobs").glob("*.json"))
+        self.assertEqual(len(job["citations"]["drift"]), 1)
+        for reason in job.get("unverified") or []:
+            self.assertNotIn("citation", reason.lower())
+            self.assertNotIn("ไฟล์:บรรทัด", reason)
+
     def test_check_citations_groups(self):
         """แยก citation เป็น ผิดจริง / ตรวจไม่ได้ / เลขเพี้ยน — path ย่อ · ชื่อเปล่า · ชื่อกำกวม · ข้อความอยู่ห่างไม่เกิน 40 บรรทัด"""
         sys.path.insert(0, str(REPO))

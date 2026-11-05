@@ -99,7 +99,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - commit: `flashq: ผู้สืบต้องอ้าง path เต็ม เลขบรรทัดจาก Grep จริง และระบุโฟลเดอร์เมื่อชื่อซ้ำ (T-04)`
 
 ## 1c. กลุ่ม C — เทสต์รวม + เอกสาร
-- [ ] **T-05** `tests/test_flashq.py` (เทสต์ปลายทาง + ทั้งชุด)
+- [x] **T-05** `tests/test_flashq.py` (เทสต์ปลายทาง + ทั้งชุด)
   - เพิ่ม `test_investigate_unresolved_does_not_downgrade` (ต่อจาก `test_investigate_checks_citations` · ใช้ `self.proj`): `src/a.cpp` 30 บรรทัด (บรรทัด 5 = `int target = 1;`) · FAKE_TEXT 3 บรรทัด: ``src/a.cpp:5 — `int target = 1;` `` · ``src/a.cpp:15 — `int target = 1;` `` · ``.../x.js:7 ดู`` → stdout มี `ผิด 0 · ตรวจไม่ได้ 1 · เลขเพี้ยน 1` และ `บรรทัด 5` · job ล่าสุด: ทุกข้อใน `job.get("unverified") or []` ต้องไม่มีคำ `citation` และ `ไฟล์:บรรทัด` (เหตุอื่นของ fake opencode ไม่เกี่ยว) · `len(job["citations"]["drift"]) == 1`
   - ยืนยัน: `-k "unresolved_does_not_downgrade"` → `.tmp/T-05.green.log` · `-k "cit or unverified"` → `.tmp/T-05.reg.log` · ทั้งชุด → `.tmp/T-05.full.log` (timeout ≥ 500 วิ)
   - หลักฐานชี้ขาด: green มี `passed` · full.log บรรทัดท้าย `N passed` ไม่มี `failed`/`error` (ถ้ามีเทสต์ล้มที่ไม่เกี่ยว citation → จดชื่อใน §4 แล้ว ⛔ ไม่แก้)
@@ -134,7 +134,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 | T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
 | T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
 | T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
-| T-04 | ✅แก้ | - | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
+| T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
+| T-05 | ✅แก้ | - | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
