@@ -137,7 +137,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 | T-04 | ✅แก้ | 08cceb7 | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
 | T-05 | ✅แก้ | ad022a2 | `.tmp/T-05.green.log` บรรทัดท้าย `1 passed, 219 deselected` · `.tmp/T-05.reg.log` บรรทัดท้าย `11 passed, 209 deselected` · `.tmp/T-05.full.log` บรรทัดท้าย `220 passed in 821.80s (0:13:41)` ไม่มี failed/error | |
 | T-06 | ✅แก้ | 095423e | `.tmp/T-06.grep.txt` 3 บรรทัด (`docs/REFERENCE.md:30` · `CHANGELOG.md:6` · `claude/commands/flash-investigate.md:32`) — ค่าก่อนแก้ 0 ที่ | |
-| T-07 | ✅แก้ | - | `.tmp/T-07.grep.txt` 1 บรรทัด (`:32` `↕ (เลขเพี้ยน) ใช้เลขที่ถูก`) — ค่าก่อนแก้ 0 ที่ | |
+| T-07 | ✅แก้ | 1867410 | `.tmp/T-07.grep.txt` 1 บรรทัด (`:32` `↕ (เลขเพี้ยน) ใช้เลขที่ถูก`) — ค่าก่อนแก้ 0 ที่ | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
