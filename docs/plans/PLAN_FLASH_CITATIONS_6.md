@@ -90,7 +90,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
   - commit: `flashq: งานสืบลดผลเฉพาะ citation ผิดจริง · ตรวจไม่ได้/เลขเพี้ยนแสดงแยก ไม่ลดผล (T-03)`
 
 ## 1b. กลุ่ม B — ผู้สืบอ้างให้ตรวจได้
-- [ ] **T-04** `opencode/agent/flash-investigator.md` ~56 (ข้อ 3)
+- [x] **T-04** `opencode/agent/flash-investigator.md` ~56 (ข้อ 3)
   - ก่อน: `3. ทุกข้ออ้างต้องมี `file:line` และข้อเท็จจริงที่เห็นตรงตัว (คัดบรรทัดโค้ด) · เดา = ใส่ใน "ยังไม่แน่ใจ"`
   - หลัง (คงข้อเดิม แล้วเติมย่อยท้ายข้อ 3 ไม่เกิน 3 บรรทัด): (ก) `file` = path เต็มจากรากโปรเจกต์ (เช่น `Tools/web/app.js:120`) **ห้ามย่อ** `...`/`…`/`D:/...` (ข) เลขบรรทัดเอาจากผล Grep/Read ที่เห็นจริงเท่านั้น ห้ามนับเอง/กะประมาณ (ค) ชื่อไฟล์ซ้ำในโปรเจกต์ (เช่น `app.js` หลายโฟลเดอร์) ต้องระบุโฟลเดอร์เสมอ · คัดโค้ดใส่ `` `...` `` ติดหลัง citation
   - หมายเหตุ: `claude/agents/` มีแค่ `flash-checker.md` (ไม่มีฉบับคู่ของผู้สืบ) — ไม่ต้องแก้ · templates ไม่มีบรีฟผู้สืบที่ซ้ำกฎนี้
@@ -133,7 +133,8 @@ $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/test_flashq.py -q > .tmp/T
 |---|---|---|---|---|
 | T-01 | ✅แก้ | c7ff6fc | `.tmp/T-01.red.log:28` `KeyError: 'unresolved'` · `.tmp/T-01.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-01.reg.log` บรรทัดท้าย `6 passed` | |
 | T-02 | ✅แก้ | b439c93 | `.tmp/T-02.red.log:28` `AssertionError: 0 != 1` · `.tmp/T-02.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-02.reg.log` บรรทัดท้าย `7 passed` | |
-| T-03 | ✅แก้ | - | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
+| T-03 | ✅แก้ | 93ddcee | `.tmp/T-03.red.log:20` `AssertionError: Lists differ: ['ผู้สืบไม่อ้างเลขไฟล์:บรรทัดเลย'] != ['ตรวจ citation ไม่ได้เกือบทั้งหมด (ตรวจไม่ได้ 3 จาก 4 จุด)']` · `.tmp/T-03.green.log` บรรทัดท้าย `1 passed` · `.tmp/T-03.reg.log` บรรทัดท้าย `12 passed` | |
+| T-04 | ✅แก้ | - | `.tmp/T-04.grep.txt` 2 บรรทัด (`:57` `path เต็มจากรากโปรเจกต์` · `:58` `ห้ามนับเอง`) — ค่าก่อนแก้ 0 ที่ | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หน้าเว็บ (`ui.html`) แสดง unresolved/drift แยก — ยังไม่ทำ (เหตุผลลดผลแสดงอยู่แล้วจาก `unverified`)
