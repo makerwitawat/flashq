@@ -682,12 +682,15 @@ class FlashqTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, r.stdout)
 
     def test_quota_switch(self):
+        """โควตาหมด → สลับบัญชีเฉพาะงานนี้ (ส่ง --model รอบถัดไป) · opencode.json ยังเป็นโมเดลเดิม"""
+        before = self.oc_cfg.read_text(encoding="utf-8")
         r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota"})
         self.assertIn("FLASH_RUN=QUOTA", r.stdout)
         self.assertIn("สลับบัญชี", r.stdout)
-        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
-        self.assertEqual(cfg["agent"]["flash-worker"]["model"], "commandcode/deepseek/deepseek-v4.1-flash")
-        self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 2)
+        self.assertEqual(self.oc_cfg.read_text(encoding="utf-8"), before)  # config ไม่ถูกเขียนทับ
+        calls = [json.loads(x) for x in self.args_out.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][calls[1].index("--model") + 1], "commandcode/deepseek/deepseek-v4.1-flash")
 
     def test_quota_ignores_balance_word_in_summary(self):
         """คำว่า balance ในสรุปท้ายของ worker (เนื้องานเกม) ต้องไม่ถูกตีเป็นโควตาหมด"""
@@ -2002,14 +2005,13 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(json.loads(self.http(base + "/api/state")[1])["slots"]["used"], 0)
         self.assertFalse((self.home / "running-2.lock").exists())
 
-    def test_quota_no_double_switch(self):
-        """รันคู่ขนาน: QUOTA แต่บัญชีถูกงานอื่นสลับไปแล้ว → ใช้บัญชีนั้น ไม่สลับซ้ำ"""
-        other = "commandcode2/deepseek/deepseek-v4.1-flash"
-        r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota", "FAKE_SET_MODEL": other})
-        self.assertIn("โดยงานอื่น", r.stdout)
-        self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"], other)
-        calls = [json.loads(x) for x in self.args_out.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual([c[c.index("--model") + 1] for c in calls], ["p1/m", other])
+    def test_quota_switch_does_not_touch_config(self):
+        """QUOTA + --switch-on-quota → ไม่เขียน opencode.json เลย และไม่เกิดไฟล์สำรอง .bak-flash-switch"""
+        before = self.oc_cfg.read_text(encoding="utf-8")
+        r = self.run_q(*self.base(), "--switch-on-quota", "1", env={"FAKE_MODE": "quota"})
+        self.assertIn("FLASH_RUN=QUOTA", r.stdout)
+        self.assertEqual(self.oc_cfg.read_text(encoding="utf-8"), before)
+        self.assertFalse(self.oc_cfg.with_name("opencode.json.bak-flash-switch").exists())
 
     def test_switch_cli(self):
         r = self.run_q("switch", "cc2")

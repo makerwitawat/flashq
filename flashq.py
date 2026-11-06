@@ -2626,19 +2626,13 @@ def cmd_run(a) -> int:
                 nostart_retry -= 1
                 print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
                 continue
-            if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:  # สลับบัญชีเฉพาะ flash-worker
-                switches += 1
-                with file_lock(HOME / "switch.lock"):  # งานคู่ขนานเจอ QUOTA พร้อมกัน → ตรวจ+สลับทีละงาน (ไม่ข้ามบัญชีทีละสอง)
-                    cur = configured_model()
-                    new = "" if (cur and job["model"] and cur != job["model"]) else switch_account("next")
-                if not new:  # งานอื่นที่รันคู่ขนานสลับไปแล้ว → ใช้ตาม ไม่สลับซ้ำ (กันสลับรัว)
-                    if cur and job["model"] and cur != job["model"]:
-                        print(f"QUOTA → บัญชีถูกสลับเป็น {cur} แล้ว (โดยงานอื่น) → สั่งงานเดิมซ้ำด้วยบัญชีนั้น (ครั้งที่ {switches})", flush=True)
-                        job["model"] = cur
-                        continue
-                elif new != job["model"]:
-                    print(f"QUOTA → สลับบัญชีเป็น {new} แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
+            if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:  # สลับบัญชีเฉพาะ flash-worker (เฉพาะงานนี้ · ไม่แก้ opencode.json)
+                new = next_account_model(job["model"] or configured_model())
+                if new and new != job["model"]:
+                    switches += 1
+                    print(f"QUOTA → สลับบัญชีเป็น {new} (เฉพาะงานนี้ · ไม่แก้ opencode.json) แล้วสั่งงานเดิมซ้ำ (ครั้งที่ {switches})", flush=True)
                     job["model"] = new
+                    save_job(job)
                     continue
             if res["status"] == "QUOTA" and not worker_like and job["model"] and switches < a.switch_on_quota:
                 # ผู้ตรวจ/ผู้สืบ: โควตาหมด → ย้าย provider เป็นโมเดลเดิม (ไม่แตะ opencode.json) แล้วสั่งซ้ำ
@@ -4846,6 +4840,17 @@ def edit_accounts(action: str, body: dict) -> tuple[bool, str]:
 def role_rows() -> list[dict]:
     """โมเดลที่แต่ละบทบาท (ผู้ทำ/ผู้ตรวจ/…) ใช้อยู่ — เหมือนตารางของ flashq models"""
     return [{"key": k, "agent": ag, "label": lb, "model": agent_model(ag)} for k, ag, lb in MODEL_ROLES]
+
+
+def next_account_model(current: str) -> str:
+    """โมเดลบัญชีถัดไปต่อจาก current ตามลำดับ accounts.json (วนรอบ · ไม่เจอ current = ตัวแรก) · ไม่เขียนไฟล์ใด ๆ"""
+    _, accs = accounts()
+    models = [m for _, m in accs]
+    if not models:
+        return ""
+    if current not in models:
+        return models[0]
+    return models[(models.index(current) + 1) % len(models)]
 
 
 def switch_account(arg: str) -> str:

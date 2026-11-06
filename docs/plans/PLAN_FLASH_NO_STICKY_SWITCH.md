@@ -28,7 +28,7 @@ node --check .tmp/ui_script.js
 **สาเหตุ/หลักฐาน** (ผู้สืบ + Claude เปิดโค้ดยืนยันแล้ว): `flashq.py:2629-2642` เมื่องาน worker เจอ QUOTA เรียก `switch_account("next")` (`flashq.py:4851-4881`) ซึ่งเขียน `agent.flash-worker.model` ลง `opencode.json` ถาวรและไม่มีโค้ดคืนค่าเดิม → โมเดลที่ผู้ใช้ตั้งไว้ถูกแทนที่ตลอดไป (หน้าเว็บเลยเห็น "ใช้อยู่" = go2 ทั้งที่แถวแรกคือ cc)
 **ทิศทาง**: ให้ auto-switch เปลี่ยนแค่ `job["model"]` (ส่งเป็น `--model` รอบถัดไป — โค้ดเดิม `flashq.py:2591` ทำอยู่แล้ว) ไม่แตะ `opencode.json` · `flashq switch` / `/api/switch` ที่ผู้ใช้สั่งเองยังเขียนตามเดิม (`switch_account` ห้ามเปลี่ยนพฤติกรรม)
 
-- [ ] **T-01** `tests/test_flashq.py` ~684 (`test_quota_switch`) ~2005 (`test_quota_no_double_switch`) + `flashq.py` ~2629-2642 · แบบ: เทสต์ก่อน
+- [x] **T-01** `tests/test_flashq.py` ~684 (`test_quota_switch`) ~2005 (`test_quota_no_double_switch`) + `flashq.py` ~2629-2642 · แบบ: เทสต์ก่อน
   - เทสต์: ปรับ `test_quota_switch` ให้ตรวจพฤติกรรมใหม่: รันด้วย `FAKE_MODE=quota` + `--switch-on-quota 1` แล้ว (ก) stdout ยังมี "FLASH_RUN=QUOTA" และข้อความ "สลับบัญชี" (ข) **`opencode.json` ยังเป็นโมเดลเดิมก่อนรัน ไม่เปลี่ยน** (ค) args ที่ opencode ปลอมได้รับมี 2 รอบ และ `--model` ของรอบที่ 2 เป็นบัญชีถัดไปตามลำดับ `accounts.json` (คือ `commandcode/deepseek/deepseek-v4.1-flash` ตามที่เทสต์เดิมคาด) · `test_quota_no_double_switch` เดิมทดสอบกลไก "งานอื่นสลับไปแล้ว" ซึ่งไม่มีอีกแล้ว → **ลบเทสต์นี้** และแทนด้วยเทสต์ใหม่ `test_quota_switch_does_not_touch_config` ที่ตรวจว่าหลังรันที่มี QUOTA `opencode.json` ไม่ถูกเขียนใหม่เลย (เทียบเนื้อไฟล์ก่อน/หลัง) และไม่เกิดไฟล์ `opencode.json.bak-flash-switch`
   - แดง (ก่อนแก้โค้ด): `python -m pytest tests/test_flashq.py -q -x -k "test_quota_switch" > .tmp/T-01.red.log` → ต้อง FAIL ที่การตรวจว่า config ไม่เปลี่ยน (ค่าใน config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash` แทนค่าเดิม)
   - แก้ (สเปก) ที่ `flashq.py` บล็อก `if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:` (หาด้วย Grep ข้อความนี้):
@@ -68,6 +68,7 @@ node --check .tmp/ui_script.js
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | - | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - **แยก 429 "overloaded" ออกจาก QUOTA** (`QUOTA_RE` ที่ `flashq.py:97`, ตัดสินที่ ~1977) — ตัดออกจากแผนนี้: เมื่อ T-01 ไม่เขียน `opencode.json` แล้ว การนับ 429 เป็น QUOTA ไม่ทำให้ค่าผู้ใช้ถูกเขียนทับอีก (ผู้ตรวจ/ผู้สืบย้าย provider เฉพาะรอบอยู่แล้ว) · การเปลี่ยนจะทำให้ 429 กลายเป็น FAIL ไม่ retry ซึ่งแย่กว่าเดิม · ยังไม่ได้ตรวจโค้ดจุดนั้นเองจึงไม่ยืนยัน
