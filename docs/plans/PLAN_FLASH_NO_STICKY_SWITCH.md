@@ -42,7 +42,7 @@ node --check .tmp/ui_script.js
 
 ## 2. กลุ่ม B — หน้าเว็บ
 
-- [ ] **T-02** `ui.html` ~522 (`switchNext`) ~2819 (ข้อความ `wz-hint`) ~2912 (`$("switchNext").onclick`) · แบบ: สเปก
+- [x] **T-02** `ui.html` ~522 (`switchNext`) ~2819 (ข้อความ `wz-hint`) ~2912 (`$("switchNext").onclick`) · แบบ: สเปก
   - **ความจริงที่ต้องสื่อ**: "ใช้อยู่" = ค่า `agent.flash-worker.model` ใน `opencode.json` (ไม่ใช่แถวแรกของรายการ) · ลำดับในรายการ = ลำดับสลับตอนโควตาหมด
   - จุดเสียบ: ปุ่ม `<button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button>` ในแถวเดียวกัน · `$("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); ...` · ข้อความ `· ลำดับ = ลำดับสลับตอนโควตาหมด` ใน `wzRender` · ป้าย `<span class="wz-tag ok">ใช้อยู่</span>`
   - ต้องมี: (1) ปุ่มใหม่ `id="switchFirst"` ข้อความ "ใช้บัญชีแรก" ข้างปุ่มเดิม · กดแล้ว `post("/api/switch", { target: state.accounts[0].short })` (มีรายการแล้วเท่านั้น · ว่าง = แจ้ง toast "ไม่มีรายการบัญชี") แล้ว toast `d.message || d.error || "ผิดพลาด"` + `refresh()` เหมือนปุ่มเดิม · ใช้ `post` ตัวเดิม (token/Origin มีอยู่แล้ว ห้ามเพิ่ม endpoint) (2) ป้าย "ใช้อยู่" ใส่ `title="ค่าใน opencode.json (ไม่ใช่แถวแรกเสมอไป)"` (3) ท้ายข้อความ `wz-hint` เพิ่มสั้น ๆ ว่า " · ป้าย "ใช้อยู่" = ค่าใน opencode.json" (4) ปุ่ม "ใช้บัญชีแรก" ปิดใช้ (disabled) เมื่อบัญชีแรกคือ `state.current_model` อยู่แล้ว — ในหน้าหลักอัปเดตสถานะใน render เดียวกับที่ใส่ `#curModel` (หา `$("curModel").textContent = ` ด้วย Grep)
@@ -68,8 +68,9 @@ node --check .tmp/ui_script.js
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | - | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) | |
-| T-03 | ✅แก้ | - | `.tmp/T-03.log` → `False` · `git diff --stat` ก่อน commit = `CHANGELOG.md \| 1 +` · `docs/REFERENCE.md \| 4 ++--` (เฉพาะ 2 ไฟล์นี้) | |
+| T-01 | ✅แก้ (หมายเหตุ: commit แตะไฟล์แผนเพิ่มด้วยนอกเหนือ tests/flashq.py) | 0a0f88d | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) | |
+| T-02 | ✅แก้ | 8700409 | `.tmp/T-02.node.log` ว่าง (0 ไบต์ · node exit 0) · `.tmp/T-02.smoke.log` → `UI_SMOKE OK` · `git show --stat` = `ui.html | 12 +++++++++---` ไฟล์เดียว | |
+| T-03 | ✅แก้ | 578a900 | `.tmp/T-03.log` → `False` · `git diff --stat` ก่อน commit = `CHANGELOG.md \| 1 +` · `docs/REFERENCE.md \| 4 ++--` (เฉพาะ 2 ไฟล์นี้) | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - **แยก 429 "overloaded" ออกจาก QUOTA** (`QUOTA_RE` ที่ `flashq.py:97`, ตัดสินที่ ~1977) — ตัดออกจากแผนนี้: เมื่อ T-01 ไม่เขียน `opencode.json` แล้ว การนับ 429 เป็น QUOTA ไม่ทำให้ค่าผู้ใช้ถูกเขียนทับอีก (ผู้ตรวจ/ผู้สืบย้าย provider เฉพาะรอบอยู่แล้ว) · การเปลี่ยนจะทำให้ 429 กลายเป็น FAIL ไม่ retry ซึ่งแย่กว่าเดิม · ยังไม่ได้ตรวจโค้ดจุดนั้นเองจึงไม่ยืนยัน
