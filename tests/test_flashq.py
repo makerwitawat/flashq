@@ -286,6 +286,29 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
 
+    def test_wait_heartbeat_and_new(self):
+        """wait --heartbeat ครบรอบ = FLASH_WAIT=BEAT exit 4 + บอกให้สั่ง wait ซ้ำ · --new ไม่หยิบผลเก่าของแผนเดียวกัน"""
+        p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "6"}, wait=False)
+        r = self.run_q("wait", "PLAN.md", "--new", "--heartbeat", "--heartbeat-min", "0.02", "--poll", "0.5")
+        self.assertEqual(r.returncode, 4, r.stdout)
+        self.assertIn("FLASH_WAIT=BEAT", r.stdout)
+        again = r.stdout.split("FLASH_WAIT=BEAT", 1)[1]
+        self.assertRegex(again, r'wait "[^"]+" --heartbeat`')  # target ตัวเดียว (argparse รับได้) · ไม่มี --new (พ้นช่วงเพิ่งส่งแล้ว)
+        self.assertNotIn("--new", again)
+        # ตัวเลี้ยงแคช (--new --heartbeat) งานจบก่อนครบรอบ = บรรทัด FLASH_RUN สั้น ๆ ไม่ซ้ำสรุปท้ายของ run
+        r = self.run_q("wait", "PLAN.md", "--new", "--heartbeat", "--poll", "0.5", env={"FLASHQ_WAIT_COMPANION_LINGER_SEC": "0"})
+        p1.communicate(timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED job=", r.stdout)
+        self.assertIn("ตัวเลี้ยงแคช", r.stdout)
+        self.assertNotIn("สรุปท้าย", r.stdout)
+        r = self.run_q("wait", "PLAN.md", "--heartbeat")  # ตัวเฝ้าตัวเดียว (ไม่มี --new) = ผลเต็ม
+        self.assertIn("สรุปท้าย", r.stdout)
+        time.sleep(1.5)
+        r = self.run_q("wait", "PLAN.md", "--new", "--poll", "0.5", env={"FLASHQ_WAIT_NEW_GRACE_SEC": "1"})
+        self.assertEqual(r.returncode, 1, r.stdout)  # งานของแผนนี้จบไปก่อนเริ่มรอ = ไม่ใช่ "งานที่เพิ่งส่ง"
+        self.assertIn("FLASH_WAIT=NOJOB", r.stdout)
+
     def test_wait_and_log_show_unverified_warn(self):
         """wait/log พิมพ์บรรทัด WARN บอกเหตุของผล OK_UNVERIFIED เหมือนที่ run พิมพ์"""
         self.run_q(*self.base())

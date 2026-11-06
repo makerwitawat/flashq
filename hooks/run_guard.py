@@ -216,7 +216,11 @@ def judge(command: str, background: bool, cfg: dict) -> tuple[str, str]:
         return "block", "\n".join(f"  ✗ {b}" for b in bad)
     if kinds - {"wait"}:
         return "warn", ("flashq: งานนี้เดินใน background — ห้าม sleep / poll / `flashq status` วน · หยุดนิ่งรอแจ้งเตือนว่าคำสั่งจบ "
-                        "(ได้บรรทัด FLASH_RUN=…) แล้วค่อย /flash-check · ติดคิว (QUEUED) ก็รอต่อ ไม่ต้องส่งซ้ำ")
+                        "(ได้บรรทัด FLASH_RUN=…) แล้วค่อย /flash-check · ติดคิว (QUEUED) ก็รอต่อ ไม่ต้องส่งซ้ำ · "
+                        "คู่กับ run ให้เปิดตัวเลี้ยงแคช `wait <แผน> --new --heartbeat` ใน background ด้วย (งานเกิน 1 ชม. แคชไม่หมด · กติกา BEAT/TaskStop ตาม /flash-plan §4)")
+    if "--heartbeat" in words_all:
+        return "warn", ("flashq: ตัวเลี้ยงแคช — ได้ FLASH_WAIT=BEAT ให้สั่ง wait ตามบรรทัด `ทำต่อ:` ใน background แล้วจบ turn บรรทัดเดียว ห้ามทำอย่างอื่น · "
+                        "run จบก่อน = หยุดตัวนี้ด้วย TaskStop ในข้อความเดียวกับ tool call แรกของ /flash-check")
     return "", ""
 
 

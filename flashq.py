@@ -4321,9 +4321,17 @@ def cmd_inbox(a) -> int:
     return 0
 
 
-def wait_targets(target: str) -> list[dict]:
-    """งานที่ตรงกับ target: id (ขึ้นต้น) หรือชื่อแผน/stem · เลือกงานที่ยังไม่จบก่อน ไม่มี = งานล่าสุดของแผนนั้น"""
+def wait_targets(target: str, since: float = 0) -> list[dict]:
+    """งานที่ตรงกับ target: id (ขึ้นต้น) หรือชื่อแผน/stem · เลือกงานที่ยังไม่จบก่อน ไม่มี = งานล่าสุดของแผนนั้น
+    since > 0 (wait --new) = นับเฉพาะงานที่สร้างตั้งแต่เวลานั้น (ไม่หยิบผลเก่าของแผนเดียวกันมาตอบ)"""
     rows = jobs()
+    if since:
+        def fresh(j):
+            try:
+                return _ts(j["created"]) >= since
+            except Exception:
+                return False
+        rows = [j for j in rows if fresh(j)]
     hit = [j for j in rows if j["id"].startswith(target)]
     if not hit:
         stem = Path(target).stem.lower()
@@ -4332,16 +4340,31 @@ def wait_targets(target: str) -> list[dict]:
     return live or hit[-1:]
 
 
+WAIT_NEW_GRACE_SEC = float(os.environ.get("FLASHQ_WAIT_NEW_GRACE_SEC") or 120)  # wait --new: งานที่สร้างก่อนเริ่มรอไม่เกินเท่านี้นับเป็น "งานที่เพิ่งส่ง" + รอไฟล์งานโผล่ได้นานเท่านี้ (ด่านตรวจของ run อาจช้า)
+WAIT_HEARTBEAT_MIN = 55   # แคช prompt ของ Claude Code อยู่ 1 ชม. → ปลุกก่อนหมดเล็กน้อยให้ต่ออายุแคช (ตั้งที่ config wait_heartbeat_min · 0 = ปิด)
+
+
 def cmd_wait(a) -> int:
     """บล็อกจนงานจบ (Claude รันคำสั่งนี้ใน background แล้วรอแจ้งเตือน — ไม่ต้อง sleep/poll เอง) · พิมพ์ FLASH_RUN=... ของทุกงานที่รอ
-    exit 0 = OK ทั้งหมด · 1 = มีงานไม่ OK/ไม่พบงาน · 3 = ยังไม่จบในเวลาที่ให้"""
+    exit 0 = OK ทั้งหมด · 1 = มีงานไม่ OK/ไม่พบงาน · 3 = ยังไม่จบในเวลาที่ให้ · 4 = --heartbeat ครบรอบ (งานยังไม่จบ → สั่ง wait เดิมซ้ำ)
+    --heartbeat: งานนานเกินอายุแคช (1 ชม.) ถ้าปล่อยให้แคชหมด ตอนตื่นต้องจ่ายสร้างแคชใหม่ทั้งก้อน (~2× ราคา input)
+    ตื่นทุก ~55 นาทีแล้วสั่ง wait ซ้ำ = จ่ายแค่อ่านแคช (~0.1×) · --new: นับเฉพาะงานที่เพิ่งส่ง (ใช้คู่กับ run ที่เพิ่งสั่ง)"""
     t0 = time.time()
-    targets = wait_targets(a.target)
+    since = t0 - WAIT_NEW_GRACE_SEC if getattr(a, "new", False) else 0
+    targets = wait_targets(a.target, since)
+    # run ที่เพิ่งสั่งอาจยังไม่สร้างไฟล์งาน → รอจนเจองานที่ยังไม่จบ (งานที่จบไปแล้วของแผนเดียวกัน = รอบก่อน ไม่ใช่ตัวที่เพิ่งส่ง)
+    while since and not any(live_state(j) in ("queued", "running") for j in targets) and time.time() - t0 < WAIT_NEW_GRACE_SEC:
+        time.sleep(min(a.poll, 2))
+        targets = wait_targets(a.target, since)
     if not targets:
         print(f"FLASH_WAIT=NOJOB ไม่พบงานที่ตรงกับ '{a.target}' (ดู: flashq list --all)")
         return 1
+    beat = 0.0
+    if getattr(a, "heartbeat", False):
+        beat = a.heartbeat_min if a.heartbeat_min is not None else float(read_config().get("wait_heartbeat_min", WAIT_HEARTBEAT_MIN) or 0)
     ids = [j["id"] for j in targets]
-    print(f"รอ {len(ids)} งาน: {', '.join(ids)} (เพดาน {a.timeout_min:g} นาที · เช็กทุก {a.poll:g} วิ)", flush=True)
+    print(f"รอ {len(ids)} งาน: {', '.join(ids)} (เพดาน {a.timeout_min:g} นาที · เช็กทุก {a.poll:g} วิ"
+          + (f" · ปลุกเลี้ยงแคชทุก {beat:g} นาที" if beat > 0 else "") + ")", flush=True)
     noted = time.time()
     cur = targets
     while True:
@@ -4353,12 +4376,26 @@ def cmd_wait(a) -> int:
             print(f"FLASH_WAIT=TIMEOUT ยังไม่จบใน {a.timeout_min:g} นาที: " + ", ".join(f"{j['id']} ({live_state(j)})" for j in pending)
                   + " → สั่ง wait ใหม่ หรือ flashq why")
             return 3
+        if beat > 0 and time.time() - t0 >= beat * 60:
+            print(f"FLASH_WAIT=BEAT ปลุกเลี้ยงแคช — ยังรอ {(time.time() - t0) / 60:.0f} นาที: "
+                  + ", ".join(f"{j['id']} ({live_state(j)})" for j in pending))
+            again = a.target if len(pending) > 1 else pending[0]["id"]  # wait รับ target ตัวเดียว · หลายงาน = ใช้ target เดิม (ไม่ใส่ --new: พ้นช่วง "เพิ่งส่ง" แล้ว)
+            print(f"ทำต่อ: รัน `{run_cmd()} wait \"{again}\" --heartbeat` ด้วย run_in_background: true "
+                  "คำสั่งเดียว แล้วจบ turn ด้วยข้อความบรรทัดเดียว — ห้ามอ่านไฟล์/เช็กสถานะ/ทำอย่างอื่น (ทุก tool call = จ่าย context)")
+            return 4
         if time.time() - noted >= 600:  # บรรทัดเดียวทุก 10 นาที พอให้รู้ว่ายังรอ (ไม่ถมผลลัพธ์)
             noted = time.time()
             print(f"  … {(time.time() - t0) / 60:.0f} นาที · " + " · ".join(f"{j['id']} {live_state(j)}" for j in pending), flush=True)
         time.sleep(a.poll)
+    companion = getattr(a, "new", False) and beat > 0  # ตัวเลี้ยงแคชคู่กับ run: run แจ้งผลเต็มเองแล้ว
     rc = 0
     for j in cur:
+        if companion:  # บรรทัดเดียว (ไม่ซ้ำสรุปท้ายของ run ให้ถม context) · ยังมี FLASH_RUN= เผื่อ run ไม่ได้ถูกเฝ้า
+            res = "DEAD" if live_state(j) == "dead" else str(j.get("result") or live_state(j)).upper()
+            print(f"FLASH_RUN={res} job={j['id']} (ตัวเลี้ยงแคช — ผลเต็มอยู่ที่คำสั่ง run · ถ้าตรวจไปแล้วไม่ต้องทำอะไร · ดูเต็ม: {run_cmd()} wait {j['id']})")
+            if res not in ("OK", "OK_UNVERIFIED"):
+                rc = 1
+            continue
         st = live_state(j)
         res = "DEAD" if st == "dead" else str(j.get("result") or st).upper()
         mins = ""
@@ -4379,6 +4416,8 @@ def cmd_wait(a) -> int:
         print((j.get("last") or "(ไม่มีข้อความ)")[-1500:])
         if res not in ("OK", "OK_UNVERIFIED"):
             rc = 1
+    if companion:  # หน่วงก่อนจบ: ให้ Claude ที่ตื่นจาก run หยุดตัวนี้ (TaskStop) ทันก่อน = ไม่ปลุกซ้ำอีกรอบ
+        time.sleep(float(os.environ.get("FLASHQ_WAIT_COMPANION_LINGER_SEC") or 90))
     return rc
 
 
@@ -5163,6 +5202,7 @@ OC_COMMANDER_NOTE = """
 > **ผู้สั่งคือ agent หลักของ opencode (โมเดลไหนก็ได้ เช่น GLM)** — ไฟล์นี้สร้างจากต้นฉบับของ Claude Code ตอน `flashq install` (แก้ที่ `claude/commands/` ไม่ใช่ไฟล์นี้) · อ่านคำในไฟล์ตามนี้:
 > - `AskUserQuestion` → question tool · `Agent` / subagent → task tool (เลือก `model:` ไม่ได้ ใช้ agent ที่มี) · `Skill` → skill tool
 > - `run_in_background` → ใส่ `--detach` ท้ายคำสั่ง `flashq run …` (ส่งเข้าคิวแล้วคืนทันที) แล้ว**หยุดรอ** ห้าม sleep/poll · จบแล้วผู้ใช้สั่งต่อ หรือรัน `flashq inbox` ดูผลงานที่จบ
+> - **ข้ามตัวเลี้ยงแคช** (`wait --new --heartbeat` · `TaskStop` · `FLASH_WAIT=BEAT`) — มีไว้ให้ Claude Code ที่รอใน background เท่านั้น
 > - hook/ยามของ Claude (`run_guard` `inbox_notify` `delegate_guard`) ไม่มีใน opencode → ทำตามกติกาในไฟล์ด้วยตัวเอง · ไม่มี subagent `flash-checker` → ตรวจเองตามขั้นของคำสั่ง
 > - `run --detach` ไม่เปิดหน้าต่าง session ของพนักงานให้เองอยู่แล้ว · อยากเปิด/ปิดเอง → `flashq config open_session on|off|auto` (ทั้งเครื่อง) หรือ `"open_session": true|false` ใน `.flash.json` (ต่อโปรเจกต์)
 """
@@ -8367,6 +8407,9 @@ def main() -> int:
     wt.add_argument("target", help="job id (ขึ้นต้น) หรือชื่อแผน/ไฟล์แผน (= ทุกงานของแผนนั้นที่ยังไม่จบ)")
     wt.add_argument("--timeout-min", type=float, default=480, help="รอได้นานสุด (นาที) · เกิน = FLASH_WAIT=TIMEOUT exit 3")
     wt.add_argument("--poll", type=float, default=15, help="เช็กทุกกี่วินาที")
+    wt.add_argument("--heartbeat", action="store_true", help="ตื่นก่อนแคชของ Claude หมด (ค่าเริ่มต้น 55 นาที · config wait_heartbeat_min · 0 = ปิด) → FLASH_WAIT=BEAT exit 4 ให้สั่ง wait ซ้ำ")
+    wt.add_argument("--heartbeat-min", type=float, default=None, help=argparse.SUPPRESS)  # ทดสอบ/ปรับเอง แทนค่าใน config
+    wt.add_argument("--new", action="store_true", help=f"นับเฉพาะงานที่เพิ่งส่ง (≤{WAIT_NEW_GRACE_SEC} วิ) · รอไฟล์งานโผล่ได้ — ใช้เป็นตัวเลี้ยงแคชคู่กับ run ที่เพิ่งสั่ง")
     wt.set_defaults(fn=cmd_wait)
     ib = sp.add_parser("inbox", help="แสดงผลงานที่จบแล้วของโปรเจกต์นี้ (cwd) แล้วย้ายเข้า done — แทน hook สำหรับผู้สั่งที่ไม่ใช่ Claude Code")
     ib.set_defaults(fn=cmd_inbox)
