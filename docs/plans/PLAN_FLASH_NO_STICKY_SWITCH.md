@@ -53,7 +53,7 @@ node --check .tmp/ui_script.js
 
 ## 3. กลุ่ม C — เอกสาร
 
-- [ ] **T-03** `docs/REFERENCE.md` ~16 + `CHANGELOG.md` บนสุด · แบบ: สเปก
+- [x] **T-03** `docs/REFERENCE.md` ~16 + `CHANGELOG.md` บนสุด · แบบ: สเปก
   - จุดเสียบ: บรรทัดใน REFERENCE ที่ขึ้นต้น `- ระหว่างรันหลายงาน \`--switch-on-quota\` จะ **ไม่สลับบัญชีซ้ำ**` · ส่วนหัว `## 2026-11-06` ใน CHANGELOG
   - ต้องมี: (1) แทนบรรทัด REFERENCE นั้นด้วยคำอธิบายใหม่: โควตาหมด → ผู้ทำสลับไปบัญชีถัดไปตาม `accounts.json` **เฉพาะงานนั้น (ส่ง `--model` รอบถัดไป) ไม่แก้ `opencode.json`** · งานถัดไปเริ่มจากโมเดลใน `opencode.json` ตามเดิม (ถ้าบัญชีนั้นโควตาหมดอยู่ก็จะสลับอีกรอบ) · `flashq switch` / ปุ่มในหน้าเว็บยังเขียน `opencode.json` ตามที่ผู้ใช้สั่ง · ปุ่ม "ใช้บัญชีแรก" (2) แก้บรรทัด REFERENCE ~130 ที่พูดว่า "ไม่แก้ `opencode.json` ต่างจากผู้ทำที่สลับบัญชีกลาง" ให้ตรงของใหม่ (ผู้ทำก็ไม่แก้แล้ว) (3) CHANGELOG เพิ่มบูลเล็ต 1 บรรทัดใต้ `## 2026-11-06` ด้านบนสุด ตามรูปแบบเดิม (ตัวหนาหัวข้อ + คำอธิบาย) ว่าแก้บั๊ก: สลับบัญชีอัตโนมัติเคยเขียนทับค่าโมเดลของผู้ใช้ถาวร · ไม่แตะ `README.md` (ไม่มีข้อความที่ขัด)
   - ยืนยัน: `python -c "import pathlib;t=pathlib.Path('docs/REFERENCE.md').read_text(encoding='utf-8');print('ไม่สลับบัญชีซ้ำ' in t)" > .tmp/T-03.log` → `False`
@@ -69,6 +69,7 @@ node --check .tmp/ui_script.js
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
 | T-01 | ✅แก้ | - | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) | |
+| T-03 | ✅แก้ | - | `.tmp/T-03.log` → `False` · `git diff --stat` ก่อน commit = `CHANGELOG.md \| 1 +` · `docs/REFERENCE.md \| 4 ++--` (เฉพาะ 2 ไฟล์นี้) | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - **แยก 429 "overloaded" ออกจาก QUOTA** (`QUOTA_RE` ที่ `flashq.py:97`, ตัดสินที่ ~1977) — ตัดออกจากแผนนี้: เมื่อ T-01 ไม่เขียน `opencode.json` แล้ว การนับ 429 เป็น QUOTA ไม่ทำให้ค่าผู้ใช้ถูกเขียนทับอีก (ผู้ตรวจ/ผู้สืบย้าย provider เฉพาะรอบอยู่แล้ว) · การเปลี่ยนจะทำให้ 429 กลายเป็น FAIL ไม่ retry ซึ่งแย่กว่าเดิม · ยังไม่ได้ตรวจโค้ดจุดนั้นเองจึงไม่ยืนยัน
