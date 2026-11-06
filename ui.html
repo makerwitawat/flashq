@@ -519,7 +519,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
       <div class="pb">
         <div class="muted" style="margin-bottom:0.4rem">ปัจจุบัน: <b id="curModel" class="mono"></b></div>
         <div id="accounts"></div>
-        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button><button id="accEditBtn" title="เปิดตัวช่วย: เพิ่ม/ลบ/แก้บัญชี และโมเดลของแต่ละบทบาท">✎ แก้ไขรายการ</button></div>
+        <div class="row" style="margin-top:0.5rem"><button id="switchNext" class="primary">สลับไปบัญชีถัดไป</button><button id="switchFirst">ใช้บัญชีแรก</button><button id="accEditBtn" title="เปิดตัวช่วย: เพิ่ม/ลบ/แก้บัญชี และโมเดลของแต่ละบทบาท">✎ แก้ไขรายการ</button></div>
       </div>
     </section>
     <section class="panel" data-panel="stats">
@@ -2149,6 +2149,8 @@ function render() {
     </table>` : `<div class="empty">ไม่มีประวัติที่ตรงเงื่อนไข</div>`);
 
   $("curModel").textContent = s.current_model || "(ยังไม่ตั้ง)";
+  const firstAcc = (s.accounts || [])[0];
+  $("switchFirst").disabled = !!(firstAcc && firstAcc.model === s.current_model);
   setHTML("accounts", s.accounts.map((a) => `<div class="acc${a.model === s.current_model ? " cur" : ""}">
     <b>${a.model === s.current_model ? "● " : ""}${esc(a.short)}</b><span class="m">${esc(a.model)}${a.available ? "" : " (ไม่มีใน provider!)"}</span>
     <button data-switch="${esc(a.short)}" ${a.model === s.current_model || !a.available ? "disabled" : ""}>ใช้</button></div>`).join("") || `<div class="empty">ไม่มีรายการบัญชี</div>`);
@@ -2810,13 +2812,13 @@ function wzRender() {
   if (wz.view === "home") {
     $("wzTitle").textContent = "จัดการบัญชีโมเดล";
     const accs = state?.accounts || [], cur = state?.current_model;
-    const rows = accs.map((a, i) => `<div class="wz-row" data-short="${esc(a.short)}"><div class="wz-main"><b>${esc(a.short)}</b>${a.model === cur ? ` <span class="wz-tag ok">ใช้อยู่</span>` : ""}
+    const rows = accs.map((a, i) => `<div class="wz-row" data-short="${esc(a.short)}"><div class="wz-main"><b>${esc(a.short)}</b>${a.model === cur ? ` <span class="wz-tag ok" title="ค่าใน opencode.json (ไม่ใช่แถวแรกเสมอไป)">ใช้อยู่</span>` : ""}
       <div class="wz-sub mono">${esc(a.model)}</div>${accLoaded && !wzHas(a.model) ? `<div class="wz-bad">เครื่องนี้ไม่มีโมเดลนี้</div>` : ""}</div>
       <div class="wz-act">${btn("up", "▲", "", i === 0)}${btn("down", "▼", "", i === accs.length - 1)}${btn("edit", "แก้ไข")}${btn("del", "ลบ", "danger", accs.length <= 1)}</div></div>`).join("");
     const roles = (accInfo.roles || []).map((r) => `<div class="wz-row" data-role="${esc(r.key)}"><div class="wz-main"><b>${esc(r.key)}</b> ${esc(r.label)}<div class="wz-sub mono">${esc(r.model || "(ยังไม่ได้ตั้ง)")}</div></div>
       <div class="wz-act">${btn("role", "เปลี่ยน")}</div></div>`).join("");
     const nProv = (accInfo.providers || []).length, nDecl = (accInfo.providers || []).filter((p) => p.declared).length;
-    body.innerHTML = `<p class="wz-hint">${state?.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด${accLoaded ? ` · opencode มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น` : " · กำลังโหลดรายการโมเดล…"}${accInfo.note ? ` <span class="wz-bad">(${esc(accInfo.note)})</span>` : ""}</p>
+    body.innerHTML = `<p class="wz-hint">${state?.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด · ป้าย "ใช้อยู่" = ค่าใน opencode.json${accLoaded ? ` · opencode มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น` : " · กำลังโหลดรายการโมเดล…"}${accInfo.note ? ` <span class="wz-bad">(${esc(accInfo.note)})</span>` : ""}</p>
       ${rows || `<div class="empty">ยังไม่มีบัญชี</div>`}
       <h3 style="margin:0.7rem 0 0.2rem;font-size:0.95rem">โมเดลของแต่ละบทบาท (เหมือน flashq models)</h3>${roles || `<div class="empty">อ่านบทบาทไม่ได้</div>`}`;
     foot.innerHTML = `<span class="sp">${btn("reload", "โหลดรายการโมเดลใหม่")}${state?.accounts_source === "machine" ? btn("reset", "คืนค่าตั้งต้นของ repo", "danger") : ""}</span>${btn("add", "+ เพิ่มบัญชี", "primary")}${btn("close", "ปิด")}`;
@@ -2910,6 +2912,10 @@ $("accDlg").addEventListener("click", (ev) => {
 });
 
 $("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
+$("switchFirst").onclick = async () => {
+  if (!state || !(state.accounts || []).length) { toast("ไม่มีรายการบัญชี"); return; }
+  const d = await post("/api/switch", { target: state.accounts[0].short }); toast(d.message || d.error || "ผิดพลาด"); refresh();
+};
 $("projFilter").onchange = () => { store.set("proj", $("projFilter").value); render(); };
 $("stateFilter").onchange = () => render();
 $("histSearch").oninput = () => render();
