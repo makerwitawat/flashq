@@ -68,9 +68,9 @@ node --check .tmp/ui_script.js
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ (หมายเหตุ: commit แตะไฟล์แผนเพิ่มด้วยนอกเหนือ tests/flashq.py) | 0a0f88d | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) | |
-| T-02 | ✅แก้ | 8700409 | `.tmp/T-02.node.log` ว่าง (0 ไบต์ · node exit 0) · `.tmp/T-02.smoke.log` → `UI_SMOKE OK` · `git show --stat` = `ui.html | 12 +++++++++---` ไฟล์เดียว | |
-| T-03 | ✅แก้ | 578a900 | `.tmp/T-03.log` → `False` · `git diff --stat` ก่อน commit = `CHANGELOG.md \| 1 +` · `docs/REFERENCE.md \| 4 ++--` (เฉพาะ 2 ไฟล์นี้) | |
+| T-01 | ✅แก้ (หมายเหตุ: commit แตะไฟล์แผนเพิ่มด้วยนอกเหนือ tests/flashq.py) | 0a0f88d | แดง `.tmp/T-01.red.log` → `FAILED tests/test_flashq.py::FlashqTest::test_quota_switch` (config กลายเป็น `commandcode/deepseek/deepseek-v4.1-flash`) · เขียว `.tmp/T-01.green.log` → `8 passed, 213 deselected` (ไม่มี failed) |  ✅ผ่าน |
+| T-02 | ✅แก้ | 8700409 | `.tmp/T-02.node.log` ว่าง (0 ไบต์ · node exit 0) · `.tmp/T-02.smoke.log` → `UI_SMOKE OK` · `git show --stat` = `ui.html | 12 +++++++++---` ไฟล์เดียว |  ✅ผ่าน |
+| T-03 | ✅แก้ | 578a900 | `.tmp/T-03.log` → `False` · `git diff --stat` ก่อน commit = `CHANGELOG.md \| 1 +` · `docs/REFERENCE.md \| 4 ++--` (เฉพาะ 2 ไฟล์นี้) |  ✅ผ่าน |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - **แยก 429 "overloaded" ออกจาก QUOTA** (`QUOTA_RE` ที่ `flashq.py:97`, ตัดสินที่ ~1977) — ตัดออกจากแผนนี้: เมื่อ T-01 ไม่เขียน `opencode.json` แล้ว การนับ 429 เป็น QUOTA ไม่ทำให้ค่าผู้ใช้ถูกเขียนทับอีก (ผู้ตรวจ/ผู้สืบย้าย provider เฉพาะรอบอยู่แล้ว) · การเปลี่ยนจะทำให้ 429 กลายเป็น FAIL ไม่ retry ซึ่งแย่กว่าเดิม · ยังไม่ได้ตรวจโค้ดจุดนั้นเองจึงไม่ยืนยัน
