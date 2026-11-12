@@ -108,10 +108,10 @@ python -m pytest tests/test_flashq.py -q -k "citation"
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
-| T-01 | ✅แก้ | 7175d50 | แดง `.tmp/T-01.red.log` บรรทัด 29 `...x.h:2 — ไม่พบไฟล์` + บรรทัด 39 `1 failed, 221 deselected` · เขียว `.tmp/T-01.green.log` `7 passed, 215 deselected` ไม่มี `failed` |  |
-| T-02 | ✅แก้ | cac612e | แดง `.tmp/T-02.red.log` บรรทัด 28 `['src/a.py:10 — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): \`110-124\`']` + บรรทัด 37 `1 failed, 222 deselected` · เขียว `.tmp/T-02.green.log` บรรทัด 2 `8 passed, 215 deselected` ไม่มี `failed` |  |
-| T-03 | ✅แก้ | d206dd9 | แดง `.tmp/T-03.red.log` บรรทัด 32 `['src/a.py:20 — ข้อความที่คัดอยู่ที่บรรทัด 10 (ห่าง 10 บรรทัด · เลขเพี้ยน): ...` + บรรทัด 41 `1 failed, 223 deselected` · เขียว `.tmp/T-03.green.log` บรรทัด 2 `16 passed, 208 deselected` ไม่มี `failed` |  |
-| T-04 | ✅แก้ | c5719ba | `.tmp/T-04.log` `16 passed, 208 deselected` ไม่มี `failed` · `.tmp/T-04.stat.log` `CHANGELOG.md 3 +++` + `opencode/agent/flash-investigator.md 4 ++--` (2 files changed) |  |
+| T-01 | ✅แก้ | 7175d50 | แดง `.tmp/T-01.red.log` บรรทัด 29 `...x.h:2 — ไม่พบไฟล์` + บรรทัด 39 `1 failed, 221 deselected` · เขียว `.tmp/T-01.green.log` `7 passed, 215 deselected` ไม่มี `failed` | ✅ผ่าน (ข้อสังเกต: mtime red/green log หลัง commit 7175d50 แต่ diff ตรงแผน+log แดงเป็นพฤติกรรมก่อนแก้จริง) |
+| T-02 | ✅แก้ | cac612e | แดง `.tmp/T-02.red.log` บรรทัด 28 `['src/a.py:10 — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): \`110-124\`']` + บรรทัด 37 `1 failed, 222 deselected` · เขียว `.tmp/T-02.green.log` บรรทัด 2 `8 passed, 215 deselected` ไม่มี `failed` | ✅ผ่าน |
+| T-03 | ✅แก้ | d206dd9 | แดง `.tmp/T-03.red.log` บรรทัด 32 `['src/a.py:20 — ข้อความที่คัดอยู่ที่บรรทัด 10 (ห่าง 10 บรรทัด · เลขเพี้ยน): ...` + บรรทัด 41 `1 failed, 223 deselected` · เขียว `.tmp/T-03.green.log` บรรทัด 2 `16 passed, 208 deselected` ไม่มี `failed` | ✅ผ่าน |
+| T-04 | ✅แก้ | c5719ba | `.tmp/T-04.log` `16 passed, 208 deselected` ไม่มี `failed` · `.tmp/T-04.stat.log` `CHANGELOG.md 3 +++` + `opencode/agent/flash-investigator.md 4 ++--` (2 files changed) | ✅ผ่าน |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หลังรวมแผน Claude รัน `python flashq.py install` จาก checkout หลัก (ไฟล์ใน `opencode/` เปลี่ยน) + รีสตาร์ต `flashq ui`
