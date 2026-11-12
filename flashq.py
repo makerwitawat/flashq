@@ -615,7 +615,7 @@ def _cite_spans(region: str) -> tuple[list[str], list[str]]:
     near, far = [], []
     for sp in re.finditer(r"`([^`]*)`", region):  # แยกทุก code span (สั้นก็นับ) กันคู่ backtick เหลื่อม
         x = sp.group(1).strip()
-        if len(x) < 4 or x.endswith(("()", "/")) or CITE_NEG_RE.search(region[max(0, sp.start() - 14):sp.start()]):
+        if len(x) < 4 or x.endswith(("()", "/")) or re.fullmatch(r"\d+(?:\s*[-–,]\s*\d+)*", x) or CITE_NEG_RE.search(region[max(0, sp.start() - 14):sp.start()]):
             continue
         if sp.start() > CITE_NEAR:
             if CITE_CODEISH_RE.search(x):  # คำเดี่ยวไกล ๆ (`mesh`) มักเป็นคำพูดถึงของอื่น ไม่ใช่โค้ดที่คัด → เอาเฉพาะที่หน้าตาเป็นโค้ด/path

@@ -2349,6 +2349,29 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual(len(r["unresolved"]), 1)
             self.assertIn("กำกวม", r["unresolved"][0])
 
+    def test_check_citations_number_spans(self):
+        """เลขบรรทัด/ช่วงเลขใน backtick หลัง citation ไม่ใช่โค้ดที่คัด — ต้องไม่ฟ้องผิด"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            a = [f"x_{n} = {n}" for n in range(1, 61)]
+            a[9] = "def target():"
+            (root / "src").mkdir(parents=True)
+            (root / "src" / "a.py").write_text("\n".join(a) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            r = chk("`src/a.py:10` ดูช่วง `110-124`")
+            self.assertEqual((r["bad"], r["drift"], r["ok"], r["ok_code"]), ([], [], 1, 0))
+            r = chk("`src/a.py:10` เทียบ `12, 40`")
+            self.assertEqual((r["bad"], r["ok"]), ([], 1))
+            r = chk("`src/a.py:10` — `def target():`")
+            self.assertEqual(r["ok_code"], 1)
+
     def test_check_citations_outside_project(self):
         """citation ชี้ไฟล์นอกโปรเจกต์: absolute/โฟลเดอร์ข้างกันตรวจได้ · โฟลเดอร์แรกไม่มีจริง = ตรวจไม่ได้ (ไม่ฟ้องผิด) · ไฟล์ใต้โปรเจกต์ที่ไม่มีจริงยังฟ้องผิดเดิม"""
         sys.path.insert(0, str(REPO))
