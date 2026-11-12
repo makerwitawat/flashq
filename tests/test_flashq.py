@@ -2349,6 +2349,33 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual(len(r["unresolved"]), 1)
             self.assertIn("กำกวม", r["unresolved"][0])
 
+    def test_check_citations_token_mentions(self):
+        """อ้างแค่ชื่อเดี่ยว (ไม่มีช่องว่าง/วงเล็บ) = พูดถึงชื่อ ไม่ใช่คัดโค้ด — มีในไฟล์ = ตรงแค่ไฟล์/บรรทัด · ไม่มีเลย = ผิด · มีช่องว่าง = โค้ดที่คัด (พฤติกรรมเดิม)"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            a = [f"x_{n} = {n}" for n in range(1, 61)]
+            a[9] = "def target():"
+            (root / "src").mkdir(parents=True)
+            (root / "src" / "a.py").write_text("\n".join(a) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            r = chk("`src/a.py:20` — `target`")
+            self.assertEqual((r["drift"], r["bad"], r["ok"], r["ok_code"]), ([], [], 1, 0))
+            r = chk("`src/a.py:20` — `ghost_symbol`")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ไม่มีในไฟล์นี้เลย", r["bad"][0])
+            r = chk("`src/a.py:20` — `def target():`")
+            self.assertEqual(len(r["drift"]), 1)
+            self.assertIn("บรรทัด 10", r["drift"][0])
+            r = chk("`src/a.py:10` — `target`")
+            self.assertEqual(r["ok_code"], 1)
+
     def test_check_citations_number_spans(self):
         """เลขบรรทัด/ช่วงเลขใน backtick หลัง citation ไม่ใช่โค้ดที่คัด — ต้องไม่ฟ้องผิด"""
         sys.path.insert(0, str(REPO))

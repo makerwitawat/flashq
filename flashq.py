@@ -557,6 +557,7 @@ CITE_CLAUSE_RE = re.compile(r"(?:`|\s|\()?:\d+(?:[-–,]\d+)*|\s·\s|\s→\s")  
 CITE_CODEISH_RE = re.compile(r"[()\[\]{}=<>/\\.:;'\"+*|]")
 CITE_NEAR = 40 # ข้อความที่คัดต้องอยู่ห่างจาก citation ไม่เกินกี่ตัวอักษร (ไกลกว่านี้มักเป็นของอีกประโยค)
 CITE_DRIFT = 40 # ข้อความที่คัดไม่ตรงบรรทัดที่อ้าง แต่เจอในไฟล์ห่างไม่เกินกี่บรรทัด = เลขเพี้ยน (ไม่ใช่ผิดจริง)
+CITE_TOKEN_RE = re.compile(r"[\w:~.]+")  # คำเดี่ยว/ชื่อสัญลักษณ์ (ไม่มีช่องว่าง/วงเล็บ) = พูดถึง ไม่ใช่คัดโค้ดทั้งบรรทัด
 CITE_NEG_RE = re.compile(r"ไม่|ขาด|หาย")  # "ไม่มีคีย์ `source`" = อ้างว่าบรรทัดนี้ไม่มีสิ่งนั้น ไม่ใช่การคัดโค้ด
 
 
@@ -632,6 +633,10 @@ def _cite_judge(near: list[str], far: list[str], line: int, last: int, lines: li
     verdicts = [(x, v) for x, v in verdicts if v is not None]
     miss = [x for x, v in verdicts if not v]
     if verdicts and len(miss) == len(verdicts):
+        if all(CITE_TOKEN_RE.fullmatch(x) for x in miss):  # ชื่อเดี่ยวโผล่หลายที่ → ไม่เดาเลขเพี้ยนจาก occurrence ใกล้สุด
+            whole = " ".join(lines)
+            absent = [x for x in miss if x not in whole]
+            return ("bad_far", absent[0], None, False) if absent else ("ok", None, None, False)
         found = None
         for d in range(0, CITE_DRIFT + 1):  # เรียงจากใกล้ไปไกล · เทียบบรรทัดเดียว (หน้าต่าง ±3 ครอบไปแล้ว)
             for n in ([line] if d == 0 else [line - d, line + d]):
