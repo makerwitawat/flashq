@@ -70,7 +70,7 @@ python -m pytest tests/test_flashq.py -q -k "citation"
   - หลักฐานชี้ขาด: แดง `.tmp/T-02.red.log` บรรทัดที่มี `110-124` และ `1 failed` · เขียว `.tmp/T-02.green.log` บรรทัด `N passed` ไม่มี `failed`
   - commit: `flashq: ตัวตรวจ citation ไม่นับเลขบรรทัด/ช่วงเลขใน backtick เป็นโค้ดที่คัด + เทสต์ (T-02)`
 
-- [ ] **T-03** `flashq.py` ~629 (`_cite_judge`) + ~558 (ค่าคงที่) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-03** `flashq.py` ~629 (`_cite_judge`) + ~558 (ค่าคงที่) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_check_citations_token_mentions` · root เหมือน T-02 (บรรทัด 10 = `def target():`)
     1. `` "`src/a.py:20` — `target`" `` (คำเดี่ยว มีในไฟล์แต่ไม่อยู่ใน ±3) → `drift == []` · `bad == []` · `ok == 1` · `ok_code == 0`
     2. `` "`src/a.py:20` — `ghost_symbol`" `` (คำเดี่ยว ไม่มีในไฟล์เลย) → `len(bad) == 1` · `"ไม่มีในไฟล์นี้เลย" in bad[0]`
@@ -91,7 +91,7 @@ python -m pytest tests/test_flashq.py -q -k "citation"
 
 ## 2. กลุ่ม B — prompt ผู้สืบ + CHANGELOG
 
-- [ ] **T-04** `opencode/agent/flash-investigator.md` + `CHANGELOG.md` (แก้ข้อความ — สเปก)
+- [x] **T-04** `opencode/agent/flash-investigator.md` + `CHANGELOG.md` (แก้ข้อความ — สเปก)
   - (ข้อความที่ต้องใส่อยู่ระหว่าง «» — ไม่ต้องใส่ «» ลงไฟล์)
   - จุดเสียบ 1: บรรทัดที่มีคำว่า `คัดโค้ดใส่` (เจอ 1 ที่ · ข้อ 3 ย่อยเรื่อง path เต็ม) → ต่อท้ายบรรทัดเดิมด้วย « · backtick ติดหลัง citation = **โค้ดจากบรรทัดนั้นตรงตัวเท่านั้น** ห้ามใส่เลขบรรทัดอื่น/ช่วงเลข/ค่าจาก log ไว้ใน backtick ติดกัน — ค่า/ข้อสังเกตอื่นให้คั่นด้วย " · " ก่อน · ไฟล์นอกโปรเจกต์ (โฟลเดอร์ข้างกัน, log) อ้างด้วย path absolute เต็ม»
   - จุดเสียบ 2: บรรทัดที่ขึ้นต้นด้วย `หลักฐาน: <file:line>` (เจอ 1 ที่ ในบล็อกรูปแบบรายงาน) → ทั้งบรรทัดเป็น «หลักฐาน: <file:line> — <บรรทัดโค้ดตรงตัว> · <ค่า/ข้อสังเกตอื่น ถ้ามี> (ทุกข้อ)»
@@ -111,6 +111,7 @@ python -m pytest tests/test_flashq.py -q -k "citation"
 | T-01 | ✅แก้ | 7175d50 | แดง `.tmp/T-01.red.log` บรรทัด 29 `...x.h:2 — ไม่พบไฟล์` + บรรทัด 39 `1 failed, 221 deselected` · เขียว `.tmp/T-01.green.log` `7 passed, 215 deselected` ไม่มี `failed` |  |
 | T-02 | ✅แก้ | cac612e | แดง `.tmp/T-02.red.log` บรรทัด 28 `['src/a.py:10 — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): \`110-124\`']` + บรรทัด 37 `1 failed, 222 deselected` · เขียว `.tmp/T-02.green.log` บรรทัด 2 `8 passed, 215 deselected` ไม่มี `failed` |  |
 | T-03 | ✅แก้ | d206dd9 | แดง `.tmp/T-03.red.log` บรรทัด 32 `['src/a.py:20 — ข้อความที่คัดอยู่ที่บรรทัด 10 (ห่าง 10 บรรทัด · เลขเพี้ยน): ...` + บรรทัด 41 `1 failed, 223 deselected` · เขียว `.tmp/T-03.green.log` บรรทัด 2 `16 passed, 208 deselected` ไม่มี `failed` |  |
+| T-04 | ✅แก้ | c5719ba | `.tmp/T-04.log` `16 passed, 208 deselected` ไม่มี `failed` · `.tmp/T-04.stat.log` `CHANGELOG.md 3 +++` + `opencode/agent/flash-investigator.md 4 ++--` (2 files changed) |  |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หลังรวมแผน Claude รัน `python flashq.py install` จาก checkout หลัก (ไฟล์ใน `opencode/` เปลี่ยน) + รีสตาร์ต `flashq ui`
