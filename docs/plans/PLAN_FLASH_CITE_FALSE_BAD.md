@@ -31,7 +31,7 @@ python -m pytest tests/test_flashq.py -q -k "citation"
 - `flashq.py:613` `_cite_spans` นับทุก backtick ใกล้ citation เป็นโค้ดที่คัด รวม `110-124` (เลขบรรทัดของที่อื่น)
 - `flashq.py:629-640` `_cite_judge` คำเดี่ยว (ชื่อฟังก์ชัน/สัญลักษณ์) ไม่อยู่ใน ±3 → ไปจับ occurrence ใกล้สุดเป็น "เลขเพี้ยน" หรือ "ผิด" ทั้งที่ผู้สืบแค่พูดถึงชื่อ
 
-- [ ] **T-01** `flashq.py` ~566 (`_cite_file`) + ~720 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` ~566 (`_cite_file`) + ~720 (`check_citations`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `tests/test_flashq.py` → `test_check_citations_outside_project` · โครง: `base = Path(d).resolve()` · `root = base / "proj"` มี `src/a.py` (3 บรรทัด `a = 1`/`b = 2`/`c = 3`) + git init ที่ `root` · ไฟล์นอกโปรเจกต์ `base / "ext" / "inc" / "x.h"` = `int a = 1;`/`int b = 2;`/`int c = 3;`
     1. `` f"`{(base / 'ext/inc/x.h').as_posix()}:2` — `int b = 2;`" `` (absolute มีจริง) → `bad == []` และ `ok_code == 1`
     2. `` "`ext/inc/x.h:2` — `int b = 2;`" `` (relative ต่อจากโฟลเดอร์แม่ของ root) → `bad == []` และ `ok_code == 1`
@@ -59,7 +59,7 @@ python -m pytest tests/test_flashq.py -q -k "citation"
   - หลักฐานชี้ขาด: แดง `.tmp/T-01.red.log` บรรทัดที่มี `ไม่พบไฟล์` และ `1 failed` · เขียว `.tmp/T-01.green.log` บรรทัด `N passed` ไม่มี `failed`
   - commit: `flashq: ตรวจ citation ไฟล์นอกโปรเจกต์ได้ (absolute/โฟลเดอร์ข้างกัน) ไม่ฟ้องผิด + เทสต์ (T-01)`
 
-- [ ] **T-02** `flashq.py` ~613 (`_cite_spans`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` ~613 (`_cite_spans`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - เทสต์: `test_check_citations_number_spans` · root มี `src/a.py` 60 บรรทัด `x_{n} = {n}` (n=1..60) และบรรทัด 10 = `def target():` (แบบเดียวกับ `test_check_citations_groups`)
     1. `` "`src/a.py:10` ดูช่วง `110-124`" `` → `bad == []` · `drift == []` · `ok == 1` · `ok_code == 0`
     2. `` "`src/a.py:10` เทียบ `12, 40`" `` → `bad == []` · `ok == 1`
@@ -108,6 +108,9 @@ python -m pytest tests/test_flashq.py -q -k "citation"
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | 7175d50 | แดง `.tmp/T-01.red.log` บรรทัด 29 `...x.h:2 — ไม่พบไฟล์` + บรรทัด 39 `1 failed, 221 deselected` · เขียว `.tmp/T-01.green.log` `7 passed, 215 deselected` ไม่มี `failed` |  |
+| T-02 | ✅แก้ | cac612e | แดง `.tmp/T-02.red.log` บรรทัด 28 `['src/a.py:10 — ข้อความที่คัดไว้ไม่อยู่ในบรรทัดนี้ (±3): \`110-124\`']` + บรรทัด 37 `1 failed, 222 deselected` · เขียว `.tmp/T-02.green.log` บรรทัด 2 `8 passed, 215 deselected` ไม่มี `failed` |  |
+| T-03 | ✅แก้ | d206dd9 | แดง `.tmp/T-03.red.log` บรรทัด 32 `['src/a.py:20 — ข้อความที่คัดอยู่ที่บรรทัด 10 (ห่าง 10 บรรทัด · เลขเพี้ยน): ...` + บรรทัด 41 `1 failed, 223 deselected` · เขียว `.tmp/T-03.green.log` บรรทัด 2 `16 passed, 208 deselected` ไม่มี `failed` |  |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - หลังรวมแผน Claude รัน `python flashq.py install` จาก checkout หลัก (ไฟล์ใน `opencode/` เปลี่ยน) + รีสตาร์ต `flashq ui`
