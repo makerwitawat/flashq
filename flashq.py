@@ -569,6 +569,11 @@ def _cite_file(rel: str, root: Path, tracked: list[str], anchors: list[str]) -> 
             return f, "", []
     except OSError:
         pass
+    p = Path(rel)
+    if p.is_absolute() and p.is_file():  # ไฟล์นอกโปรเจกต์ที่อ้างด้วย path เต็ม (เช่น log ใน ~/.flashq)
+        return p, "", []
+    if "/" in rel and not p.is_absolute() and not (root / rel.split("/", 1)[0]).exists() and (root.parent / rel).is_file():
+        return root.parent / rel, "", []  # โปรเจกต์ย่อยอ้างไฟล์ข้างโฟลเดอร์ (เช่น IRIS_CODE_1.2 → ../Gamebryo-2.6)
     base = rel.rsplit("/", 1)[-1]
     exact = [t for t in tracked if t == rel or t.endswith("/" + rel)]
     loose = [] if "/" in rel else [t for t in tracked if t not in exact and t.rsplit("/", 1)[-1].endswith(("_" + base, "-" + base))]
@@ -717,8 +722,10 @@ def check_citations(text: str, root: Path) -> dict:
                     unresolved.append(f"{rel}:{line} — {why}")
                     continue
                 bad.append(f"{rel}:{line} — ข้อความที่คัดไม่อยู่ในทุกไฟล์ที่ชื่อตรง ({len(pool)} ไฟล์): `{snips[0][:60]}`")
-            elif "/" in rel:
+            elif "/" in rel and (Path(rel).is_absolute() or (root / rel.split("/", 1)[0]).exists()):
                 bad.append(f"{rel}:{line} — {why or 'ไม่พบไฟล์'}")
+            elif "/" in rel:
+                unresolved.append(f"{rel}:{line} — ไฟล์อยู่นอกโปรเจกต์/หาไม่เจอ — ตรวจไม่ได้ (อ้าง path เต็มแบบ absolute)")
             else:
                 unresolved.append(f"{rel}:{line} — ไม่พบในไฟล์ที่ git ติดตาม (อาจไม่ใช่ไฟล์/ไฟล์ untracked)")
             continue

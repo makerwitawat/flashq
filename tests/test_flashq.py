@@ -2349,6 +2349,38 @@ class FlashqTest(unittest.TestCase):
             self.assertEqual(len(r["unresolved"]), 1)
             self.assertIn("กำกวม", r["unresolved"][0])
 
+    def test_check_citations_outside_project(self):
+        """citation ชี้ไฟล์นอกโปรเจกต์: absolute/โฟลเดอร์ข้างกันตรวจได้ · โฟลเดอร์แรกไม่มีจริง = ตรวจไม่ได้ (ไม่ฟ้องผิด) · ไฟล์ใต้โปรเจกต์ที่ไม่มีจริงยังฟ้องผิดเดิม"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d).resolve()
+            root = base / "proj"
+            (root / "src").mkdir(parents=True)
+            (root / "src" / "a.py").write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+            (base / "ext" / "inc").mkdir(parents=True)
+            (base / "ext" / "inc" / "x.h").write_text("int a = 1;\nint b = 2;\nint c = 3;\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+
+            def chk(*lines):
+                return flashq.check_citations("\n".join(lines), root)
+
+            r = chk(f"`{(base / 'ext/inc/x.h').as_posix()}:2` — `int b = 2;`")
+            self.assertEqual((r["bad"], r["ok_code"]), ([], 1))
+            r = chk("`ext/inc/x.h:2` — `int b = 2;`")
+            self.assertEqual((r["bad"], r["ok_code"]), ([], 1))
+            r = chk("`Gamebryo-2.6/sdk/NiSystem.h:106` ดู")
+            self.assertEqual(r["bad"], [])
+            self.assertEqual(len(r["unresolved"]), 1)
+            self.assertIn("นอกโปรเจกต์", r["unresolved"][0])
+            r = chk("`src/ghost.py:1` ดู")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ไม่พบไฟล์", r["bad"][0])
+            r = chk(f"`{(base / 'ext/inc/x.h').as_posix()}:2` — `int z = 9;`")
+            self.assertEqual(len(r["bad"]), 1)
+            self.assertIn("ไม่อยู่ในบรรทัดนี้", r["bad"][0])
+
     def test_unverified_reasons_citation_groups(self):
         """ลดผลเฉพาะ citation ผิดจริง · ตรวจไม่ได้เกินครึ่งและไม่มีข้อตรงถึงโค้ดจึงลดผล · งานเก่าที่ไม่มี key ใหม่ต้องไม่พัง"""
         mod = self.load_mod("flashq_cite_groups")
