@@ -1477,6 +1477,7 @@ if (LANG === "en") {
 สรุปจากการ์ด|summary from the cards
 สลับธีม|toggle theme
 สลับบัญชีเมื่อ|switch account on
+สลับบัญชีแล้วบทบาทที่ใช้บัญชีในรายการย้ายตามทั้งหมด|switching moves every role that uses a listed account
 สลับมุมมอง|switch view
 สลับไปบัญชีถัดไป|switch to the next account
 สว่าง|Light
@@ -2644,7 +2645,7 @@ document.addEventListener("click", async (ev) => {
     toast(d.message || d.error || "ผิดพลาด"); return refresh();
   }
   if (t.dataset.open) { const d = await post("/api/open", { id: t.dataset.open }); toast(d.message || "ผิดพลาด"); return; }
-  if (t.dataset.switch) { const d = await post("/api/switch", { target: t.dataset.switch }); toast(d.message || d.error || "ผิดพลาด"); return refresh(); }
+  if (t.dataset.switch) return switchTo(t.dataset.switch);
   if (t.dataset.log) openLog(t.dataset.log);
 });
 /* ---------- กล่องยืนยัน/ถาม: await ask({...}) → true/false · มี input → ข้อความ หรือ null (ยกเลิก) ----------
@@ -2764,6 +2765,11 @@ async function loadAccInfo(refresh) {
     if (r.ok) { accInfo = await r.json(); accLoaded = true; }
   } catch (e) {}
 }
+async function switchTo(target) {  // สลับบัญชี — บทบาทย้ายตามด้วย จึงโหลดตารางบทบาทในหน้าต่างบัญชีใหม่
+  const d = await post("/api/switch", { target }); toast(d.message || d.error || "ผิดพลาด");
+  if (accLoaded) loadAccInfo(false).then(() => { if ($("accDlg").open) wzRender(); });
+  return refresh();
+}
 const pvOf = (m) => String(m || "").split("/")[0];
 const wz = { view: "home", kind: "", step: 1, max: 1, pv: "", model: "", short: "", orig: "", role: "", roleLabel: "", roleCur: "", fq: "", err: "", busy: false };
 const WZ_TITLE = { add: "เพิ่มบัญชี", edit: "แก้ไขบัญชี", role: "โมเดลของบทบาท" };
@@ -2818,7 +2824,7 @@ function wzRender() {
     const roles = (accInfo.roles || []).map((r) => `<div class="wz-row" data-role="${esc(r.key)}"><div class="wz-main"><b>${esc(r.key)}</b> ${esc(r.label)}<div class="wz-sub mono">${esc(r.model || "(ยังไม่ได้ตั้ง)")}</div></div>
       <div class="wz-act">${btn("role", "เปลี่ยน")}</div></div>`).join("");
     const nProv = (accInfo.providers || []).length, nDecl = (accInfo.providers || []).filter((p) => p.declared).length;
-    body.innerHTML = `<p class="wz-hint">${state?.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด · ป้าย "ใช้อยู่" = ค่าใน opencode.json${accLoaded ? ` · opencode มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น` : " · กำลังโหลดรายการโมเดล…"}${accInfo.note ? ` <span class="wz-bad">(${esc(accInfo.note)})</span>` : ""}</p>
+    body.innerHTML = `<p class="wz-hint">${state?.accounts_source === "machine" ? "ใช้รายการของเครื่องนี้ (~/.flashq/accounts.json)" : "ใช้ค่าตั้งต้นใน repo — แก้ตรงนี้จะสร้างไฟล์ของเครื่องนี้ (ไม่แตะไฟล์ใน repo)"} · ลำดับ = ลำดับสลับตอนโควตาหมด · สลับบัญชีแล้วบทบาทที่ใช้บัญชีในรายการย้ายตามทั้งหมด · ป้าย "ใช้อยู่" = ค่าใน opencode.json${accLoaded ? ` · opencode มี ${nProv} ผู้ให้บริการ (ตั้งใน opencode.json ${nDecl}) · ${accInfo.models.length} รุ่น` : " · กำลังโหลดรายการโมเดล…"}${accInfo.note ? ` <span class="wz-bad">(${esc(accInfo.note)})</span>` : ""}</p>
       ${rows || `<div class="empty">ยังไม่มีบัญชี</div>`}
       <h3 style="margin:0.7rem 0 0.2rem;font-size:0.95rem">โมเดลของแต่ละบทบาท (เหมือน flashq models)</h3>${roles || `<div class="empty">อ่านบทบาทไม่ได้</div>`}`;
     foot.innerHTML = `<span class="sp">${btn("reload", "โหลดรายการโมเดลใหม่")}${state?.accounts_source === "machine" ? btn("reset", "คืนค่าตั้งต้นของ repo", "danger") : ""}</span>${btn("add", "+ เพิ่มบัญชี", "primary")}${btn("close", "ปิด")}`;
@@ -2911,10 +2917,10 @@ $("accDlg").addEventListener("click", (ev) => {
   if (b && !b.disabled) wzAct(b.dataset.wz, b.closest("[data-short],[data-role]"));
 });
 
-$("switchNext").onclick = async () => { const d = await post("/api/switch", { target: "next" }); toast(d.message || d.error || "ผิดพลาด"); refresh(); };
+$("switchNext").onclick = () => switchTo("next");
 $("switchFirst").onclick = async () => {
   if (!state || !(state.accounts || []).length) { toast("ไม่มีรายการบัญชี"); return; }
-  const d = await post("/api/switch", { target: state.accounts[0].short }); toast(d.message || d.error || "ผิดพลาด"); refresh();
+  return switchTo(state.accounts[0].short);
 };
 $("projFilter").onchange = () => { store.set("proj", $("projFilter").value); render(); };
 $("stateFilter").onchange = () => render();

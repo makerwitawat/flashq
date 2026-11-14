@@ -4889,12 +4889,23 @@ def switch_account(arg: str) -> str:
     if name not in cfg.get("provider", {}).get(provider, {}).get("models", {}) and not model_usable(target):
         print(f"FAIL: {target} ไม่มีใน provider ของ {OC_CONFIG} และไม่อยู่ใน opencode models")
         return ""
+    # บทบาทอื่นที่ใช้บัญชีในรายการอยู่ ย้ายตามไปด้วย (เดิมย้ายแค่ผู้ทำ → บทบาทค้างคนละบัญชี) · บทบาทที่ตั้งโมเดลนอกรายการไว้ = ตั้งใจแยก ไม่แตะ
+    moved = [(ag, agent_model(ag)) for _, ag, _ in MODEL_ROLES
+             if ag != agent and agent_model(ag) in models and agent_model(ag) != target]
     shutil.copy2(OC_CONFIG, OC_CONFIG.with_name(OC_CONFIG.name + ".bak-flash-switch"))
-    cfg.setdefault("agent", {}).setdefault(agent, {})["model"] = target
+    agents = cfg.setdefault("agent", {})
+    for ag in [agent] + [ag for ag, _ in moved]:
+        if not isinstance(agents.get(ag), dict):
+            agents[ag] = {}
+        agents[ag]["model"] = target
     tmp = OC_CONFIG.with_name(OC_CONFIG.name + f".{os.getpid()}.tmp")  # เขียนแล้วสลับไฟล์ — opencode ที่อ่านพร้อมกันไม่เจอไฟล์ครึ่ง ๆ
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     replace_file(tmp, OC_CONFIG)
+    for ag in [agent] + [ag for ag, _ in moved]:
+        sync_agent_header(ag, target)
     print(f"{agent}: {current or '(ยังไม่ตั้ง)'} → {target}")
+    for ag, old in moved:
+        print(f"{ag}: {old} → {target}")
     return target
 
 
@@ -4992,6 +5003,12 @@ def set_agent_model(agent: str, model: str) -> bool:
     tmp = OC_CONFIG.with_name(OC_CONFIG.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     replace_file(tmp, OC_CONFIG)
+    sync_agent_header(agent, model)
+    return True
+
+
+def sync_agent_header(agent: str, model: str) -> None:
+    """ให้บรรทัด model: ในหัวไฟล์ agent ที่ flashq ติดตั้ง ตรงกับ opencode.json (ไฟล์ของผู้ใช้เองไม่แตะ)"""
     md = OC_CONFIG.parent / "agent" / f"{agent}.md"
     try:
         old = md.read_text(encoding="utf-8")
@@ -5000,7 +5017,6 @@ def set_agent_model(agent: str, model: str) -> bool:
             md.write_text(new, encoding="utf-8")
     except OSError:
         pass
-    return True
 
 
 def print_model_list(models: list[str], shown: list[str], tail: str, used: dict) -> None:
@@ -5092,6 +5108,9 @@ def run_models(models: list[str], note: str, *, list_only=False, auto=False, set
     """แกนของ `flashq models` (install เรียกซ้ำได้) · 0 = เรียบร้อย · 1 = ยังมีบทบาทที่ใช้ไม่ได้ · 2 = ใช้ผิด · 3 = เขียนไม่ได้/โมเดลไม่มีในเครื่อง"""
     tail = recommended_tail()
     rec = recommend_model(models, tail)
+    cw = configured_model()  # ผู้ทำใช้บัญชีในรายการอยู่ → บทบาทที่เติมใหม่ใช้บัญชีเดียวกัน (ไม่ใช่บัญชีแรกเสมอ · กันบทบาทปนคนละบัญชี)
+    if cw and cw in models and cw in [m for _, m in accounts()[1]]:
+        rec = cw
     used: dict = {}
     for _, ag, _ in MODEL_ROLES:
         if agent_model(ag):

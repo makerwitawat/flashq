@@ -3796,6 +3796,39 @@ class FlashqTest(unittest.TestCase):
         with mod.file_lock(lk, wait_sec=2) as got:
             self.assertTrue(got)
 
+    def test_switch_account_moves_roles_on_listed_accounts(self):
+        """สลับบัญชี: บทบาทที่ใช้บัญชีในรายการ (แม้คนละบัญชีกับผู้ทำ) ย้ายตามทั้งหมด · บทบาทที่ตั้งโมเดลนอกรายการไม่แตะ · models --auto เติมด้วยบัญชีของผู้ทำ"""
+        mod = self.load_mod("flashq_switch_roles")
+        mod.OC_CONFIG = self.oc_cfg
+        import contextlib
+        import io
+        go, go2, cc = "opencode-go/deepseek-v4.1-flash", "opencode-go2/deepseek-v4.1-flash", "commandcode/deepseek/deepseek-v4.1-flash"
+        mod.accounts = lambda: ("flash-worker", [["go2", go2], ["go1", go], ["cc", cc]])
+        self.oc_cfg.write_text(json.dumps({
+            "provider": {"opencode-go": {"models": {"deepseek-v4.1-flash": {}}}, "opencode-go2": {"models": {"deepseek-v4.1-flash": {}}},
+                         "commandcode": {"models": {"deepseek/deepseek-v4.1-flash": {}}}},
+            "agent": {"flash-worker": {"model": go}, "flash-verifier": {"model": go2}, "flash-investigator": {"model": go},
+                      "flash-tester": {"model": "x/other-model"}, "flash-writer": {"model": go2}}}), encoding="utf-8")
+        agent_dir = self.oc_cfg.parent / "agent"
+        agent_dir.mkdir(exist_ok=True)
+        (agent_dir / "flash-writer.md").write_text(f"---\nmodel: {go2}\n---\n<!-- flashq:managed -->\n", encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(mod.switch_account("next"), cc)
+        m = self.oc_agent_models()
+        for ag in ("flash-worker", "flash-verifier", "flash-investigator", "flash-writer"):
+            self.assertEqual(m[ag], cc, ag)
+        self.assertEqual(m["flash-tester"], "x/other-model")  # นอกรายการ = ตั้งใจแยก
+        self.assertIn(f"model: {cc}", (agent_dir / "flash-writer.md").read_text(encoding="utf-8"))
+        self.assertIn("flash-verifier", out.getvalue())
+        # models --auto: บทบาทที่ขาดได้บัญชีเดียวกับผู้ทำ (cc) ไม่ใช่บัญชีแรกของรายการ (go2)
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        del cfg["agent"]["flash-verifier"]
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod.run_models([go, go2, cc, "x/other-model"], "", auto=True)
+        self.assertEqual(self.oc_agent_models()["flash-verifier"], cc)
+
     def test_why_diagnoses_hung_tool_model_wait_and_plan_progress(self):
         """flashq why: แยก tool ค้าง (มีคำสั่งเปิดโปรเซสเบื้องหลัง) / รอโมเดล / ปกติ / ไม่รู้ และนับ T-xx ที่ติ๊ก [x] ในแผน"""
         import importlib.util
