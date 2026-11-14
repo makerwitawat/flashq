@@ -54,7 +54,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
   - หลักฐานชี้ขาด: `.tmp/T-02.red.log` มี `has no attribute 'job_by_id'` · `.tmp/T-02.green.log` บรรทัด `1 passed` · `.tmp/T-02.related.log` บรรทัด `N passed` ไม่มี `failed` · ผล grep = `0` (จดใน §4)
   - commit: `flashq: หน้าเว็บหางานจากชื่อไฟล์ตรง ๆ ไม่สแกนทุกงานทุกคำขอ + เทสต์ (T-02)`
 
-- [ ] **T-03** `flashq.py` ~6247 (`/api/flash_usage`) — แคชนานขึ้นและไม่คำนวณซ้อน
+- [ ] **T-03** `flashq.py` ~6247 (endpoint flash_usage) — แคชนานขึ้นและไม่คำนวณซ้อน
   - ไฟล์: `flashq.py`
   - ก่อน: `                if not hit or time.time() - hit[0] > 30:`
   - แก้ (สเปก):
