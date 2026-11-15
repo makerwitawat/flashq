@@ -34,7 +34,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 ## ที่เก็บ
 | ส่วน | ที่ |
 |---|---|
-| โค้ด (repo นี้) | `D:\MyCode\flashq\` |
+| โค้ด (repo นี้) | `<path-to-flashq>\` (โฟลเดอร์ที่ clone ไว้) |
 | ข้อมูลตอนรัน: งาน `jobs/` · log `logs/` · ช่องรัน `running.lock` (ช่อง 1) `running-<n>.lock` · ค่าตั้ง `config.json` (`max_parallel` `schedule` `starve_min` `dead_clear_hours` `image_max_px` `image_max_reads` `notify` `variants` `prices` `flash_compare` ฯลฯ) · สัญญาณรันเลย `run_now/` · สำเนาสถานะเป้าหมาย `goals/<id>.json` · ป้ายผู้ตรวจ `reviews/rv_*.json` · ผลงานจบรอแจ้ง Claude `inbox/` (ส่งแล้ว `inbox/done/`) · ผล `flashq usage <แผน>` `usage/` · ที่สำรองไฟล์ของช่างเอกสาร `docbak/<job>/` · รุ่นที่ติดตั้ง `installed.json` + ที่ session เคยเห็น `seen/<session>.json` · log ของหน้าเว็บ `ui.log` · server opencode `live_server.pid/.log` · ย้ายที่ได้ด้วย env `FLASHQ_HOME` | `%USERPROFILE%\.flashq\` (ไม่อยู่ใน git) |
 | คำสั่ง `/flash` `/flash-switch` `/flash-queue` + agent `flash-worker` `flash-verifier` `flash-investigator` `flash-tester` `flash-writer` แบบ global | `~/.config/opencode/command/` · `agent/` (ติดตั้งด้วย `install`) |
 | คำสั่ง Claude Code แบบ global: `/flash-plan` (วางแผน+ส่งเข้าคิว แล้วรอระบบแจ้งผล) · `/flash-check` (ตรวจจากหลักฐาน+วนแก้ ≤2 รอบ) · `/flash-goal` (ตั้งธงแล้ววนจนผ่าน) · `/flash-investigate` (ส่งผู้สืบ) · `/flash-qa` (สั่งนักทดสอบ) · `/flash-doc` (สั่งช่างเอกสาร) · `/flash-boss` (หัวหน้า: แบ่งงานตามบทบาทแล้วจ่ายผ่านคำสั่งข้างบน ผล `OK_UNVERIFIED` ไม่นับว่าผ่าน) · `/flash-init` (ตั้งค่าโปรเจกต์ใหม่) | `~/.claude/commands/` (ติดตั้งด้วย `install`) |
@@ -47,7 +47,7 @@ Claude Code วางแผน → `flashq run` ส่งงานเข้า�
 
 ## ติดตั้งครั้งแรก
 ```
-python D:\MyCode\flashq\flashq.py install
+python <path-to-flashq>\flashq.py install
 ```
 ใช้ชุดแจก exe (ไม่ต้องมี Python) → `flashq.exe install` จากโฟลเดอร์ชุดแจก: ไฟล์ที่ติดตั้งจะเรียก `flashq.exe` ตัวนั้นแทน `python flashq.py` · `--hooks` เป็นสคริปต์ `.py` ที่ `settings.json` สั่ง `python <hook>.py` จึงต้องมี Python 3 — ไม่มี = `install --hooks` ข้ามให้พร้อมบอกเหตุผล (คำสั่ง `/flash-*` ใช้ได้ตามปกติ) · คู่มือ → [INSTALL_EXE.md](INSTALL_EXE.md)
 
@@ -79,7 +79,7 @@ python flashq.py models --all provider/model # โมเดลเดียวท
 ## โปรเจกต์ใหม่ (ครั้งเดียวต่อโปรเจกต์)
 ```
 cd <โฟลเดอร์โปรเจกต์>
-python D:\MyCode\flashq\flashq.py init --install --commit       # ครบในคำสั่งเดียว
+python <path-to-flashq>\flashq.py init --install --commit       # ครบในคำสั่งเดียว
 ```
 **ง่ายสุด:** พิมพ์ `/flash-init` ใน Claude Code ที่โปรเจกต์นั้น (หรือสั่ง `/flash-plan` ได้เลย — ถ้าไม่มี `.flash.json` จะรัน init ให้เอง) · ตัวเลือก: `--install` ติดตั้งคำสั่ง global ที่ขาด · `--commit` commit เฉพาะไฟล์ที่ init แตะ (ไม่แตะไฟล์อื่นที่ค้าง) + push ถ้าอยู่ branch หลัก · `--force` ทับด้วยค่าที่ตรวจเจอ
 - ตรวจ `remote` + branch หลัก (`main`/`master`/อื่น) จาก git เอง แล้วเขียน `.flash.json` · เพิ่ม `.tmp/` ใน `.gitignore` · คัดลอกแม่แบบแผนไป `docs/plans/` (แทน `{{FLASHQ_RUN}}` ในแม่แบบเป็นคำสั่งรัน flashq ของเครื่องนั้น: `python <repo>/flashq.py` หรือ path ของ `flashq.exe`) · เช็ก `opencode` + คำสั่ง global (`--install` = ติดตั้งที่ขาดให้) · ไม่มี remote = ตั้ง `require_plan_in_remote: false`
@@ -88,17 +88,17 @@ python D:\MyCode\flashq\flashq.py init --install --commit       # ครบใ�
 
 ## ใช้
 ```
-python D:\MyCode\flashq\flashq.py run docs\plans\PLAN_X.md T-01..T-03     # ที่โฟลเดอร์โปรเจกต์ (หรือ --project <dir>)
-python D:\MyCode\flashq\flashq.py run --message "ตอบแค่คำว่า PONG"         # ทดสอบการเชื่อมต่อ
-python D:\MyCode\flashq\flashq.py                                          # สถานะ: กำลังทำอะไร + คิว + บัญชี
-python D:\MyCode\flashq\flashq.py list [--all] | log <id> | cancel <id> | why [id] | wait <job|แผน>
-python D:\MyCode\flashq\flashq.py verify|investigate|qa|doc ...            # งานชนิดอื่น (หัวข้อด้านล่าง)
-python D:\MyCode\flashq\flashq.py goal check|verify|status|human|cancel|ack <GOAL>   # โหมดเป้าหมาย
-python D:\MyCode\flashq\flashq.py usage <แผน|โปรเจกต์> | usage --flash        # token ของ Claude / ของ Flash
-python D:\MyCode\flashq\flashq.py switch [next|cc|cc2|go2|go3|inferx]
-python D:\MyCode\flashq\flashq.py config [max_parallel [1-8]]                 # ดู/ตั้งจำนวนงานที่รันพร้อมกัน
-python D:\MyCode\flashq\flashq.py config schedule auto|fifo                # จัดคิวอัตโนมัติ/ตามลำดับ
-python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # รันงานที่รอคิวทันที (ช่องพิเศษ)
+python <path-to-flashq>\flashq.py run docs\plans\PLAN_X.md T-01..T-03     # ที่โฟลเดอร์โปรเจกต์ (หรือ --project <dir>)
+python <path-to-flashq>\flashq.py run --message "ตอบแค่คำว่า PONG"         # ทดสอบการเชื่อมต่อ
+python <path-to-flashq>\flashq.py                                          # สถานะ: กำลังทำอะไร + คิว + บัญชี
+python <path-to-flashq>\flashq.py list [--all] | log <id> | cancel <id> | why [id] | wait <job|แผน>
+python <path-to-flashq>\flashq.py verify|investigate|qa|doc ...            # งานชนิดอื่น (หัวข้อด้านล่าง)
+python <path-to-flashq>\flashq.py goal check|verify|status|human|cancel|ack <GOAL>   # โหมดเป้าหมาย
+python <path-to-flashq>\flashq.py usage <แผน|โปรเจกต์> | usage --flash        # token ของ Claude / ของ Flash
+python <path-to-flashq>\flashq.py switch [next|cc|cc2|go2|go3|inferx]
+python <path-to-flashq>\flashq.py config [max_parallel [1-8]]                 # ดู/ตั้งจำนวนงานที่รันพร้อมกัน
+python <path-to-flashq>\flashq.py config schedule auto|fifo                # จัดคิวอัตโนมัติ/ตามลำดับ
+python <path-to-flashq>\flashq.py runnow <id> [--force]                       # รันงานที่รอคิวทันที (ช่องพิเศษ)
 ```
 ใน opencode: `/flash-queue` · `/flash-queue list` · `/flash-switch next`
 
@@ -115,8 +115,8 @@ python D:\MyCode\flashq\flashq.py runnow <id> [--force]                       # 
 
 ### งานตรวจ (verify) — ผู้ตรวจอิสระ
 ```
-python D:\MyCode\flashq\flashq.py verify docs\plans\PLAN_X.md T-01..T-03 [--agent flash-verifier] [--prompt "..."] [--title "..."]
-python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --title "..."     # ตัวเลือกเดียวกันใช้กับ run ได้
+python <path-to-flashq>\flashq.py verify docs\plans\PLAN_X.md T-01..T-03 [--agent flash-verifier] [--prompt "..."] [--title "..."]
+python <path-to-flashq>\flashq.py run ... --agent <ชื่อ> --readonly --title "..."     # ตัวเลือกเดียวกันใช้กับ run ได้
 ```
 - ส่ง prompt ตรง ๆ ให้ `opencode run --agent` (ค่าเริ่มต้น agent = `flash-verifier`) แทน `/flash` — ใช้ตรวจผลงานแผนโดย agent ที่อ่านอย่างเดียว
 - งานตรวจเป็น `readonly` → **ไม่ชนไฟล์กับงานอื่น** รันคู่ขนานได้เสมอ (ถ้ามีช่องว่าง) · สั่งซ้ำจากหน้าเว็บ/`retry` คง kind/agent เดิม
@@ -124,7 +124,7 @@ python D:\MyCode\flashq\flashq.py run ... --agent <ชื่อ> --readonly --ti
 - หน้าเว็บ: ฟอร์มส่งงานมีโหมด "ตรวจ" · ออฟฟิศการ์ตูนแสดงผู้ตรวจใส่แว่น ถือแว่นขยาย ป้าย 🔍
 ### งานสืบ (investigate) — ผู้สืบไล่หาต้นตอบั๊ก
 ```
-python D:\MyCode\flashq\flashq.py investigate "<บรีฟ: อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ต้องคืน>" [--project P] [--agent flash-investigator] [--auto]
+python <path-to-flashq>\flashq.py investigate "<บรีฟ: อาการ + โมดูลที่น่าจะเกี่ยว + สิ่งที่ต้องคืน>" [--project P] [--agent flash-investigator] [--auto]
 ```
 - ส่งบรีฟตรง ๆ ให้ agent `flash-investigator` (อ่านอย่างเดียว) — ไม่ต้องมีแผน ไม่ตรวจ branch/remote · `readonly` เสมอ จึงไม่ชนงานอื่น
 - โควตาหมด: ผู้ตรวจ/ผู้สืบย้าย **provider** เป็นโมเดลเดิม (ชื่อโมเดลท้ายเหมือนกันใน `opencode.json` · เรียงตาม `accounts.json`) แล้วสั่งซ้ำ ค่าเริ่มต้น 2 ครั้ง (`--switch-on-quota N`, 0 = ปิด) · ผู้ทำก็ไม่แก้ `opencode.json` (สลับเฉพาะงานนั้น)
@@ -133,7 +133,7 @@ python D:\MyCode\flashq\flashq.py investigate "<บรีฟ: อาการ + 
 - Claude Code: `/flash-investigate <บรีฟ>` (ติดตั้งด้วย `flashq.py install`) — เขียนบรีฟ ส่งงาน แล้ว **ตรวจ `ไฟล์:บรรทัด` ที่ผู้สืบอ้างเองก่อนเชื่อ**
 ### งานทดสอบ (qa) — นักทดสอบรันชุดทดสอบของโปรเจกต์
 ```
-python D:\MyCode\flashq\flashq.py qa [ชุด...] [--commit <sha>] [--project P] [--no-analyze] [--fail-fast] [--retry N] [--cmd "<คำสั่ง>"] [--auto]
+python <path-to-flashq>\flashq.py qa [ชุด...] [--commit <sha>] [--project P] [--no-analyze] [--fail-fast] [--retry N] [--cmd "<คำสั่ง>"] [--auto]
 ```
 - **flashq รันคำสั่งทดสอบเอง** แล้วตัดสินจาก **exit code จริง** (+ regex `expect` ที่ต้องพบ ถ้าตั้งไว้) — ไม่มี AI ตัดสินผ่าน/ไม่ผ่าน · fail-closed: `PASS` ได้ก็ต่อเมื่อ exit 0 และพบ `expect` · `NOEXPECT` (exit 0 แต่ไม่พบข้อความที่ต้องมี หรือไม่ตั้ง expect แต่ log บอกว่าไม่มีเทสต์ให้รัน) · `FLAKY` (ล้มแล้วผ่านตอนรันซ้ำ) · `TIMEOUT` · `CHANGED` (`HEAD` เปลี่ยนระหว่างทดสอบ) · `SKIPPED` · `ERROR` = ไม่ผ่านทั้งหมด · สถานะงาน `OK` เมื่อทุกชุด PASS และ HEAD ไม่เปลี่ยนเท่านั้น
 - ตั้งชุดทดสอบใน `.flash.json` ของโปรเจกต์ (ทำงานกับโปรเจกต์ใดก็ได้ ไม่ผูกกับ flashq):
@@ -151,7 +151,7 @@ python D:\MyCode\flashq\flashq.py qa [ชุด...] [--commit <sha>] [--project 
 
 ### ตรวจขอบเขตไฟล์ (scope) — กลไกล้วน ไม่เรียกโมเดล
 ```
-python D:\MyCode\flashq\flashq.py scope <แผน> [T-xx ...] [--project P] [--fill]
+python <path-to-flashq>\flashq.py scope <แผน> [T-xx ...] [--project P] [--fill]
 ```
 - ไฟล์ที่ commit ของแต่ละงาน (hash ใน §4 ของแผน) แตะ ต้องอยู่ในรายการที่แผนอนุญาต (path ใน ` บนบรรทัดหัวงาน `- [x] **T-xx** …` + บรรทัด `ไฟล์:`/`แก้ไฟล์:` ใต้หัวงาน) · ไฟล์แผนเอง (ติ๊ก [x] + เติม §4) ผ่านเสมอ
 - §4 ไม่มี hash จริง (worker ใส่ hash ของ commit ตัวเองไม่ได้ จึงมักเหลือ `(HEAD)`) → flashq หา commit เอง: ① commit ในช่วง `head0..head1` ของงานที่ flashq รันเอง (จดใน job record) ② ถ้าไม่มี → ตั้งแต่ `base commit` ในหัวแผน (ต้องเจอ commit เดียว ไม่งั้น NOCOMMIT) · commit ต้องมี `T-xx` แบบเต็มคำในข้อความ/trailer `Flash-Task: T-xx` (T-01 ไม่ชน T-01R) · `--fill` เติม hash ที่หาได้ลงช่อง commit ของแถว §4 เมื่อทุกงานผ่าน (ไม่ commit ให้)
@@ -161,8 +161,8 @@ python D:\MyCode\flashq\flashq.py scope <แผน> [T-xx ...] [--project P] [--
 
 ### งานเอกสาร (doc) — ช่างเอกสารอัปเดตเอกสารให้ตรงกับโค้ด
 ```
-python D:\MyCode\flashq\flashq.py doc [ชุด] [--since <commit/tag>] [--project P] [--timeout-min N]
-python D:\MyCode\flashq\flashq.py doc-review <job> accept|discard [--force]
+python <path-to-flashq>\flashq.py doc [ชุด] [--since <commit/tag>] [--project P] [--timeout-min N]
+python <path-to-flashq>\flashq.py doc-review <job> accept|discard [--force]
 ```
 - Flash (agent `flash-writer`) อ่านโค้ดที่เปลี่ยนแล้ว**แก้ไฟล์เอกสารจริงใน checkout** — ได้เฉพาะ path ที่ชุดอนุญาต · **ไม่ commit ให้** · ผลเป็น "ร่าง" รอคุณดู diff แล้วรับ/ทิ้ง
 - ตั้งชุดใน `.flash.json` ของโปรเจกต์ (ทำงานกับโปรเจกต์ใดก็ได้):
@@ -194,8 +194,8 @@ python flashq.py review list
 
 ### หน้าเว็บ dashboard / หน้าต่างแอป
 ```
-python D:\MyCode\flashq\flashq.py ui [--port 4097] [--no-open]
-python D:\MyCode\flashq\flashq.py gui [--port 0]          # หน้าต่างแอป (WebView2 ผ่าน pywebview · pip install pywebview)
+python <path-to-flashq>\flashq.py ui [--port 4097] [--no-open]
+python <path-to-flashq>\flashq.py gui [--port 0]          # หน้าต่างแอป (WebView2 ผ่าน pywebview · pip install pywebview)
 ```
 หรือดับเบิลคลิก `flashq-ui.bat` (เปิดค้างอยู่แล้ว = แค่เปิดเบราว์เซอร์ ไม่เปิดซ้อน)
 - เปิด `http://127.0.0.1:4097/` (bind 127.0.0.1 เท่านั้น · stdlib ล้วน · หน้าเดียว `ui.html` ไม่โหลดอะไรจากเน็ต · ธีมตามระบบ/ตามเวลา (ค่าเริ่มต้นมืด 18:00–06:00 · คลิกขวาปุ่มธีมเพื่อแก้ช่วง)/สว่าง/มืด) · `--port 0` = สุ่มพอร์ต · Ctrl+C ปิด
