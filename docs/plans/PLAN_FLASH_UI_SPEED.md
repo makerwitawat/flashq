@@ -92,10 +92,10 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
 |---|---|---|---|---|
 | T-01 | ✅แก้ | 6f13fab | `.tmp/T-01.red.log:28` = `AssertionError: 'JOBS_CALLS 1' not found in 'JOBS_CALLS 3
 JOBS_TOTAL 2
-'` · `.tmp/T-01.green.log:2` = `1 passed, 226 deselected` · `.tmp/T-01.related.log:2` = `8 passed, 219 deselected` (failed 0) | |
-| T-02 | ✅แก้ | 83432dd | `.tmp/T-02.red.log:28` = `AttributeError: module 'flashq' has no attribute 'job_by_id'` · `.tmp/T-02.green.log:2` = `1 passed, 227 deselected` · `.tmp/T-02.related.log:2` = `32 passed, 196 deselected` (failed 0) · `grep -c 'for x in jobs() if x.get("id")' flashq.py` = `0` · หมายเหตุ: ของจริงมี 13 จุด ไม่ใช่ 14 (แผนนับเกิน 1 · ทุกจุดในตัวจัดการ HTTP ถูกแทนครบ) | |
-| T-03 | ✅แก้ | abb3bbd | `.tmp/T-03.log:2` = `1 passed, 227 deselected` (failed 0) · `grep -n _FLASH_SUM_LOCK flashq.py` = 2 บรรทัด (`6284` with-lock · `7253` นิยาม lock) | |
-| T-04 | ✅แก้ | 9ea601e | `.tmp/T-04.node.log` = `NODE_RC=0` · `.tmp/T-04.smoke.log:1` = `UI_SMOKE OK (3 ความกว้าง: 1280, 700, 390px)` | |
+'` · `.tmp/T-01.green.log:2` = `1 passed, 226 deselected` · `.tmp/T-01.related.log:2` = `8 passed, 219 deselected` (failed 0) | ✅ผ่าน |
+| T-02 | ✅แก้ | 83432dd | `.tmp/T-02.red.log:28` = `AttributeError: module 'flashq' has no attribute 'job_by_id'` · `.tmp/T-02.green.log:2` = `1 passed, 227 deselected` · `.tmp/T-02.related.log:2` = `32 passed, 196 deselected` (failed 0) · `grep -c 'for x in jobs() if x.get("id")' flashq.py` = `0` · หมายเหตุ: ของจริงมี 13 จุด ไม่ใช่ 14 (แผนนับเกิน 1 · ทุกจุดในตัวจัดการ HTTP ถูกแทนครบ) | ✅ผ่าน (ยืนยัน: ก่อนแก้มี 13 จุดจริง) |
+| T-03 | ✅แก้ | abb3bbd | `.tmp/T-03.log:2` = `1 passed, 227 deselected` (failed 0) · `grep -n _FLASH_SUM_LOCK flashq.py` = 2 บรรทัด (`6284` with-lock · `7253` นิยาม lock) | ✅ผ่าน |
+| T-04 | ✅แก้ | 9ea601e | `.tmp/T-04.node.log` = `NODE_RC=0` · `.tmp/T-04.smoke.log:1` = `UI_SMOKE OK (3 ความกว้าง: 1280, 700, 390px)` | ✅ผ่าน |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - `ui_goals` คำนวณเป้าหมายทุกใบ + glob โฟลเดอร์ session ของ Claude ต่อใบ (`flashq.py` ~7616–7664) — รอบถัดไป
