@@ -1380,7 +1380,7 @@ def running_brief(j: dict, stats: dict | None = None) -> str:
     return f"{j['id']} ({detail})" if detail else j["id"]
 
 
-def schedule(held: list[dict] | None = None) -> dict:
+def schedule(held: list[dict] | None = None, all_jobs: list[dict] | None = None) -> dict:
     """จำลองการจัดคิวตอนนี้: {mode, limit, used, start: [id ที่ได้เริ่ม], reasons: {id: เหตุที่ยังรอ}}
     auto = ไล่คิวตามลำดับ เริ่มงานแรกที่ไม่ชนกับงานที่กำลังทำ (+ที่เพิ่งเลือก) · ข้ามงานที่ชน
            แต่งานที่ชนและรอเกิน starve_min นาที = ล็อกหัวคิว (งานหลังจากนั้นที่ชนกับมันห้ามแซง)
@@ -1388,7 +1388,7 @@ def schedule(held: list[dict] | None = None) -> dict:
     held = held_slots() if held is None else held
     limit, mode, starve = max_parallel(), schedule_mode(), starve_min()
     held_ids = {h.get("id") for h in held}
-    all_jobs = jobs()
+    all_jobs = jobs() if all_jobs is None else all_jobs
     active = [j for j in all_jobs if live_state(j) == "running"]
     queue = [j for j in all_jobs if j.get("status") == "queued" and live_state(j) == "queued"]
     memo: dict[str, dict] = {}
@@ -4259,13 +4259,13 @@ def dead_clear_hours() -> float:
         return 24.0
 
 
-def auto_clear_dead() -> int:
+def auto_clear_dead(all_jobs: list[dict] | None = None) -> int:
     """ป้ายงานตายที่ค้างเกิน dead_clear_hours (นับจากครั้งสุดท้ายที่ไฟล์งานถูกเขียน) → รับทราบให้เอง · ข้ามงานที่ opencode ลูกยังทำงานอยู่ (ต้องให้คนตรวจ) · คืนจำนวนที่ล้าง"""
     hours = dead_clear_hours()
     if not hours:
         return 0
     n = 0
-    for j in jobs():
+    for j in jobs() if all_jobs is None else all_jobs:
         if live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
             continue
         try:
@@ -5741,13 +5741,15 @@ def plan_trail(row: dict, rows: list[dict], reviews: list[dict]) -> dict:
 
 def ui_state() -> dict:
     """สถานะทั้งหมดสำหรับ /api/state — อ่านผ่านฟังก์ชันคิวเดิม (ไม่เขียนตรรกะคิวซ้ำ)"""
-    auto_clear_dead()  # ป้ายงานตายที่ค้างเกินเวลาที่ตั้ง → รับทราบให้เอง ก่อนสร้างรายการ
+    snap = jobs()  # อ่านไฟล์งานครั้งเดียวต่อการรีเฟรช (ส่งต่อให้ตัวช่วยทุกตัว)
+    if auto_clear_dead(snap):  # ป้ายงานตายที่ค้างเกินเวลาที่ตั้ง → รับทราบให้เอง ก่อนสร้างรายการ
+        snap = jobs()  # ล้างไปแล้วต้องอ่านใหม่ให้สถานะตรง
     held = held_slots()
-    sch = schedule(held)
+    sch = schedule(held, snap)
     slot_of = {h.get("id"): h for h in held}
     running, queued, history, dead, kills = [], [], [], [], []
     raw = {}
-    for j in jobs():
+    for j in snap:
         raw[j.get("id")] = j
         st = live_state(j)
         kills += [dict(k, job=j["id"], project_name=Path(j.get("project", "")).name, age_sec=_secs(k.get("at", ""))) for k in j.get("shell_kills") or []]

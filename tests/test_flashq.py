@@ -1519,6 +1519,29 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(json.loads(self.oc_cfg.read_text(encoding="utf-8"))["agent"]["flash-worker"]["model"],
                          "commandcode2/deepseek/deepseek-v4.1-flash")
 
+    def test_ui_state_reads_jobs_once(self):
+        """ui: ui_state อ่านไฟล์งานครั้งเดียวต่อการรีเฟรช (เดิม auto_clear_dead + schedule + ลูป = 3 รอบ) · งานครบ 2 งาน"""
+        (self.home / "jobs").mkdir(parents=True)
+        for n in (1, 2):
+            jid = f"20990101_00000{n}_1"
+            (self.home / "jobs" / f"{jid}.json").write_text(json.dumps(
+                {"id": jid, "status": "ok", "created": f"2099-01-01 00:00:0{n}", "project": str(self.proj),
+                 "plan": "PLAN.md", "tasks": "T-01", "result": "OK"}), encoding="utf-8")
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, r'{REPO}')\n"
+            "import flashq\n"
+            "n=[0]; o=flashq.jobs; flashq.jobs=lambda: (n.__setitem__(0, n[0]+1), o())[1]\n"
+            "st = flashq.ui_state()\n"
+            "print('JOBS_CALLS', n[0])\n"
+            "print('JOBS_TOTAL', len(st['running'] or []) + len(st['queued'] or []) + len(st['history'] or []))\n"
+        )
+        r = subprocess.run([sys.executable, "-c", code], cwd=self.proj, env=self.env,
+                           capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("JOBS_CALLS 1", r.stdout)
+        self.assertIn("JOBS_TOTAL 2", r.stdout)
+
     def test_ui_accounts_edit_and_role_model(self):
         """ui: แก้บัญชีสลับโมเดล (เพิ่ม/แก้/ย้าย/ลบ/คืนค่า) เขียน ~/.flashq/accounts.json ของเครื่อง ไม่แตะ repo · โมเดลต้องมีในเครื่อง (รายการเดียวกับ flashq models) · ตั้งโมเดลบทบาทได้"""
         self.env["FAKE_MODELS"] = "x/other-model|y/spare-model"
