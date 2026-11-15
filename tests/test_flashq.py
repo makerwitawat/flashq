@@ -1542,6 +1542,32 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("JOBS_CALLS 1", r.stdout)
         self.assertIn("JOBS_TOTAL 2", r.stdout)
 
+    def test_job_by_id(self):
+        """ui: job_by_id อ่านงานจากชื่อไฟล์ตรง ๆ · id ในไฟล์ไม่ตรงชื่อ/ชื่อไม่ปลอดภัย = None"""
+        (self.home / "jobs").mkdir(parents=True)
+        (self.home / "jobs" / "j1.json").write_text(json.dumps({"id": "j1"}), encoding="utf-8")
+        (self.home / "jobs" / "j2.json").write_text(json.dumps({"id": "other"}), encoding="utf-8")
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, r'{REPO}')\n"
+            "import flashq\n"
+            "print('J1', (flashq.job_by_id('j1') or {}).get('id'))\n"
+            "print('NOPE', flashq.job_by_id('nope'))\n"
+            "print('MISMATCH', flashq.job_by_id('j2'))\n"
+            "print('TRAVERSAL', flashq.job_by_id('../x'))\n"
+            "print('EMPTY', flashq.job_by_id(''))\n"
+            "print('NONE', flashq.job_by_id(None))\n"
+        )
+        r = subprocess.run([sys.executable, "-c", code], cwd=self.proj, env=self.env,
+                           capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("J1 j1", r.stdout)
+        self.assertIn("NOPE None", r.stdout)
+        self.assertIn("MISMATCH None", r.stdout)
+        self.assertIn("TRAVERSAL None", r.stdout)
+        self.assertIn("EMPTY None", r.stdout)
+        self.assertIn("NONE None", r.stdout)
+
     def test_ui_accounts_edit_and_role_model(self):
         """ui: แก้บัญชีสลับโมเดล (เพิ่ม/แก้/ย้าย/ลบ/คืนค่า) เขียน ~/.flashq/accounts.json ของเครื่อง ไม่แตะ repo · โมเดลต้องมีในเครื่อง (รายการเดียวกับ flashq models) · ตั้งโมเดลบทบาทได้"""
         self.env["FAKE_MODELS"] = "x/other-model|y/spare-model"

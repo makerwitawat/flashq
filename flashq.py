@@ -792,6 +792,14 @@ def jobs() -> list[dict]:
     return out
 
 
+def job_by_id(jid) -> dict | None:
+    """งานเดียวจากชื่อไฟล์ <jid>.json — ไม่ต้องสแกนทุกงาน (ชื่อต้องปลอดภัย: ไม่ขึ้นต้นด้วยจุด ไม่มีอักขระพิเศษ)"""
+    if not isinstance(jid, str) or jid.startswith(".") or not re.fullmatch(r"[A-Za-z0-9_.-]+", jid):
+        return None
+    j = read_json(JOBS / f"{jid}.json")
+    return j if j.get("id") == jid else None
+
+
 def save_job(job: dict) -> None:
     write_json(JOBS / f"{job['id']}.json", job)
 
@@ -6233,7 +6241,7 @@ def make_ui_server(port: int = 4097):
                 return self._send(200, {**ui_state(), "boot": boot})
             if u.path == "/api/log":
                 jid = q.get("id", [""])[0]
-                j = next((x for x in jobs() if x.get("id") == jid), None)
+                j = job_by_id(jid)
                 if not j:
                     return self._send(404, {"error": f"ไม่พบงาน {jid}"})
                 try:
@@ -6242,12 +6250,12 @@ def make_ui_server(port: int = 4097):
                     return self._send(400, {"error": "attempt/offset ต้องเป็นตัวเลข"})
                 return self._send(200, log_tail(j, attempt, offset))
             if u.path == "/api/why":
-                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0]), None)
+                j = job_by_id(q.get("id", [""])[0])
                 if not j:
                     return self._send(404, {"error": "ไม่พบงาน"})
                 return self._send(200, diagnose_job(j))
             if u.path == "/api/overlap":
-                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0]), None)
+                j = job_by_id(q.get("id", [""])[0])
                 if not j:
                     return self._send(404, {"error": "ไม่พบงาน"})
                 return self._send(200, overlap_report(j))
@@ -6256,7 +6264,8 @@ def make_ui_server(port: int = 4097):
                 ok = bool(proj) and Path(proj).is_absolute()
                 return self._send(200, {"plans": list_plans(proj), "qa_presets": qa_preset_names(proj) if ok else [], "doc_presets": doc_preset_names(proj) if ok else []})
             if u.path == "/api/doc_diff":
-                j = next((x for x in jobs() if x.get("id") == q.get("id", [""])[0] and x.get("kind") == "doc"), None)
+                j = job_by_id(q.get("id", [""])[0])
+                j = j if j and j.get("kind") == "doc" else None
                 if not j:
                     return self._send(404, {"error": "ไม่พบงานช่างเอกสาร"})
                 return self._send(200, doc_diff(j))
@@ -6294,7 +6303,7 @@ def make_ui_server(port: int = 4097):
                 return self._send(400, {"error": "body ต้องเป็น JSON"})
             path = urlparse(self.path).path
             if path == "/api/cancel":
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 if live_state(j) != "queued":
@@ -6302,7 +6311,7 @@ def make_ui_server(port: int = 4097):
                 ok, msg = cancel_job(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/stop":  # หยุดงานที่กำลังทำ — หน้าเว็บยืนยัน 2 ชั้น + body ต้องมี confirm=id
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 if body.get("confirm") != j["id"]:
@@ -6312,7 +6321,8 @@ def make_ui_server(port: int = 4097):
                 ok, msg = cancel_job(j)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/doc_review":  # ปุ่มรับ/ทิ้งร่างของช่างเอกสาร — ทิ้งต้องยืนยัน confirm=id · ทับไฟล์ที่ผู้ใช้แก้ต่อต้องส่ง force=true
-                j = next((x for x in jobs() if x.get("id") == body.get("id") and x.get("kind") == "doc"), None)
+                j = job_by_id(body.get("id"))
+                j = j if j and j.get("kind") == "doc" else None
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงานช่างเอกสาร"})
                 if body.get("action") not in ("accept", "discard"):
@@ -6322,7 +6332,7 @@ def make_ui_server(port: int = 4097):
                 ok, msg = doc_review(j, body["action"], body.get("force") is True)
                 return self._send(200 if ok else 409, {"ok": ok, "message": msg})
             if path == "/api/runnow":  # รันเลย (ช่องพิเศษ) — มีไฟล์ซ้อนต้องส่ง ack_overlap=true
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 rep = overlap_report(j)
@@ -6361,7 +6371,7 @@ def make_ui_server(port: int = 4097):
                 return self._send(200, {"ok": True, "cleared": done, "skipped": skipped,
                                         "message": f"รับทราบแล้ว {done} งาน" + (f" · ข้าม {skipped} งานที่ opencode ยังทำงานอยู่ (ตรวจเองก่อน)" if skipped else "")})
             if path == "/api/dismiss":  # รับทราบงานที่ process ตาย → บันทึกสถานะ dead
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j or live_state(j) != "dead" or j.get("status") not in ("queued", "running"):
                     return self._send(409, {"ok": False, "message": "ไม่ใช่งานที่ process ตายค้างสถานะ"})
                 note = dismiss_dead(j)
@@ -6373,7 +6383,7 @@ def make_ui_server(port: int = 4097):
                 r = spawn_run(argv, str(body["project"]).strip().strip('"'), body=body)
                 return self._send(200 if r["ok"] else 400, r)
             if path == "/api/retry":  # สั่งงานเดิมซ้ำ (เข้าคิวใหม่) · ตัวเลือกใน body ทับได้
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 if live_state(j) in ("queued", "running"):
@@ -6401,7 +6411,7 @@ def make_ui_server(port: int = 4097):
                 return self._send(200, {"ok": True, **r, "message": f"{'จะลบ' if r['dry'] else 'ลบ'}งาน {r['jobs']} รายการ · "
                                                                     f"ไฟล์ {r['files']} ไฟล์ ({r['bytes'] / 1048576:.1f} MB)"})
             if path == "/api/open":  # เปิด session ใน opencode desktop (oc_desktop_open.mjs)
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j or not j.get("session"):
                     return self._send(404, {"ok": False, "message": "งานนี้ไม่มี session"})
                 import contextlib
@@ -6412,13 +6422,13 @@ def make_ui_server(port: int = 4097):
                 out = buf.getvalue().strip() or "ไม่พบ node — เปิดไม่ได้"
                 return self._send(200, {"ok": "=OK" in out, "message": out})
             if path == "/api/claude_check":  # ปุ่ม "เปิด Claude ตรวจ" บนการ์ดงานที่จบแล้ว
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 code, d = claude_check_action(j, bool(body.get("cli")))
                 return self._send(code, d)
             if path == "/api/open_claude":  # ปุ่ม "เปิด session" — เปิด session Claude ที่สั่งงานนี้ในแอป desktop
-                j = next((x for x in jobs() if x.get("id") == body.get("id")), None)
+                j = job_by_id(body.get("id"))
                 if not j:
                     return self._send(404, {"ok": False, "message": "ไม่พบงาน"})
                 code, d = claude_open_session_action(j)
