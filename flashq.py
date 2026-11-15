@@ -6274,14 +6274,17 @@ def make_ui_server(port: int = 4097):
                 return self._send(200, {"models": models, "providers": provider_rows(models), "note": note, "tail": recommended_tail(), "roles": role_rows()})
             if u.path == "/api/setup":  # วิซาร์ดตั้งค่าครั้งแรก — สถานะเครื่อง (อ่านอย่างเดียว)
                 return self._send(200, setup_status())
-            if u.path == "/api/flash_usage":  # สรุป token/USD ของ Flash + ประมาณการประหยัดเทียบ Claude (อ่านอย่างเดียว · แคช 30 วินาที)
+            if u.path == "/api/flash_usage":  # สรุป token/USD ของ Flash + ประมาณการประหยัดเทียบ Claude (อ่านอย่างเดียว · แคช 10 นาที)
                 try:
                     days = min(max(float(q.get("days", ["30"])[0]), 1), 3650)
                 except ValueError:
                     return self._send(400, {"error": "days ต้องเป็นตัวเลข"})
                 hit = _FLASH_SUM_CACHE.get(days)
-                if not hit or time.time() - hit[0] > 30:
-                    hit = _FLASH_SUM_CACHE[days] = (time.time(), flash_usage_summary(days))
+                if not hit or time.time() - hit[0] > 600:
+                    with _FLASH_SUM_LOCK:  # คำขอที่ซ้อนกันรอผลเดียวกัน ไม่คำนวณซ้ำ
+                        hit = _FLASH_SUM_CACHE.get(days)
+                        if not hit or time.time() - hit[0] > 600:
+                            hit = _FLASH_SUM_CACHE[days] = (time.time(), flash_usage_summary(days))
                 return self._send(200, hit[1])
             return self._send(404, {"error": "ไม่พบ"})
 
@@ -7247,6 +7250,7 @@ def cmd_usage(a) -> int:
 OC_DB = Path(os.environ.get("FLASHQ_OPENCODE_DB") or (Path.home() / ".local" / "share" / "opencode" / "opencode.db"))  # session ลูก (subagent) ไม่อยู่ใน log หลัก → อ่านจากฐานข้อมูลของ opencode (อ่านอย่างเดียว)
 FLASH_COMPARE_DEFAULT = ("claude-sonnet-5-5", "claude-opus-5-5")  # เทียบกับรุ่นเหล่านี้ (ขอบล่าง/ขอบบน) · ทับได้ใน config.json {"flash_compare": ["claude-...", ...]}
 _FLASH_SUM_CACHE: dict = {}  # days → (เวลา, ผลสรุป) ของ /api/flash_usage
+_FLASH_SUM_LOCK = threading.Lock()  # กันคำขอซ้อนคำนวณสรุป token ซ้ำกัน
 _FLASH_LOG_CACHE: dict = {}  # path → ((mtime_ns, size), ผลสแกน) — log ของรอบที่จบแล้วไม่เปลี่ยน จึงไม่ต้องอ่านซ้ำทุกครั้งที่หน้าเว็บขอ
 
 
