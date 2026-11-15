@@ -27,7 +27,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
 ## 1. กลุ่ม A — ฝั่ง server อ่านไฟล์งานซ้ำเกินจำเป็น
 **สาเหตุ/หลักฐาน** (Claude ตรวจแล้ว): `flashq.py:785` `jobs()` เปิด+parse ทุกไฟล์ใน `JOBS` ทุกครั้ง (วัดจริง 2,729 ไฟล์ = 0.408 วิ) · `ui_state()` (`flashq.py:5718`) เรียกทางอ้อม 3 ครั้ง: `auto_clear_dead()` (`4262`), `schedule(held)` (`1391` `all_jobs = jobs()`), และลูปหลัก `for j in jobs():` · ตัวจัดการ HTTP หางานเดียวด้วย `next((x for x in jobs() if x.get("id") == ...), None)` 14 ที่ (`6210`–`6395`) ทั้งที่ไฟล์งานชื่อ `<id>.json` เสมอ (`flashq.py:796` `write_json(JOBS / f"{job['id']}.json", job)`)
 
-- [ ] **T-01** `flashq.py` (`ui_state`, `auto_clear_dead`, `schedule`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-01** `flashq.py` (`ui_state`, `auto_clear_dead`, `schedule`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - ไฟล์: `flashq.py`, `tests/test_flashq.py`
   - เทสต์: เพิ่ม `test_ui_state_reads_jobs_once` ในคลาสเดียวกับ `test_ui_state_and_cancel` — สร้างงาน 2 ไฟล์ใน `<home>/jobs` (แบบเดียวกับเทสต์เดิมในไฟล์) แล้วรัน subprocess `python -c` ด้วย env ของเทสต์ (`FLASHQ_HOME` = home ทดสอบ) ที่ `import flashq` → ห่อ `flashq.jobs` ด้วยตัวนับ (`n=[0]; o=flashq.jobs; flashq.jobs=lambda: (n.__setitem__(0, n[0]+1), o())[1]`) → เรียก `flashq.ui_state()` → `print("JOBS_CALLS", n[0])` · assert ว่าได้ `JOBS_CALLS 1` และผล `ui_state()` ยังมีงานครบ 2 งาน (ใน running/queued/history รวมกัน)
   - แดง: `PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k test_ui_state_reads_jobs_once > .tmp/T-01.red.log 2>&1` → FAIL ด้วยค่า `JOBS_CALLS 3` (ค่าเริ่มต้น `dead_clear_hours` = 24 จึง `auto_clear_dead` เรียก `jobs()` ด้วย)
@@ -41,7 +41,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
   - หลักฐานชี้ขาด: `.tmp/T-01.red.log` มี `JOBS_CALLS 3` (หรือค่า ≥2) · `.tmp/T-01.green.log` บรรทัด `1 passed` · `.tmp/T-01.related.log` บรรทัด `N passed` ไม่มี `failed`
   - commit: `flashq: หน้าเว็บอ่านไฟล์งานครั้งเดียวต่อการรีเฟรช (เดิม 3 รอบ) + เทสต์ (T-01)`
 
-- [ ] **T-02** `flashq.py` (ตัวจัดการ HTTP ใน `ui`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
+- [x] **T-02** `flashq.py` (ตัวจัดการ HTTP ใน `ui`) + `tests/test_flashq.py` · แบบ: เทสต์ก่อน
   - ไฟล์: `flashq.py`, `tests/test_flashq.py`
   - เทสต์: เพิ่ม `test_job_by_id` (subprocess `python -c` แบบ T-01) — สร้าง `<home>/jobs/j1.json` `{"id":"j1"}` และ `<home>/jobs/j2.json` ที่ข้างในมี `"id":"other"` → ต้องได้: `job_by_id("j1")["id"] == "j1"` · `job_by_id("nope") is None` · `job_by_id("j2") is None` (id ในไฟล์ไม่ตรงชื่อ) · `job_by_id("../x") is None` · `job_by_id("") is None` · `job_by_id(None) is None`
   - แดง: `PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k test_job_by_id > .tmp/T-02.red.log 2>&1` → FAIL ด้วย `AttributeError: module 'flashq' has no attribute 'job_by_id'` (นี่คือเหตุที่คาด ไม่ต้องหยุด)
@@ -54,7 +54,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
   - หลักฐานชี้ขาด: `.tmp/T-02.red.log` มี `has no attribute 'job_by_id'` · `.tmp/T-02.green.log` บรรทัด `1 passed` · `.tmp/T-02.related.log` บรรทัด `N passed` ไม่มี `failed` · ผล grep = `0` (จดใน §4)
   - commit: `flashq: หน้าเว็บหางานจากชื่อไฟล์ตรง ๆ ไม่สแกนทุกงานทุกคำขอ + เทสต์ (T-02)`
 
-- [ ] **T-03** `flashq.py` ~6247 (endpoint flash_usage) — แคชนานขึ้นและไม่คำนวณซ้อน
+- [x] **T-03** `flashq.py` ~6247 (endpoint flash_usage) — แคชนานขึ้นและไม่คำนวณซ้อน
   - ไฟล์: `flashq.py`
   - ก่อน: `                if not hit or time.time() - hit[0] > 30:`
   - แก้ (สเปก):
@@ -68,7 +68,7 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
 ## 2. กลุ่ม B — หน้าเว็บยิงคำขอซ้อน
 **สาเหตุ/หลักฐาน** (Claude ตรวจแล้ว): `ui.html:4020` `setInterval(refresh, 3000);` เรียก `refresh()` (`ui.html:2389`) โดยไม่รอรอบก่อน · ปุ่มต่าง ๆ ก็ `await refresh()` ซ้ำ → ถ้า `/api/state` ช้ากว่า 3 วิ คำขอจะกองซ้อน
 
-- [ ] **T-04** `ui.html` ~2389 (`refresh`)
+- [x] **T-04** `ui.html` ~2389 (`refresh`)
   - ไฟล์: `ui.html`
   - ก่อน: `async function refresh() {`
   - แก้ (สเปก):
@@ -90,6 +90,12 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/test_flashq.py -q -x -k "<คำ>"
 ## 4. บันทึกผล
 | งาน | ผล (✅แก้/🟡ไม่ยืนยัน/⛔หยุด) | commit | หลักฐานชี้ขาด | ตรวจ Claude (✅ผ่าน/❌→T-xxR) |
 |---|---|---|---|---|
+| T-01 | ✅แก้ | 6f13fab | `.tmp/T-01.red.log:28` = `AssertionError: 'JOBS_CALLS 1' not found in 'JOBS_CALLS 3
+JOBS_TOTAL 2
+'` · `.tmp/T-01.green.log:2` = `1 passed, 226 deselected` · `.tmp/T-01.related.log:2` = `8 passed, 219 deselected` (failed 0) | |
+| T-02 | ✅แก้ | 83432dd | `.tmp/T-02.red.log:28` = `AttributeError: module 'flashq' has no attribute 'job_by_id'` · `.tmp/T-02.green.log:2` = `1 passed, 227 deselected` · `.tmp/T-02.related.log:2` = `32 passed, 196 deselected` (failed 0) · `grep -c 'for x in jobs() if x.get("id")' flashq.py` = `0` · หมายเหตุ: ของจริงมี 13 จุด ไม่ใช่ 14 (แผนนับเกิน 1 · ทุกจุดในตัวจัดการ HTTP ถูกแทนครบ) | |
+| T-03 | ✅แก้ | abb3bbd | `.tmp/T-03.log:2` = `1 passed, 227 deselected` (failed 0) · `grep -n _FLASH_SUM_LOCK flashq.py` = 2 บรรทัด (`6284` with-lock · `7253` นิยาม lock) | |
+| T-04 | ✅แก้ | 9ea601e | `.tmp/T-04.node.log` = `NODE_RC=0` · `.tmp/T-04.smoke.log:1` = `UI_SMOKE OK (3 ความกว้าง: 1280, 700, 390px)` | |
 
 ## 5. นอกแผน (อ้างอิงเท่านั้น ห้ามทำ)
 - `ui_goals` คำนวณเป้าหมายทุกใบ + glob โฟลเดอร์ session ของ Claude ต่อใบ (`flashq.py` ~7616–7664) — รอบถัดไป
