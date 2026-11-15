@@ -4753,6 +4753,30 @@ def ui_models(refresh: bool = False) -> tuple[list[str], str]:
     return hit[1]
 
 
+def ui_models_quick() -> list[str]:
+    """รายชื่อโมเดลสำหรับตรวจตอนกดบันทึก — ไม่รอ `opencode models` (ช้าได้เป็นนาที) ถ้ามีแคชอยู่แล้ว แม้เก่ากว่า 60 วิ
+    แคชเก่า = ใช้ของเดิมไปก่อนแล้วรีเฟรชเบื้องหลัง · ไม่มีแคชเลย = เรียกตรง (ครั้งแรกหลังเปิด server)"""
+    hit = _UI_MODELS_CACHE.get("v")
+    if not hit:
+        return ui_models()[0]
+    if time.time() - hit[0] > 60 and not _UI_MODELS_CACHE.get("busy"):
+        _UI_MODELS_CACHE["busy"] = True
+
+        def bg() -> None:
+            try:
+                ui_models(refresh=True)
+            finally:
+                _UI_MODELS_CACHE["busy"] = False
+        threading.Thread(target=bg, daemon=True).start()
+    return hit[1][0]
+
+
+def model_declared(model: str) -> bool:
+    """โมเดลนี้ประกาศไว้ใน opencode.json (provider.<p>.models.<ชื่อ>) — ใช้ได้แน่โดยไม่ต้องถาม opencode"""
+    pv, _, name = model.partition("/")
+    return name in read_json(OC_CONFIG).get("provider", {}).get(pv, {}).get("models", {})
+
+
 def declared_providers() -> set[str]:
     """provider ที่ตั้งไว้ใน opencode.json (provider.<ชื่อ>) — ที่เหลือใน `opencode models` คือที่มากับ opencode/ล็อกอินไว้"""
     pv = read_json(OC_CONFIG).get("provider")
@@ -4790,12 +4814,12 @@ def edit_accounts(action: str, body: dict) -> tuple[bool, str]:
         return True, "ลบรายการของเครื่องนี้แล้ว — กลับไปใช้ accounts.json ใน repo"
     short = str(body.get("short") or "").strip()
     model = str(body.get("model") or "").strip()
-    models = ui_models()[0] if action in ("add", "update") and model else []
+    models = ui_models_quick() if action in ("add", "update") and model else []
 
     def bad_model() -> str:
         if not re.fullmatch(r"[\w.\-]+/\S+", model):
             return f"โมเดลต้องเป็นรูป provider/ชื่อ — ได้ '{model}'"
-        if models and model not in models:
+        if models and model not in models and not model_declared(model):
             return f"เครื่องนี้ไม่มีโมเดล {model} (ดูรายการที่เลือกได้ในช่องโมเดล)"
         if any(m == model and s != short for s, m in rows):
             return f"{model} อยู่ในรายการแล้ว"
@@ -6424,10 +6448,10 @@ def make_ui_server(port: int = 4097):
             if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
                 role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
                 model = str(body.get("model") or "").strip()
-                models = ui_models()[0]
+                models = ui_models_quick()
                 if not role or not model:
                     return self._send(400, {"ok": False, "message": "ต้องระบุบทบาทและโมเดล"})
-                if models and model not in models:
+                if models and model not in models and not model_declared(model):
                     return self._send(400, {"ok": False, "message": f"เครื่องนี้ไม่มีโมเดล {model}"})
                 import contextlib
                 import io

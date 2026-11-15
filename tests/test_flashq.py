@@ -8,6 +8,7 @@ import subprocess
 import types
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -1595,6 +1596,38 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(self.oc_agent_models()["flash-verifier"], "x/other-model")
         self.assertEqual(role(role="verifier", model="no/such"), 400)
         self.assertEqual(role(role="boss", model="x/other-model"), 400)
+
+    def test_ui_models_quick_stale_cache_no_block(self):
+        """ui: กดบันทึกบัญชี/บทบาทตอนแคชรายการโมเดลเก่า (>60 วิ) ต้องไม่รอ `opencode models` (ช้าได้เป็นนาที → ปุ่มค้าง 'กำลังบันทึก…') — ใช้แคชเดิม + รีเฟรชเบื้องหลัง"""
+        sys.path.insert(0, str(REPO))
+        import flashq
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow():
+            started.set()
+            release.wait(10)
+            return (["new/model"], "")
+        old = dict(flashq._UI_MODELS_CACHE)
+        try:
+            flashq._UI_MODELS_CACHE.clear()
+            flashq._UI_MODELS_CACHE["v"] = (time.time() - 3600, (["old/model"], ""))
+            with mock.patch.object(flashq, "machine_models", slow):
+                t = time.time()
+                self.assertEqual(flashq.ui_models_quick(), ["old/model"])
+                self.assertLess(time.time() - t, 1)
+                self.assertTrue(started.wait(5))  # รีเฟรชเบื้องหลังเริ่มแล้ว
+                self.assertEqual(flashq.ui_models_quick(), ["old/model"])  # ไม่เปิดซ้อน
+                release.set()
+                for _ in range(50):
+                    if not flashq._UI_MODELS_CACHE.get("busy"):
+                        break
+                    time.sleep(0.1)
+            self.assertEqual(flashq._UI_MODELS_CACHE["v"][1][0], ["new/model"])
+        finally:
+            release.set()
+            flashq._UI_MODELS_CACHE.clear()
+            flashq._UI_MODELS_CACHE.update(old)
 
     def test_ui_log_tail_offset(self):
         """ui: /api/log อ่านต่อจาก offset เฉพาะบรรทัดที่จบแล้ว"""

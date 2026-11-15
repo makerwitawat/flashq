@@ -797,13 +797,17 @@ let logJob = null, logOffset = 0, logAttempt = 0, logTimer = null, logLines = []
 const NOCONN = "เชื่อมต่อ server ไม่ได้ — ตรวจว่า flashq ui ยังเปิดอยู่ (ถ้าปิดไปให้รัน flashq ui ใหม่) แล้วรีเฟรชหน้า (Ctrl+F5)";
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), Math.max(3200, String(msg).length * 70)); }
 
-async function post(path, body) {
+async function post(path, body, ms = 0) {  // ms > 0 = เลิกรอเมื่อครบเวลา (คืนข้อความหมดเวลา ไม่ค้างเงียบ)
+  const ac = ms ? new AbortController() : null, h = ac && setTimeout(() => ac.abort(), ms);
   try {
-    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body) });
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body), signal: ac?.signal });
     let d = {}; try { d = await r.json(); } catch (e) {}
     if (r.status === 403 && d.code === "token") $("stale").hidden = false;  // token หมดอายุ → ขึ้นป้ายให้รีเฟรช
     return { httpOk: r.ok, ...d };
-  } catch (e) { return { httpOk: false, message: NOCONN }; }
+  } catch (e) {
+    if (ac?.signal.aborted) return { httpOk: false, ok: false, message: `server ไม่ตอบภายใน ${Math.round(ms / 1000)} วินาที — การบันทึกอาจสำเร็จหรือไม่ก็ได้ ปิดหน้าต่างแล้วดูรายการบัญชีอีกครั้ง` };
+    return { httpOk: false, message: NOCONN };
+  } finally { clearTimeout(h); }
 }
 
 async function copyText(text, label) {
@@ -2870,7 +2874,12 @@ $("accDlg").addEventListener("input", (ev) => {
 $("accDlg").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target.id === "wzName") { ev.preventDefault(); wzAct("save"); } });
 async function wzCall(path, body) {  // คืน true เมื่อสำเร็จ · ผิดพลาด = แสดงในขั้นปัจจุบัน
   wz.busy = true; wz.err = ""; wzRender();
-  let d; try { d = await post(path, body); } catch (e) { d = { ok: false, message: String(e.message || e) }; }
+  const t0 = Date.now(), tick = setInterval(() => {  // รอนาน → นับวินาทีบนปุ่ม ให้รู้ว่ายังทำงานอยู่
+    const s = Math.floor((Date.now() - t0) / 1000), b = document.querySelector('#accDlg [data-wz="save"]');
+    if (b && s >= 3) b.textContent = `กำลังบันทึก… ${s} วิ (รอ server ตอบ)`;
+  }, 1000);
+  let d; try { d = await post(path, body, 120000); } catch (e) { d = { ok: false, message: String(e.message || e) }; }
+  clearInterval(tick);
   wz.busy = false;
   if (!d || d.ok === false || d.error) { wz.err = d?.message || d?.error || "ผิดพลาด"; wzRender(); return false; }
   toast(d.message || "สำเร็จ"); await refresh(); return true;
