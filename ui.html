@@ -2390,7 +2390,16 @@ function checkReviews() {
   seenReviews = new Set(done.map((r) => r.id));
 }
 
-async function refresh() {
+let refreshing = null, refreshAgain = false;
+function refresh() {
+  if (refreshing) { refreshAgain = true; return refreshing; }
+  refreshing = (async () => {
+    do { refreshAgain = false; await refreshOnce(); } while (refreshAgain);
+  })().finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+async function refreshOnce() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     const d = await r.json();
