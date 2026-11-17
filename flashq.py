@@ -260,7 +260,99 @@ def opencode_cmd() -> list[str]:
     if alt:
         return [sys.executable, alt] if alt.endswith(".py") else [resolve_shim(alt)]
     exe = shutil.which("opencode")
+    if not exe and os.name == "nt":  # ตัวติดตั้ง opencode v2 วาง exe ที่นี่และไม่เพิ่มใน PATH ให้ (เจอจริง 2026-11-17)
+        cand = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "Programs" / "opencode" / "opencode.exe"
+        exe = str(cand) if cand.is_file() else None
     return [resolve_shim(exe)] if exe else []
+
+
+_OC_MAJOR: dict[str, int] = {}
+
+
+def opencode_major(exe: list[str]) -> int:
+    """รุ่นหลักของ opencode (1 / 2) — v2 เปลี่ยนตัวเลือกของ `run` (ไม่มี --dir --variant --attach --command)
+    FLASHQ_OPENCODE_MAJOR = บังคับค่า · ตัวปลอม .py ในเทสต์ = 1 (ไม่ถามรุ่น) · ถามไม่ได้ = 1 (พฤติกรรมเดิม)"""
+    forced = os.environ.get("FLASHQ_OPENCODE_MAJOR", "").strip()
+    if forced.isdigit():
+        return int(forced)
+    if not exe or exe[-1].endswith(".py"):
+        return 1
+    key = exe[-1]
+    if key not in _OC_MAJOR:
+        major = 1
+        try:
+            out = subprocess.run([*exe, "--version"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+                                 encoding="utf-8", errors="replace",
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0).stdout
+            m = re.search(r"\bv?(\d+)\.\d+", out or "")
+            major = int(m.group(1)) if m else 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _OC_MAJOR[key] = major
+    return _OC_MAJOR[key]
+
+
+CMD_FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.S)
+
+
+def expand_oc_command(name: str, args: list[str], root: Path) -> tuple[str, str, str]:
+    """v2 ไม่มี `run --command` และไม่ขยาย /คำสั่ง ในข้อความ → ขยายแม่แบบเอง (ของโปรเจกต์ก่อน แล้วค่อย global)
+    คืน (ข้อความ, agent จากหัวไฟล์, model จากหัวไฟล์) · หาไม่เจอ = ("", "", "")"""
+    for d in (root / ".opencode" / "command", root / ".opencode" / "commands", OC_CONFIG.parent / "command", OC_CONFIG.parent / "commands"):
+        f = d / f"{name}.md"
+        if f.is_file():
+            break
+    else:
+        return "", "", ""
+    text = f.read_text(encoding="utf-8-sig")
+    meta: dict[str, str] = {}
+    m = CMD_FM_RE.match(text)
+    if m:
+        for ln in m.group(1).splitlines():
+            k, sep, v = ln.partition(":")
+            if sep:
+                meta[k.strip()] = v.strip().strip('"').strip("'")
+        text = text[m.end():]
+    joined = " ".join(args)
+    text = text.replace("$ARGUMENTS", joined)
+    text = re.sub(r"\$(\d)", lambda mm: args[int(mm.group(1)) - 1] if 0 < int(mm.group(1)) <= len(args) else "", text)
+    return text.strip(), meta.get("agent", ""), meta.get("model", "")
+
+
+def oc_run_cmd(exe: list[str], root: Path, title: str, *, model: str = "", variant: str = "", attach: str = "",
+               auto: bool = False, agent: str = "", message: str = "", command: str = "", args: list[str] = ()) -> list[str]:
+    """สร้างคำสั่ง `opencode run` ตามรุ่น · v1 = แบบเดิม · v2 = --standalone (server ส่วนตัว: รับ OPENCODE_CONFIG_CONTENT ของงาน
+    และฆ่า process แล้ว session หยุดด้วย) · ไม่มี --dir (Popen ตั้ง cwd=root อยู่แล้ว) · variant ต่อท้ายโมเดลเป็น model#variant · /คำสั่ง ขยายเอง"""
+    if opencode_major(exe) < 2:
+        cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
+        if model:
+            cmd += ["--model", model]
+        if variant:
+            cmd += ["--variant", variant]
+        if attach:
+            cmd += ["--attach", attach]
+        if auto:
+            cmd += ["--auto"]
+        if agent:
+            cmd += ["--agent", agent]
+        return cmd + (["--command", command, "--", *args] if command else ["--", message])
+    if command:
+        text, fm_agent, fm_model = expand_oc_command(command, list(args), root)
+        if not text:
+            raise RuntimeError(f"ไม่พบแม่แบบคำสั่ง /{command} (.opencode/command/{command}.md ของโปรเจกต์ หรือ {OC_CONFIG.parent / 'command'}) — รัน `flashq install` ก่อน")
+        message, agent, model = text, agent or fm_agent, model or fm_model
+    if variant and not model:
+        model = agent_model(agent) if agent else configured_model()
+        if not model:
+            print(f"WARN: opencode v2 ระบุระดับความคิดได้เฉพาะคู่กับโมเดล (provider/model#variant) แต่หาโมเดลของ agent {agent or 'flash-worker'} ไม่เจอ → ข้าม variant={variant}", flush=True)
+    cmd = [*exe, "run", "--standalone", "--title", title, "--format", "json"]
+    if model:
+        cmd += ["--model", f"{model.split('#')[0]}#{variant}" if variant else model]
+    if auto:
+        cmd += ["--auto"]
+    if agent:
+        cmd += ["--agent", agent]
+    return cmd + ["--", message]
 
 
 SHIM_EXE_RE = re.compile(r'"%~?dp0%?\\?([^"]+?\.exe)"', re.I)
@@ -2578,6 +2670,10 @@ def cmd_run(a) -> int:
         save_job(job)
         print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
         attach = LIVE_URL if a.attach == "live" else ("" if a.attach == "none" else a.attach)
+        if attach and opencode_major(exe) >= 2:  # v2 ไม่มี --attach · API ของ server เปลี่ยน → รัน server ส่วนตัว (--standalone) เสมอ
+            if a.attach != "live":
+                print(f"WARN: opencode v2 ยังไม่รองรับ --attach {a.attach} ใน flashq → รันแยกแทน (ดูสดใน desktop ไม่ได้)", flush=True)
+            attach = ""
         ext_dirs = external_dirs(cfg)
         env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext_dirs)} if ext_dirs else None
         if attach == LIVE_URL and not ensure_live_server(exe, known_external_dirs(root, ext_dirs)):
@@ -2607,21 +2703,17 @@ def cmd_run(a) -> int:
         tried_models: set = set()
         while True:
             attempt += 1
-            cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
-            if job["model"]:
-                cmd += ["--model", job["model"]]
-            if variant:
-                cmd += ["--variant", variant]
-            if attach:
-                cmd += ["--attach", attach]
-            if a.auto:
-                cmd += ["--auto"]
-            if agent:
-                cmd += ["--agent", agent]
-            if kind in AGENT_KINDS:
-                cmd += ["--", prompt]
+            if kind in AGENT_KINDS or a.message:
+                cmd = oc_run_cmd(exe, root, title, model=job["model"], variant=variant, attach=attach, auto=a.auto, agent=agent,
+                                 message=prompt if kind in AGENT_KINDS else a.message)
             else:
-                cmd += ["--", a.message] if a.message else ["--command", cfg["command"], "--", plan, a.tasks]
+                try:
+                    cmd = oc_run_cmd(exe, root, title, model=job["model"], variant=variant, attach=attach, auto=a.auto, agent=agent,
+                                     command=cfg["command"], args=[plan, a.tasks])
+                except RuntimeError as e:
+                    print(f"ERROR: {e}", flush=True)
+                    res = {"status": "FAIL", "rc": 2, "mins": 0.0, "tools": 0, "session": "", "last": str(e)}
+                    break
             res = run_once(job, cmd, root, attach, timeout_min, a.no_open, attempt, stall_min, stall_floor, float(cfg.get("shell_idle_min") or 0), env,
                            model_wait=float(cfg.get("model_wait_min") or 0))
             if res.get("head0") and res.get("head1"):  # ช่วง commit ของงานนี้ (ทุกรอบรวมกัน) → flashq scope ใช้หา commit ของ T-xx โดยไม่พึ่งที่โมเดลจดใน §4
@@ -3249,12 +3341,7 @@ def qa_analyze(job: dict, root: Path, cfg: dict, failing: list[dict], variant: s
     job["model"] = model
     ext = external_dirs(cfg) + [_slash(str(LOGS)).rstrip("/") + "/*"]
     env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext)}
-    cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
-    if model:
-        cmd += ["--model", model]
-    if variant:
-        cmd += ["--variant", variant]
-    cmd += ["--agent", "flash-tester", "--", prompt]
+    cmd = oc_run_cmd(exe, root, title, model=model, variant=variant, agent="flash-tester", message=prompt)
     job["attach"], job["variant"] = "", variant
     save_job(job)
     res = run_once(job, cmd, root, "", QA_ANALYZE_MIN, True, len(job.get("logs") or []) + 1, 4, 2, 0, env)
@@ -4069,12 +4156,7 @@ def cmd_doc(a) -> int:
         attempt, nostart_retry, stall_retry, switches, tried = 0, 1, 1, 0, set()
         while True:
             attempt += 1
-            cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
-            if job["model"]:
-                cmd += ["--model", job["model"]]
-            if variant:
-                cmd += ["--variant", variant]
-            cmd += ["--agent", agent, "--", prompt]
+            cmd = oc_run_cmd(exe, root, title, model=job["model"], variant=variant, agent=agent, message=prompt)
             res = run_once(job, cmd, root, "", spec["timeout_min"], True, attempt, cfg["agent_stall_min"], cfg["agent_stall_floor_min"], 0, env)
             if res["status"] == "TIMEOUT" and job.get("timeout_reason", "").startswith("STALL") and stall_retry > 0:
                 stall_retry -= 1

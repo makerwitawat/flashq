@@ -25,6 +25,11 @@ if os.environ.get("FAKE_ARGS_OUT"):
 if os.environ.get("FAKE_ENV_OUT"):
     with open(os.environ["FAKE_ENV_OUT"], "w", encoding="utf-8") as f:
         f.write(os.environ.get("OPENCODE_CONFIG_CONTENT", ""))
+if os.environ.get("FAKE_V2"):  # จำลอง opencode v2: ตัวเลือกที่ถูกถอดออกต้องล้มเหมือนตัวจริง
+    _gone = [x for x in ("--dir", "--variant", "--attach", "--command") if x in sys.argv[1:sys.argv.index("--") if "--" in sys.argv else None]]
+    if _gone:
+        sys.stderr.write("ERRORS\n" + "".join(f"  Unrecognized flag: {x} in command opencode run\n" for x in _gone))
+        sys.exit(1)
 mode = os.environ.get("FAKE_MODE", "ok")
 if os.environ.get("FAKE_WRITE") and "--dir" in sys.argv:  # จำลอง agent ที่แก้ไฟล์ในโปรเจกต์ (หลายไฟล์คั่นด้วย | · เนื้อหา = FAKE_WRITE_TEXT)
     for _name in os.environ["FAKE_WRITE"].split("|"):

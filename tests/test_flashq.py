@@ -65,6 +65,43 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--command") + 1:], ["flash", "--", "PLAN.md", "T-01"])
         self.assertFalse((self.home / "running.lock").exists())
 
+    def v2_env(self):
+        (self.tmp / "command").mkdir(exist_ok=True)
+        (self.tmp / "command" / "flash.md").write_text("---\ndescription: d\n---\nงาน: $ARGUMENTS · แผน=$1 งาน=$2\n", encoding="utf-8")
+        return {"FLASHQ_OPENCODE_MAJOR": "2", "FAKE_V2": "1"}
+
+    def test_v2_plan_run_expands_command_without_removed_flags(self):
+        """opencode v2: ไม่มี --dir --variant --attach --command → ใช้ --standalone + ขยายแม่แบบ /flash เอง · variant ต่อท้ายโมเดล"""
+        r = self.run_q("run", "PLAN.md", "T-01", "--no-open", "--variant", "high", env=self.v2_env())  # --attach live (ค่าเริ่มต้น) ต้องไม่เปิด server 4096
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=OK", r.stdout)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        for gone in ("--dir", "--variant", "--attach", "--command"):
+            self.assertNotIn(gone, argv)
+        self.assertIn("--standalone", argv)
+        self.assertEqual(argv[argv.index("--model") + 1], "p1/m#high")
+        self.assertEqual(argv[-1], "งาน: PLAN.md T-01 · แผน=PLAN.md งาน=T-01")
+
+    def test_v2_project_command_wins_and_message_passes_through(self):
+        env = self.v2_env()
+        (self.proj / ".opencode" / "command").mkdir(parents=True)
+        (self.proj / ".opencode" / "command" / "flash.md").write_text("---\nagent: build\n---\nของโปรเจกต์ $ARGUMENTS", encoding="utf-8")
+        r = self.run_q(*self.base(), env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(argv[argv.index("--agent") + 1], "build")
+        self.assertEqual(argv[-1], "ของโปรเจกต์ PLAN.md T-01")
+        r = self.run_q("run", "--message", "ทำ x", "--attach", "none", "--no-open", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(argv[-2:], ["--", "ทำ x"])
+
+    def test_v2_missing_command_template_fails_clearly(self):
+        r = self.run_q(*self.base(), env={"FLASHQ_OPENCODE_MAJOR": "2", "FAKE_V2": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ไม่พบแม่แบบคำสั่ง /flash", r.stdout)
+        self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
     def test_ok_without_commit_or_done_warns(self):
         """exit 0 แต่ไม่มี commit ใหม่/DONE (worker หยุดถามผู้ใช้) = ยัง OK แต่ต้องเตือน · ส่งข้อความตรง (ไม่มีแผน) ไม่เตือน"""
         r = self.run_q(*self.base())
@@ -2808,7 +2845,7 @@ class FlashqTest(unittest.TestCase):
         """ยังต้องผ่าน .cmd (หา exe จริงไม่เจอ): บรีฟที่ cmd.exe จะตัด/เพี้ยน → FAIL ทันทีพร้อมบอกเหตุ (ไม่ใช่ NOSTART เงียบ 6 นาที) · บรีฟปลอดภัยยังรันได้"""
         shim = self.tmp / "opencode.cmd"
         shim.write_text(f'@echo off\r\n"{sys.executable}" "{FAKE}" %*\r\n', encoding="utf-8")
-        env = {"FLASHQ_OPENCODE": str(shim)}
+        env = {"FLASHQ_OPENCODE": str(shim), "FLASHQ_OPENCODE_MAJOR": "1"}  # ไม่ให้การถามรุ่น (--version) ปนใน argv ที่บันทึก
         t0 = time.time()
         r = self.run_q("investigate", "--no-open", self.BRIEF, env=env)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
