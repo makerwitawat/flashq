@@ -88,17 +88,22 @@ SLOT_RE = re.compile(r"^running(?:-(\d+))?\.lock$")
 STALE_LOCK_HOURS = 24  # ล็อกที่ไม่มี pid_start + เก่ากว่ากี่ชั่วโมง + งานจบแล้ว = ล็อกค้าง เก็บได้
 OC_CONFIG = Path(os.environ.get("FLASHQ_OPENCODE_CONFIG") or (Path.home() / ".config" / "opencode" / "opencode.json"))
 LIVE_URL = os.environ.get("FLASHQ_LIVE_URL") or "http://127.0.0.1:4096"
+# opencode v2: server เบื้องหลังตัวเดียวที่ใช้ร่วมกับแอป desktop (url + รหัสผ่าน Basic อยู่ใน service.json · รหัสเปลี่ยนได้ทุกครั้งที่เปิดใหม่)
+# งานเก็บแค่ป้าย OC2_SERVICE ใน job["attach"] แล้วอ่าน url/รหัสตอนใช้ — ห้ามบันทึกรหัสผ่านลงไฟล์งาน
+OC2_SERVICE = "opencode-v2-service"
+OC2_SERVICE_JSON = Path(os.environ.get("FLASHQ_OC2_SERVICE_JSON") or (Path.home() / ".local" / "state" / "opencode" / "service.json"))
 # รอ sessionID ใน log นานสุดกี่วิ ก่อนนับเป็น NOSTART (เทสต์ตั้งสั้นได้ — ตั้งแล้วใช้ค่าเดียวทุกรอบ)
 # วัดจาก log จริง 180 งาน (2026-10-23): เริ่มได้ใน p50 6 วิ · p90 10 วิ · p99 112 วิ · สูงสุด 145 วิ → รอบแรกรอ 60 วิ แล้วฆ่า-ลองใหม่ดีกว่านั่งรอ 3 นาที (รอบถัดไปมักเริ่มได้ใน 6 วิ) · รอบลองใหม่ให้เวลามากขึ้นเผื่อเครื่องหน่วงจริง
 START_LIMIT_FIRST_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 60)
 START_LIMIT_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 120)
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
-QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance", re.I)
+QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance|provider\.(?:free|budget|model-budget|go|chatgpt)-limit|usage.?limit", re.I)  # v2: error.type provider.rate-limit/quota/free-limit/budget-limit/go-limit ...
 # opencode โหมดไม่โต้ตอบ (`opencode run`) ตอบ "ไม่อนุญาต" ให้เองเมื่อกฎเป็น ask → stderr: `permission requested: <ชนิด> (<path>); auto-rejecting`
 PERM_REQ_RE = re.compile(r"permission requested:\s*([\w.-]+)\s*\((.*?)\)\s*;\s*auto-reject", re.I)
 # tool error ที่ตามมา (subagent ล้มเพราะถูกปฏิเสธ · ข้อความไทย/อังกฤษของ opencode)
-PERM_DENY_RE = re.compile(r"rejected permission|ปฏิเสธสิทธิ์|permission (?:was )?denied", re.I)
+PERM_DENY_RE = re.compile(r"rejected permission|ปฏิเสธสิทธิ์|permission (?:was )?denied|cannot ask the user for permission", re.I)  # v2: "...cannot ask the user for permission, so the request was rejected"
+RULE_DENY_RE = re.compile(r"prevents you from using|\APermission denied: [\w.-]+\s*\Z")  # กฎ deny ของ agent · v1 "...rule which prevents you from using..." · v2 "Permission denied: shell"
 DEFAULTS = {
     "main_branch": "master",          # branch ที่ opencode ต้องอยู่ + ที่แผนต้องถูก push ไป
     "remote": "origin",
@@ -322,7 +327,7 @@ def expand_oc_command(name: str, args: list[str], root: Path) -> tuple[str, str,
 def oc_run_cmd(exe: list[str], root: Path, title: str, *, model: str = "", variant: str = "", attach: str = "",
                auto: bool = False, agent: str = "", message: str = "", command: str = "", args: list[str] = ()) -> list[str]:
     """สร้างคำสั่ง `opencode run` ตามรุ่น · v1 = แบบเดิม · v2 = --standalone (server ส่วนตัว: รับ OPENCODE_CONFIG_CONTENT ของงาน
-    และฆ่า process แล้ว session หยุดด้วย) · ไม่มี --dir (Popen ตั้ง cwd=root อยู่แล้ว) · variant ต่อท้ายโมเดลเป็น model#variant · /คำสั่ง ขยายเอง"""
+    และฆ่า process แล้ว session หยุดด้วย · attach=OC2_SERVICE = รันบน server เบื้องหลังของ desktop แทน) · ไม่มี --dir (Popen ตั้ง cwd=root อยู่แล้ว) · variant ต่อท้ายโมเดลเป็น model#variant · /คำสั่ง ขยายเอง"""
     if opencode_major(exe) < 2:
         cmd = [*exe, "run", "--dir", str(root), "--title", title, "--format", "json"]
         if model:
@@ -345,7 +350,7 @@ def oc_run_cmd(exe: list[str], root: Path, title: str, *, model: str = "", varia
         model = agent_model(agent) if agent else configured_model()
         if not model:
             print(f"WARN: opencode v2 ระบุระดับความคิดได้เฉพาะคู่กับโมเดล (provider/model#variant) แต่หาโมเดลของ agent {agent or 'flash-worker'} ไม่เจอ → ข้าม variant={variant}", flush=True)
-    cmd = [*exe, "run", "--standalone", "--title", title, "--format", "json"]
+    cmd = [*exe, "run", *([] if attach == OC2_SERVICE else ["--standalone"]), "--title", title, "--format", "json"]  # ต่อ server เบื้องหลัง = ดูสดใน desktop ได้
     if model:
         cmd += ["--model", f"{model.split('#')[0]}#{variant}" if variant else model]
     if auto:
@@ -529,10 +534,63 @@ def known_external_dirs(root: Path, extra: list[str] = ()) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def oc_server(attach: str):
+    """(url ฐาน, headers, v2?) ของ server opencode ที่งานต่ออยู่ · OC2_SERVICE = อ่าน service.json ตอนนี้ · ไม่ใช่ server/ยังไม่เปิด = None"""
+    if attach == OC2_SERVICE:
+        s = read_json(OC2_SERVICE_JSON)
+        if not s.get("url"):
+            return None
+        import base64
+        auth = {"Authorization": "Basic " + base64.b64encode(f"opencode:{s['password']}".encode()).decode()} if s.get("password") else {}
+        return str(s["url"]).rstrip("/"), auth, True
+    if str(attach or "").startswith("http"):
+        return attach.rstrip("/"), {}, False
+    return None
+
+
+def is_server(attach) -> bool:
+    """งานนี้ต่อ server ที่ถามสถานะ/สั่งหยุดได้ไหม (v1 = url · v2 = OC2_SERVICE)"""
+    return str(attach or "").startswith("http") or attach == OC2_SERVICE
+
+
+def oc_http(attach: str, path: str, query: dict | None = None, method: str = "GET", timeout: float = 8):
+    """เรียก API ของ server (ใส่รหัสผ่านของ v2 ให้เอง) → JSON (ว่าง = None) · ล้ม = โยน exception"""
+    import urllib.parse
+    import urllib.request
+    srv = oc_server(attach)
+    if not srv:
+        raise OSError(f"ไม่มี server ({attach or '-'})")
+    url = srv[0] + path + ("?" + urllib.parse.urlencode(query) if query else "")
+    raw = urllib.request.urlopen(urllib.request.Request(url, data=b"" if method == "POST" else None, method=method, headers=srv[1]),
+                                 timeout=timeout).read()
+    return json.loads(raw) if raw.strip() else None
+
+
+def oc2_service_up() -> bool:
+    """server เบื้องหลังของ opencode v2 (แอป desktop เปิดไว้) ตอบอยู่ไหม"""
+    try:
+        oc_http(OC2_SERVICE, "/api/session/active", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
 def server_permission(attach: str, root: Path):
     """ช่อง permission.external_directory ตามที่ server opencode (--attach) ใช้จริง — server โหลด config ตอนเปิด จึงไม่เห็น env ของงาน · None = ถามไม่ได้"""
     import urllib.parse
     import urllib.request
+    srv = oc_server(attach)
+    if srv and srv[2]:  # v2: รายการแหล่ง config แต่ละแหล่งมี permissions [{action, resource, effect}] → รวมเป็น map แบบ v1 (แหล่งหลังทับแหล่งก่อน)
+        try:
+            srcs = oc_http(attach, "/api/config", {"location[directory]": str(root)}, timeout=3)
+        except Exception:
+            return None
+        rules = {}
+        for src in srcs if isinstance(srcs, list) else []:
+            for r in ((src.get("info") or {}).get("permissions") or []) if isinstance(src, dict) else []:
+                if isinstance(r, dict) and r.get("action") == "external_directory" and r.get("resource"):
+                    rules[str(r["resource"])] = str(r.get("effect") or "")
+        return rules
     try:
         raw = urllib.request.urlopen(f"{attach.rstrip('/')}/config?" + urllib.parse.urlencode({"directory": str(root)}), timeout=3).read()
         return (json.loads(raw).get("permission") or {}).get("external_directory")
@@ -546,7 +604,7 @@ def _perm_pairs(dirs: list[str]) -> str:
 
 def perm_missing_on_server(dirs: list[str], attach: str, root: Path) -> list[str]:
     """external_dirs ที่ server opencode (--attach) ยังไม่อนุญาต · ถาม server ไม่ได้ = ใช้ opencode.json แทน · ไม่ใช่ server (attach ว่าง) = []"""
-    if not dirs or not attach.startswith("http"):
+    if not dirs or not is_server(attach):
         return []
     perm = (read_json(OC_CONFIG).get("permission") or {})
     file_perm = perm.get("external_directory") if isinstance(perm, dict) else None
@@ -564,9 +622,12 @@ def perm_precheck(dirs: list[str], attach: str, root: Path) -> list[str]:
         return out
     file_perm = (oc.get("permission") or {}).get("external_directory") if isinstance(oc.get("permission"), dict) else None
     miss_file = [d for d in dirs if not perm_allows(file_perm, d)]
-    if attach.startswith("http"):
+    if is_server(attach):
         miss = perm_missing_on_server(dirs, attach, root)
-        if miss:
+        if miss and attach == OC2_SERVICE:
+            out.append(f"WARN: server เบื้องหลังของ opencode v2 ยังไม่อนุญาต external_dirs: {', '.join(miss)} → งานที่แตะโฟลเดอร์นี้จะถูกปฏิเสธสิทธิ์ (DENIED) "
+                       f"· เพิ่มใน {OC_CONFIG} ช่อง permission.external_directory: {_perm_pairs(miss)} แล้วปิด-เปิดแอป opencode desktop ใหม่ · หรือส่งด้วย --attach none")
+        elif miss:
             pidf = HOME / "live_server.pid"
             pid = pidf.read_text(encoding="utf-8", errors="replace").strip() if pidf.exists() else "?"
             out.append(f"WARN: server opencode ({attach}) ยังไม่อนุญาต external_dirs: {', '.join(miss)} → งานที่แตะโฟลเดอร์นี้จะถูกปฏิเสธสิทธิ์ (DENIED) "
@@ -1633,9 +1694,9 @@ OC_STAGES = (("llm runtime selected", "ส่งคำขอไปผู้ใ�
              ("loading path=", "ค้างระหว่างโหลดคอนฟิก"), ("bootstrapping", "ค้างตอนเริ่มโปรเจกต์ (bootstrapping)"), ("creating instance", "ค้างตอนสร้าง instance"))
 
 
-def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | None = None) -> str:
+def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | None = None, title: str = "") -> str:
     """NOSTART (log ของ `opencode run` ว่างจนหมดเวลา) → อ่านท้าย log กลางของ opencode หารอบที่เปิดโฟลเดอร์โปรเจกต์นี้หลัง `since` แล้วบอกว่าค้างหลังบรรทัดไหน
-    ไม่เจอรอบนั้นเลย = process ไม่ทันบูต · ใหญ่เกิน OC_DB_WARN_GB = เตือนเรื่องฐานข้อมูล · พังเองคืน "" (ห้ามกระทบสถานะงาน)"""
+    ไม่เจอรอบนั้นเลย = process ไม่ทันบูต · opencode v2 เขียนแค่ "cli starting" (+ args ที่มี --title ของงาน) ไม่มีขั้นเริ่มระบบ → เจอ = บูตแล้วแต่ไม่ได้ session · ใหญ่เกิน OC_DB_WARN_GB = เตือนเรื่องฐานข้อมูล · พังเองคืน "" (ห้ามกระทบสถานะงาน)"""
     log, db = log or OC_LOG, db or OC_DB
     parts = []
     try:
@@ -1646,6 +1707,8 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
             lines = f.read().decode("utf-8", errors="replace").splitlines()[1 if size > OC_LOG_TAIL_BYTES else 0:]  # ตัดบรรทัดแรกที่อาจขาดครึ่ง (เมื่ออ่านแค่ท้ายไฟล์)
         want = os.path.normcase(os.path.normpath(str(root)))
         runs: dict = {}
+        booted = False  # v2: เจอ "cli starting" ของงานนี้ (args มี --title เดียวกัน)
+        tmark = json.dumps(["--title", title], ensure_ascii=False, separators=(",", ":"))[1:-1].replace('"', '\\"') if title else ""
         for ln in lines:
             m = re.match(r'timestamp=(\S+)Z level=\w+ run=(\w+) message=(.*)', ln)
             if not m:
@@ -1656,6 +1719,8 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
             msg = m.group(3)
             if msg.startswith('"'):  # message="creating instance" directory=... → ตัดเครื่องหมายคำพูดรอบข้อความ
                 msg = msg[1:].replace('"', "", 1)
+            if tmark and msg.startswith("cli starting") and tmark in msg:
+                booted = True
             if msg.startswith("creating instance"):
                 d = re.search(r'directory="((?:[^"\\]|\\.)*)"', msg)
                 dd = d.group(1).replace("\\\\", "\\") if d else ""
@@ -1666,7 +1731,9 @@ def nostart_diag(root: Path, since: float, log: Path | None = None, db: Path | N
                 if msg.startswith("loop ") and re.search(r"\bstep=[1-9]", msg):  # ถึงรอบ 2 = โมเดลตอบแล้ว log ของรอบนั้นต้องมี sessionID → เป็นของงานอื่นที่เปิดโฟลเดอร์เดียวกันพร้อมกัน
                     runs[m.group(2)]["other"] = True
         mine = {k: v for k, v in runs.items() if not v.get("other")}
-        if not runs:
+        if not runs and booted:
+            parts.append("opencode v2 บูตแล้ว (log กลางมี 'cli starting' ของงานนี้ · v2 ไม่บันทึกขั้นเริ่มระบบ) แต่ไม่ได้ session ในเวลาที่กำหนด → server ส่วนตัว (--standalone)/server เบื้องหลังเปิดช้าหรือค้าง หรือผู้ให้บริการโมเดลเงียบ (รอบลองใหม่มักผ่าน)")
+        elif not runs:
             parts.append("log กลางของ opencode ไม่มีรอบที่เปิดโฟลเดอร์นี้เลย → process ไม่ทันบูต (เครื่องหน่วง/ติดไวรัสสแกน/ไฟล์ opencode เปิดไม่ขึ้น)")
         elif not mine:
             parts.append(f"รอบที่เปิดโฟลเดอร์นี้ {len(runs)} รอบเป็นของงานอื่นที่ทำงานอยู่ทั้งหมด → process ของงานนี้ไม่ทันบูต")
@@ -1713,33 +1780,72 @@ def open_in_desktop(sid: str, server: str) -> None:
     node = shutil.which("node")
     if not node:
         return
-    r = run_timeout([node, str(REPO / "oc_desktop_open.mjs"), sid, server or "sidecar"], DESKTOP_OPEN_TIMEOUT_SEC)  # ไม่ให้งานค้างก่อนเริ่มเฝ้า
+    srv = server if str(server or "").startswith("http") else "sidecar"  # v2 (OC2_SERVICE) = server เบื้องหลังที่ desktop ต่ออยู่เอง
+    r = run_timeout([node, str(REPO / "oc_desktop_open.mjs"), sid, srv], DESKTOP_OPEN_TIMEOUT_SEC)  # ไม่ให้งานค้างก่อนเริ่มเฝ้า
     print((r.stdout.strip() or (f"DESKTOP_OPEN=FAIL หมดเวลา {DESKTOP_OPEN_TIMEOUT_SEC:g} วิ" if r.returncode == 124 else f"DESKTOP_OPEN=FAIL rc={r.returncode}")), flush=True)
 
 
 def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
     """ถามเซิร์ฟเวอร์ opencode (เมื่อ attach) ว่า session นี้ + session ลูกหลาน (subagent ที่ /flash ส่งไปทำ T-xx) ขยับล่าสุดเมื่อไร และมี tool ไหนกำลังรันอยู่
     log ของ parent เงียบได้ทั้งที่ subagent กำลังทำงาน → ใช้ตัดสินว่า "ค้างจริง" + บอกสาเหตุ (tool ค้าง vs รอโมเดล) · ถามไม่ได้ = None (ใช้ log อย่างเดียว)
-    directory = โฟลเดอร์โปรเจกต์ของ session (server เปิดที่ ~/.flashq · ไม่ส่ง = server หา session ของโปรเจกต์อื่นไม่เจอ)"""
+    directory = โฟลเดอร์โปรเจกต์ของ session (v1: server เปิดที่ ~/.flashq · ไม่ส่ง = server หา session ของโปรเจกต์อื่นไม่เจอ · v2 ไม่ต้องใช้)
+    v1 กับ v2 ต่างกันแค่ API (ตัวแปลงด้านล่าง) — ผลลัพธ์รูปเดียวกัน"""
     import urllib.parse
     import urllib.request
-    qs = ("?" + urllib.parse.urlencode({"directory": directory})) if directory else ""
+    q = urllib.parse.quote
+    srv = oc_server(server)
+    if not srv:
+        return None
+    if srv[2]:
+        def children(i):  # → [(id, title, updated ms)]
+            return [(c.get("id"), c.get("title"), (c.get("time") or {}).get("updated", 0))
+                    for c in (oc_http(server, "/api/session", {"parentID": i, "limit": 50}) or {}).get("data") or []]
 
-    def get(path, limit=0):
-        # ข้อความล่าสุดเท่านั้น (limit) — session หลักยาวมาก server ส่งทั้งประวัติไม่ทัน/ตัดการเชื่อมต่อ ทำให้วินิจฉัยไม่ได้
-        q = qs + (("&" if qs else "?") + f"limit={limit}" if limit else "")
-        return json.loads(urllib.request.urlopen(server.rstrip("/") + path + q, timeout=8).read())
+        def recent(i):  # ข้อความล่าสุด 2 อัน (เก่า → ใหม่) → [(created ms, [(tool, state, เริ่ม ms, ขยับล่าสุด ms)])]
+            out = []
+            for m in reversed((oc_http(server, f"/api/session/{q(i)}/message", {"limit": 2, "order": "desc"}) or {}).get("data") or []):
+                mt = m.get("time") or {}
+                tools = []
+                for p in m.get("content") or []:
+                    if p.get("type") == "tool":
+                        t = p.get("time") or {}
+                        tools.append((p.get("name"), p.get("state") or {}, t.get("ran") or t.get("created") or 0,
+                                      max(t.get("created") or 0, t.get("ran") or 0, t.get("completed") or 0)))
+                out.append((max(mt.get("created") or 0, mt.get("completed") or 0), tools))
+            return out
+    else:
+        qs = ("?" + urllib.parse.urlencode({"directory": directory})) if directory else ""
+
+        def get(path, limit=0):
+            # ข้อความล่าสุดเท่านั้น (limit) — session หลักยาวมาก server ส่งทั้งประวัติไม่ทัน/ตัดการเชื่อมต่อ ทำให้วินิจฉัยไม่ได้
+            qq = qs + (("&" if qs else "?") + f"limit={limit}" if limit else "")
+            return json.loads(urllib.request.urlopen(srv[0] + path + qq, timeout=8).read())
+
+        def children(i):
+            return [(c.get("id"), c.get("title"), (c.get("time") or {}).get("updated", 0)) for c in get(f"/session/{q(i)}/children")]
+
+        def recent(i):
+            out = []
+            for m in get(f"/session/{q(i)}/message", limit=2)[-2:]:
+                tools = []
+                for p in m.get("parts", []):
+                    st = p.get("state") or {}
+                    t = st.get("time") or p.get("time") or {}
+                    if p.get("type") == "tool":
+                        tools.append((p.get("tool"), st, t.get("start", 0), max(t.get("end", 0), t.get("start", 0))))
+                out.append(((m.get("info", {}).get("time") or {}).get("created", 0), tools))
+            return out
     try:
         updated, running, ids, titles, cupd = 0, [], [sid], {}, {}
         k = 0
         while k < len(ids) and len(ids) < 30:  # ไล่ลูกหลาน (subagent ซ้อน subagent) · จำกัดจำนวนกันวน
             try:
-                for c in get(f"/session/{urllib.parse.quote(ids[k])}/children"):
-                    if c.get("id") and c["id"] not in ids:
-                        ids.append(c["id"])
-                        titles[c["id"]] = str(c.get("title") or "")[:80]
-                        cupd[c["id"]] = (c.get("time") or {}).get("updated", 0)
-                        updated = max(updated, cupd[c["id"]])
+                for cid, ctitle, cu in children(ids[k]):
+                    if cid and cid not in ids:
+                        ids.append(cid)
+                        titles[cid] = str(ctitle or "")[:80]
+                        cupd[cid] = cu or 0
+                        updated = max(updated, cupd[cid])
             except Exception:
                 pass
             k += 1
@@ -1747,24 +1853,21 @@ def server_activity(server: str, sid: str, directory: str = "") -> dict | None:
         for i in ids:
             su, doing = cupd.get(i, 0), ""
             try:
-                msgs = get(f"/session/{urllib.parse.quote(i)}/message", limit=2)[-2:]
+                msgs = recent(i)
             except Exception:
                 if i == sid:
                     raise  # session หลักถามไม่ได้ = ไม่มีข้อมูลพอ (None) · ลูกตัวใดตัวหนึ่งพลาดข้ามได้
                 msgs = []
-            for m in msgs:
-                su = max(su, (m.get("info", {}).get("time") or {}).get("created", 0))
-                for p in m.get("parts", []):
-                    st = p.get("state") or {}
-                    t = st.get("time") or p.get("time") or {}
-                    su = max(su, t.get("end", 0), t.get("start", 0))
-                    if p.get("type") == "tool":
-                        inp = st.get("input") or {}
-                        what = str(st.get("title") or inp.get("command") or inp.get("description") or inp.get("filePath") or "")[:100]
-                        doing = f"{p.get('tool')}: {what}" + ("" if st.get("status") == "running" else " (จบแล้ว)")
-                        if st.get("status") == "running":
-                            running.append({"tool": p.get("tool"), "what": what, "since": t.get("start", 0) / 1000, "session": i,
-                                            "cmd": str(inp.get("command") or "")[:2000]})
+            for created, tools in msgs:
+                su = max(su, created or 0)
+                for tool, st, start, last in tools:
+                    su = max(su, last or 0)
+                    inp = st.get("input") or {}
+                    what = str(st.get("title") or inp.get("command") or inp.get("description") or inp.get("filePath") or inp.get("path") or "")[:100]
+                    doing = f"{tool}: {what}" + ("" if st.get("status") == "running" else " (จบแล้ว)")
+                    if st.get("status") == "running":
+                        running.append({"tool": tool, "what": what, "since": (start or 0) / 1000, "session": i,
+                                        "cmd": str(inp.get("command") or "")[:2000]})
             updated = max(updated, su)
             if i != sid:
                 subs.append({"session": i, "title": titles.get(i, ""), "updated": su / 1000 if su else 0, "doing": doing[:120]})
@@ -1829,7 +1932,7 @@ class ShellWatch:
 
     def check(self, running: list[dict], now: float | None = None) -> dict | None:
         now = now or time.time()
-        bash = [r for r in running if r.get("tool") == "bash" and r.get("cmd")]
+        bash = [r for r in running if r.get("tool") in ("bash", "shell") and r.get("cmd")]  # v2 เรียก tool นี้ว่า shell
         for k in [k for k in self.seen if k not in {(r["session"], r["since"]) for r in bash}]:
             if self.seen[k].get("warn"):  # tool จบเองระหว่างที่ยามสงสัย
                 self.released.append({"cmd": self.seen[k]["cmd"], "note": self.seen[k]["warn"]})
@@ -1932,7 +2035,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             except subprocess.TimeoutExpired:
                 print(f"WARN: ฆ่า opencode pid {p.pid} ไม่สำเร็จใน 30 วิ — ปล่อยไว้แล้วไปต่อ", flush=True)
             rc, status = -1, "NOSTART"
-            nostart = nostart_diag(root, t0)
+            nostart = nostart_diag(root, t0, title=cmd[cmd.index("--title") + 1] if "--title" in cmd else "")
             if nostart:
                 job.setdefault("nostart_diag", []).append(nostart)
                 save_job(job)
@@ -1947,7 +2050,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                     save_job(job)
             last_poll = 0.0
             last_m, last_chg, maxgap = 0.0, time.time(), 0.0  # จังหวะ log จริง → เกณฑ์ค้างปรับตามงานนี้ (งานที่ปกติขยับทุกครึ่งนาที ไม่ต้องรอ 20 นาทีถึงรู้ว่าค้าง)
-            watch = ShellWatch(shell_idle) if shell_idle and attach.startswith("http") and (os.name == "nt" or os.environ.get("FLASHQ_FAKE_PROCS")) else None
+            watch = ShellWatch(shell_idle) if shell_idle and is_server(attach) and (os.name == "nt" or os.environ.get("FLASHQ_FAKE_PROCS")) else None
             warned = False  # เตือนล่วงหน้า "log เงียบ" ครั้งเดียวต่อรอบ
             busy_until = 0.0  # ตัวเฝ้า shell เห็นโปรเซสขยับล่าสุด (กันเกณฑ์ log เงียบฆ่างาน build ยาวที่ยังทำงานจริง)
             while True:  # เฝ้า 3 อย่าง: เกินเวลารวม · log เงียบเกิน stall_min (ค้าง) → ฆ่าแล้ว TIMEOUT พร้อมบอกเหตุ · คำสั่ง shell ค้าง → ฆ่าเฉพาะคำสั่ง
@@ -1976,7 +2079,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                             last_m, last_chg = m, time.time()
                         limit = min(stall_min * 60, max(stall_floor * 60, 6 * maxgap)) if stall_min else 0
                         act = None
-                        can_ask = attach.startswith("http") and bool(job.get("session"))
+                        can_ask = is_server(attach) and bool(job.get("session"))
                         mw = model_wait * 60 if (model_wait and limit and can_ask) else 0  # เกณฑ์ "รอโมเดล" (ใช้ได้เมื่อถาม server ได้เท่านั้น) · ไม่เกินเกณฑ์ปกติ
                         mw = min(mw, limit) if mw else 0
                         if can_ask and ((limit and (idle >= limit or (idle >= limit / 2 and time.time() - last_poll >= 20)))
@@ -2034,7 +2137,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                             print(f"WARN: ฆ่า opencode pid {p.pid} ไม่สำเร็จใน 30 วิ — ปล่อยไว้แล้วไปต่อ", flush=True)
                         rc, status = -1, "TIMEOUT"
                         job["timeout_reason"] = why
-                        note = abort_session(job) if attach.startswith("http") else ""  # ฆ่าแค่ `opencode run --attach` → session บน server ยังเดิน (แก้ไฟล์ซ้อนกับรอบลองใหม่/งานถัดไป)
+                        note = abort_session(job) if is_server(attach) else ""  # ฆ่าแค่ `opencode run --attach` → session บน server ยังเดิน (แก้ไฟล์ซ้อนกับรอบลองใหม่/งานถัดไป)
                         if note:
                             print(note, flush=True)
                         break
@@ -2056,12 +2159,15 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
             st = part.get("state") or {}
             inp = st.get("input") or {}
             recent.append(f"{part.get('tool', '?')} {st.get('status', '')} " + str(inp.get("command") or inp.get("filePath") or inp.get("pattern") or "")[:90])
-            if "prevents you from using" in str(st.get("error", "")):
+            if RULE_DENY_RE.search(str(st.get("error", ""))):
                 denied.append(str(inp.get("command") or part.get("tool"))[:100])
             elif PERM_DENY_RE.search(str(st.get("error", ""))):
                 tool_denied.append(f"{part.get('tool', '?')} {str(inp.get('description') or inp.get('command') or inp.get('filePath') or '')[:80]}".strip())
-            if part.get("tool") == "task" and isinstance(st.get("output"), str):
+            if part.get("tool") in ("task", "subagent") and isinstance(st.get("output"), str):  # v2 เรียก tool นี้ว่า subagent
                 task_out.append(st["output"])
+                m = re.search(r"working in the background \(sessionID: (ses_\w+)\)", st["output"])
+                if m:  # v2 รัน subagent เบื้องหลัง ผลจริงไม่อยู่ใน event → อ่านคำตอบสุดท้ายของ session ลูกจากฐานข้อมูล
+                    task_out.append(oc2_child_text(m.group(1)))
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
         elif ev.get("type") == "step_finish":
@@ -2129,6 +2235,23 @@ def said_done(text: str) -> bool:
             continue
         return True
     return False
+
+
+def oc2_child_text(sid: str) -> str:
+    """ข้อความคำตอบสุดท้ายของ session ลูก (subagent) ใน opencode v2 จากตาราง session_message · อ่านไม่ได้ = "" (ห้ามกระทบสถานะงาน)"""
+    con = oc_open_db()
+    if con is None:
+        return ""
+    try:
+        for (data,) in con.execute("SELECT data FROM session_message WHERE session_id=? AND type='assistant' ORDER BY seq DESC LIMIT 5", (sid,)):
+            txt = "\n".join(c.get("text", "") for c in (json.loads(data).get("content") or []) if isinstance(c, dict) and c.get("type") == "text")
+            if txt.strip():
+                return txt
+    except (sqlite3.Error, ValueError, AttributeError):
+        pass
+    finally:
+        con.close()
+    return ""
 
 
 def job_progressed(root: Path, head0: str, outputs: list[str], job: dict | None = None) -> bool:
@@ -2670,10 +2793,15 @@ def cmd_run(a) -> int:
         save_job(job)
         print(f"SLOT ช่อง {job.get('slot', 1)} (max_parallel={max_parallel()})", flush=True)
         attach = LIVE_URL if a.attach == "live" else ("" if a.attach == "none" else a.attach)
-        if attach and opencode_major(exe) >= 2:  # v2 ไม่มี --attach · API ของ server เปลี่ยน → รัน server ส่วนตัว (--standalone) เสมอ
+        if attach and opencode_major(exe) >= 2:  # v2 ไม่มี --attach → live = รันบน server เบื้องหลังที่แอป desktop ใช้อยู่ (ดูสดได้) · อื่น ๆ = server ส่วนตัว (--standalone)
             if a.attach != "live":
-                print(f"WARN: opencode v2 ยังไม่รองรับ --attach {a.attach} ใน flashq → รันแยกแทน (ดูสดใน desktop ไม่ได้)", flush=True)
-            attach = ""
+                print(f"WARN: opencode v2 ไม่มี --attach แล้ว · flashq ต่อได้แค่ server เบื้องหลังของ desktop (--attach live) → {a.attach} รันแยกแทน (ดูสดใน desktop ไม่ได้)", flush=True)
+                attach = ""
+            elif oc2_service_up():
+                attach = OC2_SERVICE
+            else:
+                print(f"WARN: ไม่พบ server เบื้องหลังของ opencode v2 ({OC2_SERVICE_JSON} · เปิดแอป opencode desktop ค้างไว้ก่อน) → รันแยก (ดูสดไม่ได้)", flush=True)
+                attach = ""
         ext_dirs = external_dirs(cfg)
         env = {**os.environ, "OPENCODE_CONFIG_CONTENT": perm_config_content(ext_dirs)} if ext_dirs else None
         if attach == LIVE_URL and not ensure_live_server(exe, known_external_dirs(root, ext_dirs)):
@@ -2681,11 +2809,13 @@ def cmd_run(a) -> int:
             print(f"WARN: เปิด server 4096 ไม่ขึ้นใน 30 วิ → รันแยก (ดูสดไม่ได้) · log {HOME / 'live_server.log'} · pid "
                   f"{pidf.read_text(encoding='utf-8', errors='replace').strip() if pidf.exists() else '?'} (ค้าง = taskkill /PID <pid> /T /F แล้วสั่งใหม่)", flush=True)
             attach = ""
-        if a.attach == "live" and attach == LIVE_URL:  # server เปิดค้างโหลดสิทธิ์ตอนเปิดครั้งเดียว — เห็นโฟลเดอร์ที่เพิ่งเพิ่มใน .flash.json ไม่ได้ → งานจะโดน DENIED หลังรันไปหลายนาที
+        if a.attach == "live" and attach in (LIVE_URL, OC2_SERVICE):  # server เปิดค้างโหลดสิทธิ์ตอนเปิดครั้งเดียว — เห็นโฟลเดอร์ที่เพิ่งเพิ่มใน .flash.json ไม่ได้ → งานจะโดน DENIED หลังรันไปหลายนาที
             miss = perm_missing_on_server(ext_dirs, attach, root)
             if miss:
-                print(f"PERM_FALLBACK: server {attach} ยังไม่อนุญาต external_dirs: {', '.join(miss)} (โหลดสิทธิ์ตอนเปิดครั้งเดียว) → รอบนี้รัน opencode แยกที่ได้สิทธิ์จาก .flash.json แทน "
-                      f"(ดูสดในแอปไม่ได้) · อยากได้ดูสดรอบหน้า: ปิด server เมื่อไม่มีงานอื่นใช้อยู่ ให้เปิดใหม่เองตอนสั่งงานครั้งหน้า", flush=True)
+                fix = (f"เพิ่มใน {OC_CONFIG} ช่อง permission.external_directory: {_perm_pairs(miss)} แล้วปิด-เปิดแอป opencode desktop ใหม่" if attach == OC2_SERVICE
+                       else "ปิด server เมื่อไม่มีงานอื่นใช้อยู่ ให้เปิดใหม่เองตอนสั่งงานครั้งหน้า")
+                print(f"PERM_FALLBACK: server {'เบื้องหลังของ opencode v2' if attach == OC2_SERVICE else attach} ยังไม่อนุญาต external_dirs: {', '.join(miss)} (โหลดสิทธิ์ตอนเปิดครั้งเดียว) → รอบนี้รัน opencode แยกที่ได้สิทธิ์จาก .flash.json แทน "
+                      f"(ดูสดในแอปไม่ได้) · อยากได้ดูสดรอบหน้า: {fix}", flush=True)
                 attach = ""
         job["attach"] = attach
         variant = variant_for(kind, a.variant, root)
@@ -4626,7 +4756,7 @@ def diagnose_job(j: dict) -> dict:
                       + ("" if quiet is None or quiet < 600 else " · เงียบนาน อาจเป็นเทสต์ยาวจริงหรือค้าง — เกินเวลาของชุดจะถูกฆ่าและรายงาน TIMEOUT เอง"))
         return d
     attach, sid = j.get("attach") or "", j.get("session") or ""
-    act = server_activity(attach, sid, j.get("project", "")) if attach.startswith("http") and sid else None
+    act = server_activity(attach, sid, j.get("project", "")) if is_server(attach) and sid else None
     if act and act["updated"]:
         d["server_idle_sec"] = max(0, int(time.time() - act["updated"]))
     idles = [x for x in (d["log_idle_sec"], d["server_idle_sec"]) if x is not None]
@@ -4706,7 +4836,7 @@ def reap_orphan(j: dict, abort: bool = False) -> str:
     if cp and cs and cp != os.getpid() and pid_alive(cp, cs):
         kill_tree(cp)
         notes.append(f"ฆ่า opencode ลูกที่ค้าง (pid {cp}) แล้ว")
-    if abort and (notes or j.get("session")) and str(j.get("attach", LIVE_URL)).startswith("http"):
+    if abort and (notes or j.get("session")) and is_server(j.get("attach", LIVE_URL)):
         n = abort_session(j)
         if n:
             notes.append(n)
@@ -4721,6 +4851,13 @@ def abort_session(j: dict) -> str:
     server = j.get("attach", LIVE_URL)
     if not j.get("session") or not server:
         return ""
+    srv = oc_server(server)
+    if srv and srv[2]:  # v2: interrupt (ตัวรันจบด้วย error aborted · shell ที่ค้างถูกยกเลิกด้วย)
+        try:
+            oc_http(server, f"/api/session/{urllib.parse.quote(j['session'])}/interrupt", method="POST", timeout=5)
+            return f"หยุด session {j['session']} บน server แล้ว"
+        except Exception as e:
+            return f"WARN: หยุด session {j['session']} บน server ไม่ได้ ({e})"
     url = (f"{server.rstrip('/')}/session/{urllib.parse.quote(j['session'])}/abort?"
            + urllib.parse.urlencode({"directory": j.get("project", "")}))
     try:
@@ -7386,27 +7523,34 @@ def oc_open_db():
 
 
 def oc_child_usage(con, session_ids: list) -> dict:
-    """token/USD ของ subagent = session ลูกทุกชั้นของ session_ids (assistant message ใน opencode.db) · อ่านไม่ได้ = ศูนย์"""
+    """token/USD ของ subagent = session ลูกทุกชั้นของ session_ids (assistant message ใน opencode.db) · อ่านไม่ได้ = ศูนย์
+    opencode v2 เก็บ session ใหม่ในตาราง session_v2 (ยอดรวมต่อ session · ไม่เขียนตาราง v1) → ลูกที่ไม่มี message แบบ v1 อ่านยอดจาก session_v2 (ไม่นับซ้ำ)"""
     res = dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0, "sessions": 0}
     if con is None or not session_ids:
         return res
     try:
+        has_v2 = bool(con.execute("select 1 from sqlite_master where type='table' and name='session_v2'").fetchone())
         seen, frontier = set(session_ids), list(session_ids)
         kids: list = []
         while frontier:
             nxt = []
             for i in range(0, len(frontier), 400):
                 part = frontier[i:i + 400]
-                for (sid,) in con.execute(f"select id from session where parent_id in ({','.join('?' * len(part))})", part):
+                ph = ','.join('?' * len(part))
+                rows = list(con.execute(f"select id from session where parent_id in ({ph})", part))
+                if has_v2:
+                    rows += list(con.execute(f"select id from session_v2 where parent_id in ({ph})", part))
+                for (sid,) in rows:
                     if sid not in seen:
                         seen.add(sid)
                         nxt.append(sid)
             kids += nxt
             frontier = nxt
         res["sessions"] = len(kids)
+        v1done: set = set()
         for i in range(0, len(kids), 400):
             part = kids[i:i + 400]
-            for (d,) in con.execute(f"select data from message where session_id in ({','.join('?' * len(part))})", part):
+            for (msid, d) in con.execute(f"select session_id, data from message where session_id in ({','.join('?' * len(part))})", part):
                 try:
                     m = json.loads(d)
                 except ValueError:
@@ -7421,6 +7565,22 @@ def oc_child_usage(con, session_ids: list) -> dict:
                 res["cache_write"] += int(c.get("write") or 0)
                 res["usd"] += float(m.get("cost") or 0)
                 res["steps"] += 1
+                v1done.add(msid)
+        rest = [k for k in kids if k not in v1done]
+        for i in range(0, len(rest), 400) if has_v2 else ():
+            part = rest[i:i + 400]
+            ph = ','.join('?' * len(part))
+            for (vid, cost, tin, tout, treason, tcr, tcw) in con.execute(
+                    f"select id, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write from session_v2 where id in ({ph})", part):
+                res["in"] += int(tin or 0)
+                res["out"] += int(tout or 0) + int(treason or 0)
+                res["cache_read"] += int(tcr or 0)
+                res["cache_write"] += int(tcw or 0)
+                res["usd"] += float(cost or 0)
+            try:  # จำนวนรอบเรียกโมเดล = message ชนิด assistant (ตารางนี้ไม่มี = ข้าม)
+                res["steps"] += int(con.execute(f"select count(*) from session_message where type='assistant' and session_id in ({ph})", part).fetchone()[0] or 0)
+            except sqlite3.Error:
+                pass
     except sqlite3.Error:
         return dict.fromkeys(USAGE_KEYS, 0) | {"usd": 0.0, "steps": 0, "sessions": 0}
     return res

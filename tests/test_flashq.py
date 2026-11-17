@@ -38,7 +38,7 @@ class FlashqTest(unittest.TestCase):
         self.args_out = self.tmp / "args.jsonl"
         self.env = {**os.environ, "FLASHQ_HOME": str(self.home), "FLASHQ_OPENCODE": str(FAKE),
                     "FLASHQ_OPENCODE_CONFIG": str(self.oc_cfg), "FAKE_ARGS_OUT": str(self.args_out),
-                    "FLASHQ_NO_TOAST": "1"}
+                    "FLASHQ_NO_TOAST": "1", "FLASHQ_OC2_SERVICE_JSON": str(self.tmp / "no_service.json")}  # กันไปต่อ server เบื้องหลังของ opencode v2 ตัวจริง
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -101,6 +101,150 @@ class FlashqTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("ไม่พบแม่แบบคำสั่ง /flash", r.stdout)
         self.assertIn("FLASH_RUN=FAIL", r.stdout)
+
+    def fake_v2_service(self, routes: dict):
+        """server เบื้องหลังของ opencode v2 ปลอม: ต้องมี Basic opencode:pw · GET ตอบตาม routes[(path, query)] หรือ routes[path] · บันทึกทุกคำขอ"""
+        import base64
+        import http.server
+        hits, auth = [], "Basic " + base64.b64encode(b"opencode:pw").decode()
+
+        class Hh(http.server.BaseHTTPRequestHandler):
+            def _send(self, code, obj):
+                body = json.dumps(obj).encode() if obj is not None else b""
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                path, _, query = self.path.partition("?")
+                hits.append(("GET", path, urllib.parse.unquote(query)))
+                if self.headers.get("Authorization") != auth:
+                    return self._send(401, {"_tag": "UnauthorizedError"})
+                self._send(200, routes.get((path, urllib.parse.unquote(query)), routes.get(path, {"data": []})))
+
+            def do_POST(self):
+                hits.append(("POST", self.path, ""))
+                self._send(200 if self.headers.get("Authorization") == auth else 401, None)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hh)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        sj = self.tmp / "service.json"
+        sj.write_text(json.dumps({"url": f"http://127.0.0.1:{srv.server_address[1]}", "password": "pw", "pid": 1}), encoding="utf-8")
+        return sj, hits
+
+    def test_v2_service_activity_abort_and_permission(self):
+        """v2: ถามสถานะผ่าน /api/session (parentID · message order=desc) พร้อมรหัสผ่านจาก service.json · หยุดด้วย interrupt
+        · สิทธิ์อ่านจาก /api/config?location[directory]= (permissions แบบรายการ) · คำสั่ง run บน server เบื้องหลังไม่มี --standalone"""
+        now_ms = int(time.time() * 1000)
+        tool = lambda name, status, inp, t: {"type": "tool", "name": name, "state": {"status": status, "input": inp},  # noqa: E731
+                                             "time": {"created": t - 50, "ran": t}}
+        sj, hits = self.fake_v2_service({
+            ("/api/session", "parentID=ses_p&limit=50"): {"data": [{"id": "ses_c", "title": "ทำ T-04", "time": {"updated": now_ms - 5000}}]},
+            ("/api/session/ses_p/message", "limit=2&order=desc"): {"data": [
+                {"type": "assistant", "time": {"created": now_ms - 600000}, "content": [tool("task", "running", {"description": "T-04"}, now_ms - 600000)]},
+                {"type": "user", "time": {"created": now_ms - 700000}, "content": []}]},
+            ("/api/session/ses_c/message", "limit=2&order=desc"): {"data": [
+                {"type": "assistant", "time": {"created": now_ms - 300000}, "content": [
+                    {"type": "text", "text": "x"}, tool("shell", "running", {"command": "blender --hang"}, now_ms - 300000)]}]},
+            "/api/config": [{"type": "document", "path": "a", "info": {"permissions": [
+                {"action": "external_directory", "resource": "*", "effect": "ask"},
+                {"action": "external_directory", "resource": "D:/lib/*", "effect": "allow"},
+                {"action": "read", "resource": "D:/other/*", "effect": "allow"}]}}, {"type": "directory", "path": "b"}],
+            "/api/session/active": {"data": {}},
+        })
+        mod = self.load_mod("flashq_v2")
+        mod.OC2_SERVICE_JSON = sj
+        self.assertTrue(mod.oc2_service_up())
+        act = mod.server_activity(mod.OC2_SERVICE, "ses_p")
+        self.assertIsNotNone(act)
+        self.assertLess(time.time() - act["updated"], 10)
+        self.assertEqual({(r["tool"], r["session"]) for r in act["running"]}, {("task", "ses_p"), ("shell", "ses_c")})
+        sh = next(r for r in act["running"] if r["tool"] == "shell")
+        self.assertEqual((sh["cmd"], round(sh["since"])), ("blender --hang", round((now_ms - 300000) / 1000)))
+        self.assertEqual((act["subs"][0]["title"], act["subs"][0]["doing"]), ("ทำ T-04", "shell: blender --hang"))
+        self.assertIn(("GET", "/api/session/ses_c/message", "limit=2&order=desc"), hits)
+        # สิทธิ์: v2 แปลงเป็น map แบบ v1 แล้วใช้ตัวตัดสินเดิม · ไม่ใช่ external_directory = ไม่นับ
+        root = Path("D:/งาน")
+        self.assertEqual(mod.server_permission(mod.OC2_SERVICE, root), {"*": "ask", "D:/lib/*": "allow"})
+        self.assertIn(("GET", "/api/config", "location[directory]=" + str(root)), hits)
+        self.assertEqual(mod.perm_missing_on_server(["D:/lib/*", "D:/other/*"], mod.OC2_SERVICE, root), ["D:/other/*"])
+        self.assertTrue(any("ปิด-เปิดแอป opencode desktop" in ln for ln in mod.perm_precheck(["D:/other/*"], mod.OC2_SERVICE, root)))
+        # หยุด session: POST interrupt (ไม่ใช่ /abort ของ v1)
+        self.assertIn("หยุด session ses_p บน server แล้ว", mod.abort_session({"session": "ses_p", "attach": mod.OC2_SERVICE}))
+        self.assertIn(("POST", "/api/session/ses_p/interrupt", ""), hits)
+        # คำสั่ง run บน server เบื้องหลัง = ไม่มี --standalone · ไม่ระบุ = --standalone
+        with mock.patch.dict(os.environ, {"FLASHQ_OPENCODE_MAJOR": "2"}):
+            mod._OC_MAJOR = None
+            cmd = mod.oc_run_cmd(["oc"], root, "t", attach=mod.OC2_SERVICE, model="p/m", variant="high", message="ทำ")
+            alone = mod.oc_run_cmd(["oc"], root, "t", model="p/m", message="ทำ")
+        self.assertNotIn("--standalone", cmd)
+        self.assertIn("--standalone", alone)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "p/m#high")
+        # ไม่มี service.json = ไม่ใช่ server (ถามไม่ได้ = None)
+        mod.OC2_SERVICE_JSON = self.tmp / "nope.json"
+        self.assertFalse(mod.oc2_service_up())
+        self.assertIsNone(mod.server_activity(mod.OC2_SERVICE, "ses_p"))
+
+    def test_v2_live_run_uses_service_and_never_stores_password(self):
+        """--attach live บน v2 + server เบื้องหลังตอบ → รันโดยไม่ใส่ --standalone · job เก็บป้าย ไม่เก็บรหัสผ่าน
+        · รหัสผิด/ไม่มี server = รันแยก · external_dirs ที่ server ยังไม่อนุญาต = PERM_FALLBACK รันแยก"""
+        sj, hits = self.fake_v2_service({"/api/session/active": {"data": {}}, "/api/config": []})
+        url = json.loads(sj.read_text(encoding="utf-8"))["url"]
+        env = {**self.v2_env(), "FLASHQ_OC2_SERVICE_JSON": str(sj)}
+        sj.write_text(json.dumps({"url": url, "password": "wrong-zz"}), encoding="utf-8")
+        r = self.run_q("run", "--message", "PONG", "--no-open", env=env)
+        self.assertIn("ไม่พบ server เบื้องหลังของ opencode v2", r.stdout, r.stdout + r.stderr)
+        self.assertIn("--standalone", json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1]))
+        sj.write_text(json.dumps({"url": url, "password": "pw-secret-zz"}), encoding="utf-8")
+        hits_auth = len(hits)
+        sj.write_text(json.dumps({"url": url, "password": "pw"}), encoding="utf-8")
+        r = self.run_q("run", "--message", "PONG", "--no-open", env=env)
+        self.assertIn("FLASH_RUN=OK", r.stdout, r.stdout + r.stderr)
+        self.assertGreater(len(hits), hits_auth)
+        self.assertNotIn("--standalone", json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1]))
+        job = json.loads(sorted((self.home / "jobs").glob("*.json"))[-1].read_text(encoding="utf-8"))
+        self.assertEqual(job["attach"], "opencode-v2-service")
+        self.assertNotIn('"pw"', json.dumps(job))
+        # สิทธิ์ external_dirs ที่ server ยังไม่อนุญาต → ถอยไปรันแยก (ได้สิทธิ์ผ่าน OPENCODE_CONFIG_CONTENT)
+        (self.proj / ".flash.json").write_text(json.dumps({"external_dirs": [str(self.tmp / "lib")], "require_plan_in_remote": False}), encoding="utf-8")
+        r = self.run_q("run", "--message", "PONG", "--no-open", env=env)
+        self.assertIn("PERM_FALLBACK: server เบื้องหลังของ opencode v2", r.stdout, r.stdout + r.stderr)
+        self.assertIn("--standalone", json.loads(self.args_out.read_text(encoding="utf-8").splitlines()[-1]))
+
+    def test_v2_nostart_diag_and_child_usage(self):
+        """v2: log กลางมีแค่ "cli starting" (+ --title ของงาน) → บอกว่าบูตแล้ว · ค่าใช้จ่าย subagent อ่านจาก session_v2 (ไม่นับซ้ำกับตาราง v1)"""
+        import sqlite3
+        mod = self.load_mod("flashq_v2")
+        log, now_ts = self.tmp / "opencode.log", time.time()
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now_ts + 1))
+        log.write_text(f'timestamp={ts}.000Z level=INFO run=ab12cd34 message="cli starting" version=2.3.0 args="[\\"run\\",\\"--standalone\\",'
+                       f'\\"--title\\",\\"flash PLAN T-01\\",\\"--\\",\\"x\\"]" role=cli\n', encoding="utf-8")
+        self.assertIn("v2 บูตแล้ว", mod.nostart_diag(self.proj, now_ts, log, self.tmp / "no.db", title="flash PLAN T-01"))
+        self.assertIn("ไม่ทันบูต", mod.nostart_diag(self.proj, now_ts, log, self.tmp / "no.db", title="flash PLAN T-02"))
+        self.assertIn("ไม่ทันบูต", mod.nostart_diag(self.proj, now_ts + 100, log, self.tmp / "no.db", title="flash PLAN T-01"))  # เก่ากว่า since
+        db = self.tmp / "oc.db"
+        con = sqlite3.connect(db)
+        con.executescript("create table session (id text primary key, parent_id text); create table message (id text, session_id text, data text);"
+                          "create table session_v2 (id text primary key, parent_id text, cost real, tokens_input int, tokens_output int, tokens_reasoning int,"
+                          " tokens_cache_read int, tokens_cache_write int);"
+                          "create table session_message (id text, session_id text, type text, seq int, data text);")
+        con.executemany("insert into session values (?,?)", [("S1", None), ("C1", "S1")])  # C1 = ลูกแบบ v1 (มีทั้งสองตาราง)
+        con.execute("insert into message values ('m1','C1',?)", (json.dumps({"role": "assistant", "cost": 0.5, "tokens": {
+            "input": 10, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}}),))
+        con.executemany("insert into session_v2 values (?,?,?,?,?,?,?,?)", [
+            ("C1", "S1", 9.0, 999, 999, 0, 0, 0),  # มี message v1 แล้ว → ห้ามนับซ้ำ
+            ("C2", "S1", 0.25, 100, 20, 5, 3000, 7), ("G2", "C2", 0.125, 50, 10, 0, 0, 0), ("X", None, 7.0, 1, 1, 1, 1, 1)])
+        con.executemany("insert into session_message values (?,?,?,?,?)", [("a", "C2", "assistant", 1, "{}"), ("b", "C2", "assistant", 2, "{}"),
+                                                                            ("c", "C2", "user", 0, "{}"), ("d", "G2", "assistant", 1, "{}")])
+        con.commit()
+        r = mod.oc_child_usage(con, ["S1"])
+        con.close()
+        self.assertEqual((r["sessions"], r["in"], r["out"], r["cache_read"], r["cache_write"], r["steps"]), (3, 160, 36, 3000, 7, 4))
+        self.assertAlmostEqual(r["usd"], 0.875)
 
     def test_ok_without_commit_or_done_warns(self):
         """exit 0 แต่ไม่มี commit ใหม่/DONE (worker หยุดถามผู้ใช้) = ยัง OK แต่ต้องเตือน · ส่งข้อความตรง (ไม่มีแผน) ไม่เตือน"""
@@ -3990,6 +4134,30 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("RULE_DENIED: 1 คำสั่ง", r.stdout)
         self.assertIn("find . -name x", r.stdout)
         self.assertNotIn("FLASH_RUN=DENIED", r.stdout)  # กฎของ agent บล็อก ≠ opencode ปฏิเสธสิทธิ์
+
+    def test_v2_texts_rule_deny_perm_reject_and_background_subagent(self):
+        """opencode v2 (ข้อความจริงจาก 2.3.0): กฎ deny = "Permission denied: shell" ต้องเป็น RULE_DENIED ไม่ใช่ DENIED
+        · ask ที่ถูกปฏิเสธ = "cannot ask the user for permission" → DENIED · tool subagent รันเบื้องหลัง → อ่าน DONE จาก session ลูกในฐานข้อมูล"""
+        import sqlite3
+        mod = self.load_mod("flashq_v2q")
+        for t in ("provider.rate-limit", "provider.quota", "provider.free-limit", "provider.budget-limit", "provider.model-budget-limit", "provider.go-limit"):
+            self.assertTrue(mod.QUOTA_RE.search(json.dumps({"type": t, "message": "x" * 500})[:400]), t)  # ชนิด error มาก่อน message ยาว
+        self.assertFalse(mod.QUOTA_RE.search(json.dumps({"type": "provider.auth", "message": "expired"})))
+        r = self.run_q("investigate", "--no-open", "สืบ", env={"FAKE_DENIED": "v2"})
+        self.assertIn("RULE_DENIED: 1 คำสั่ง", r.stdout, r.stdout + r.stderr)
+        self.assertNotIn("FLASH_RUN=DENIED", r.stdout)
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "denied2"})
+        self.assertIn("FLASH_RUN=DENIED", r.stdout, r.stdout + r.stderr)
+        db = self.tmp / "oc2.db"
+        con = sqlite3.connect(db)
+        con.execute("create table session_message (id text, session_id text, type text, seq int, data text)")
+        con.execute("insert into session_message values ('a','ses_kid2','assistant',1,?)", (json.dumps({"content": [{"type": "text", "text": "T-01 DONE"}]}),))
+        con.commit()
+        con.close()
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "subagent2", "FAKE_TEXT": "ส่งงานแล้ว รอผล", "FLASHQ_OPENCODE_DB": str(self.tmp / "none.db")})
+        self.assertIn("FLASH_RUN=OK_UNVERIFIED", r.stdout, r.stdout + r.stderr)  # ไม่มีฐานข้อมูล = ไม่รู้ผลลูก
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "subagent2", "FAKE_TEXT": "ส่งงานแล้ว รอผล", "FLASHQ_OPENCODE_DB": str(db)})
+        self.assertIn("FLASH_RUN=OK ", r.stdout, r.stdout + r.stderr)
 
     def test_permission_denied_is_not_ok(self):
         """เหตุจริง 2026-10-20: opencode ปฏิเสธสิทธิ์ external_directory เอง (โหมดไม่โต้ตอบ) งานจบ exit 0 โดยไม่ได้ทำ → ต้องเป็น DENIED ไม่ใช่ OK

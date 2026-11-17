@@ -46,8 +46,10 @@ if mode == "nostart":
     sys.exit(0)
 sid = f"ses_fake{os.getpid()}"
 print(json.dumps({"type": "step_start", "sessionID": sid}, separators=(",", ":")), flush=True)  # compact เหมือน opencode จริง (wait_session จับด้วย regex)
-if os.environ.get("FAKE_DENIED"):  # จำลอง tool ที่ถูกสิทธิ์ agent บล็อก
-    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "bash", "state": {"status": "error", "input": {"command": "find . -name x"}, "error": "The user has specified a rule which prevents you from using this specific tool call."}}}), flush=True)
+if os.environ.get("FAKE_DENIED"):  # จำลอง tool ที่ถูกสิทธิ์ agent บล็อก (FAKE_DENIED=v2 = ข้อความ/ชื่อ tool ของ opencode v2)
+    _v2 = os.environ["FAKE_DENIED"] == "v2"
+    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "shell" if _v2 else "bash", "state": {"status": "error", "input": {"command": "find . -name x"},
+          "error": "Permission denied: shell" if _v2 else "The user has specified a rule which prevents you from using this specific tool call."}}}), flush=True)
 time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 if mode == "quota":
     if os.environ.get("FAKE_SET_MODEL"):  # จำลองงานอื่นที่รันคู่ขนานสลับบัญชีไปก่อน
@@ -86,6 +88,14 @@ if mode == "denied":  # เหตุจริง 2026-10-20: กฎ external_dir
         "error": "Subagent failed (task_id: ses_x): The user rejected permission to use this specific tool call."}}}), flush=True)
     print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": os.environ.get("FAKE_TEXT", "ส่งงานให้ flash-worker ไม่ได้ — ผู้ใช้ปฏิเสธสิทธิ์การใช้ tool call นี้")}}), flush=True)
     sys.exit(0)
+if mode == "denied2":  # opencode v2: ปฏิเสธสิทธิ์ (ask) ในโหมดไม่โต้ตอบ — ไม่มีบรรทัด stderr (เช่นเกิดใน subagent) เหลือแค่ tool error ข้อความใหม่
+    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "read", "state": {"status": "error", "input": {"filePath": "D:/outside/x.txt"},
+          "error": "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action."}}}), flush=True)
+    print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": "อ่านไฟล์ไม่ได้"}}), flush=True)
+    sys.exit(0)
+if mode == "subagent2":  # opencode v2: tool ชื่อ subagent รันเบื้องหลัง ผลจริงอยู่ในฐานข้อมูล (session ลูก ses_kid2) ไม่อยู่ใน event
+    print(json.dumps({"type": "tool_use", "sessionID": sid, "part": {"type": "tool", "tool": "subagent", "state": {"status": "completed", "input": {"agent": "flash-worker"},
+          "output": "The subagent is working in the background (sessionID: ses_kid2). You will receive a <subagent> message when it goes idle."}}}), flush=True)
 for _seg in os.environ.get("FAKE_TEXT_PARTS", "").split("||"):  # ข้อความหลายส่วนมาก่อน (คั่นด้วย ||) แล้วปิดท้ายด้วย FAKE_TEXT
     if _seg:
         print(json.dumps({"type": "text", "sessionID": sid, "part": {"text": _seg}}), flush=True)
