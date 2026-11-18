@@ -2,6 +2,10 @@
 
 สรุปความสามารถตามวัน (รายละเอียดเต็มดู `git log`) · ใหม่สุดอยู่บน
 
+## 2026-11-18
+- **จับ key ใช้ไม่ได้ (AUTH) แยกจากโควตาหมด**: error `provider.auth` / HTTP 401·403 (key หมดอายุ · key ผิด · ไม่มี subscription) → `FLASH_RUN=AUTH` พร้อมรหัสสาเหตุ (เช่น `api_key_expired`) · ลองบัญชีอื่นให้เองทีละบัญชีครั้งเดียว (ไม่ใช้งบ `--switch-on-quota`) · หน้าเว็บมีสถานะ AUTH (🔑) และตัวกรอง
+- **คำสั่งใหม่ `flashq keys [--probe]`**: แสดงทุกบัญชีว่า key มาจาก `opencode.json` หรือที่เก็บของ opencode v2 (ตาราง `credential` ใน `opencode.db` อ่านอย่างเดียว · ไม่พิมพ์ค่า key) · เตือนเมื่อที่เก็บมี key เก่าทับ `opencode.json` (v2 ใช้ key ในที่เก็บก่อน — เหตุจริงวันนี้: key ใหม่ใน config ไม่ถูกใช้ เพราะ key ที่หมดอายุค้างในที่เก็บ) พร้อมคำสั่ง `opencode auth logout <provider> <credential>` · `--probe` ส่งคำถามสั้นทดสอบทุกบัญชีพร้อมกัน (ใช้โควตาจริงเล็กน้อย) บอก OK/AUTH/QUOTA ต่อบัญชี
+
 ## 2026-11-17
 - **รองรับ opencode v2 (ครบเท่า v1)**: flashq ตรวจรุ่นเองจาก `opencode --version` (บังคับได้ด้วย `FLASHQ_OPENCODE_MAJOR`) · หา `opencode.exe` ที่ `%LOCALAPPDATA%\Programs\opencode` เมื่อไม่อยู่ใน PATH · v2 ไม่มี `--dir` `--variant` `--attach` `--command` แล้ว → ระดับความคิดส่งเป็น `provider/model#variant` · คำสั่ง `/flash` ขยายแม่แบบเอง (`.opencode/command/` ของโปรเจกต์ก่อน แล้วค่อย global)
   - `--attach live` (ค่าเริ่มต้น) = รันบน **server เบื้องหลังที่แอป opencode desktop ใช้อยู่** (อ่าน url/รหัสผ่านจาก `~/.local/state/opencode/service.json` ตอนใช้ · งานเก็บแค่ป้าย `opencode-v2-service` ไม่เก็บรหัสผ่าน) → ดูสดใน desktop · `flashq why` · ตัวเฝ้า shell (v2 เรียก tool ว่า `shell`) · ตัดสินค้างจาก subagent · ยกเลิก/ค้าง = สั่ง `interrupt` session บน server ใช้ได้เหมือนเดิม

@@ -46,7 +46,7 @@ description: >-
 | `OK` + `/flash-check` ✅ (หรือ `GOAL=DONE`) | ผ่าน ไปต่อ |
 | `OK_UNVERIFIED` | **ยังไม่ผ่าน** — อ่านบรรทัด `WARN:` → `/flash-check` ตรวจหลักฐานเอง · ห้ามนับจากคำบอกของ Flash |
 | `FAIL` / `TIMEOUT` | วินิจฉัยตาม `/flash-check` §0 → รอบแก้ (รวมไม่เกิน 2 รอบ/แผน) ไม่หาย = หยุดรายงาน |
-| `DENIED` / `QUOTA` / `NOSTART` / `BUSY` / `QUEUE_TIMEOUT` | หยุด รายงาน user พร้อมทางแก้ที่ flashq พิมพ์ |
+| `DENIED` / `QUOTA` / `AUTH` / `NOSTART` / `BUSY` / `QUEUE_TIMEOUT` | หยุด รายงาน user พร้อมทางแก้ที่ flashq พิมพ์ |
 | `GOAL=STOP` / `CANCELLED` | หยุดทันที ห้ามวนต่อ ถาม user ตาม `/flash-goal` §3 |
 - งานที่แตะ `flashq.py`/`ui.html` ฯลฯ ที่มีกติกา "หลังแก้ต้องทำอะไร" ของโปรเจกต์ (AGENTS.md) → ให้นักทดสอบ/ช่างโค้ดทำตามนั้นก่อนถือว่าผ่าน
 - merge/push/ติดตั้ง/รีสตาร์ต → **ทำเมื่อ user สั่งหรือกติกาโปรเจกต์ระบุ** ไม่ทำเองเกินที่ `/flash-check` §4 กำหนด

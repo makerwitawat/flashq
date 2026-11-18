@@ -22,6 +22,7 @@
   python flashq.py wait <job|แผน> [--timeout-min 480]                  รอจนงานจบแล้วพิมพ์ FLASH_RUN=... (รันใน background ของ Claude · ไม่ต้อง sleep/poll)
   python flashq.py shrink <รูป...> [--max 800]                           ย่อรูปใหญ่เป็น .tmp/shrink/<ชื่อ>.jpg ก่อนให้ Claude อ่าน (รูปใหญ่กิน token ทุก turn)
   python flashq.py switch [next|<ชื่อย่อ>]                             สลับบัญชีโมเดล flash-worker
+  python flashq.py keys [--probe]                                       ตรวจ key ทุกบัญชี (key เก่าของ opencode v2 ที่ทับ opencode.json · --probe ลองเรียกจริง)
   python flashq.py install [--force] [--hooks]                          ติดตั้ง /flash + agent (opencode) · /flash-* + flash-checker + hooks (Claude) แบบ global · --hooks = ลงทะเบียน image_guard · inbox_notify · run_guard ใน ~/.claude/settings.json
   python flashq.py init [--project <dir>] [--force] [--install] [--commit]       ตั้งค่าโปรเจกต์ใหม่ (ตรวจ branch หลัก/remote เอง → .flash.json)
   python flashq.py prune [--days 30] [--dry]                            ลบงานที่จบแล้ว + log เก่า
@@ -32,7 +33,8 @@
   python flashq.py ui [--port 4097] [--no-open]                         หน้าเว็บ dashboard (127.0.0.1 เท่านั้น)
   python flashq.py goal check|verify|status <GOAL.md> [--reset]          โหมดเป้าหมาย (/flash-goal): ตรวจธง · ตรวจเกณฑ์ + เบรก → GOAL=DONE|CONTINUE|STOP
   python flashq.py goal cancel <GOAL.md> --reason "เหตุ"                  user สั่งเลิกธง → GOAL=CANCELLED (verify/check ปฏิเสธจนกว่าจะเปิดใหม่)
-ผลของ run: บรรทัด `FLASH_RUN=OK|OK_UNVERIFIED|FAIL|DENIED|QUOTA|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK/OK_UNVERIFIED · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+ผลของ run: บรรทัด `FLASH_RUN=OK|OK_UNVERIFIED|FAIL|DENIED|QUOTA|AUTH|TIMEOUT|BUSY|NOSTART|QUEUE_TIMEOUT` · exit 0 = OK/OK_UNVERIFIED · 2 = BUSY (--no-wait) · 3 = รอคิวเกินเวลา · อื่น 1
+  AUTH = key ของบัญชีใช้ไม่ได้ (401/403: หมดอายุ · ผิด · ไม่มี subscription) ลองบัญชีอื่นให้แล้วไม่ผ่าน → `flashq keys` ตรวจทุกบัญชี
   DENIED = opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ เช่น อ่านไฟล์นอกโปรเจกต์) งานไม่ได้ทำ → บรรทัด `DENIED:` บอก path + ทางแก้ (`external_dirs` ใน .flash.json หรือ permission ใน opencode.json)
 """
 import argparse
@@ -99,6 +101,21 @@ START_LIMIT_SEC = int(os.environ.get("FLASHQ_START_LIMIT_SEC") or 120)
 AGENT_KINDS = {"verify": "flash-verifier", "investigate": "flash-investigator"}  # งานอ่านอย่างเดียวที่ส่ง prompt ตรงให้ agent (ไม่ผ่าน /flash)
 SUBAGENT_RE = re.compile(r"is a subagent, not a primary agent|not found\. Falling back to default agent", re.I)
 QUOTA_RE = re.compile(r"\b(429|402)\b|rate.?limit|quota|insufficient|balance|provider\.(?:free|budget|model-budget|go|chatgpt)-limit|usage.?limit", re.I)  # v2: error.type provider.rate-limit/quota/free-limit/budget-limit/go-limit ...
+
+
+def auth_error(err) -> str:
+    """error event ของ opencode = key/บัญชีใช้ไม่ได้ (ไม่ใช่โควตา) → ข้อความสั้นสำหรับผู้ใช้ · ไม่ใช่ = ""
+    ดูจาก error object ที่มีโครงสร้างเท่านั้น (type provider.auth หรือ status 401/403) — ไม่กวาดข้อความของ worker (worker เองอาจ curl เจอ 401)
+    เจอจริง 2026-11-18: 401 api_key_expired · 401 invalid auth token · 403 ไม่มี subscription"""
+    if not isinstance(err, dict):
+        return ""
+    status = err.get("status")
+    if err.get("type") != "provider.auth" and status not in (401, 403, "401", "403"):
+        return ""
+    body = json.dumps(err.get("response") or {}, ensure_ascii=False)
+    m = re.search(r'\\?"code\\?"\s*:\s*\\?"([\w-]+)', body)
+    msg = str(err.get("message") or "")[:160]
+    return " · ".join(x for x in (f"HTTP {status}" if status else "", m.group(1) if m else "", msg) if x)
 # opencode โหมดไม่โต้ตอบ (`opencode run`) ตอบ "ไม่อนุญาต" ให้เองเมื่อกฎเป็น ask → stderr: `permission requested: <ชนิด> (<path>); auto-rejecting`
 PERM_REQ_RE = re.compile(r"permission requested:\s*([\w.-]+)\s*\((.*?)\)\s*;\s*auto-reject", re.I)
 # tool error ที่ตามมา (subagent ล้มเพราะถูกปฏิเสธ · ข้อความไทย/อังกฤษของ opencode)
@@ -2145,6 +2162,7 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     session, texts, errors, tools, denied, recent = "", [], [], 0, [], []
     last_finish = ""  # part.reason ของ step_finish ล่าสุด (stop = โมเดลตอบจบ · tool-calls = ยังไม่จบ)
     tool_denied, task_out = [], []  # tool ที่ล้มเพราะ opencode ปฏิเสธสิทธิ์ · ผลที่ subagent (tool task) ส่งกลับ
+    auth_errs = []  # error ของ provider ว่า key/บัญชีใช้ไม่ได้ (401/403) → สถานะ AUTH
     for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             ev = json.loads(line)
@@ -2170,6 +2188,9 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
                     task_out.append(oc2_child_text(m.group(1)))
         elif ev.get("type") == "error" or "error" in ev:
             errors.append(json.dumps(ev.get("error", ev), ensure_ascii=False)[:400])
+            auth = auth_error(ev.get("error"))
+            if auth and auth not in auth_errs:
+                auth_errs.append(auth)
         elif ev.get("type") == "step_finish":
             last_finish = part.get("reason") or ""
     errtxt = err.read_text(encoding="utf-8", errors="replace")
@@ -2194,7 +2215,10 @@ def _run_once(job: dict, cmd: list[str], root: Path, attach: str, timeout_min: i
     # worker รายงานโควตาเองด้วยบรรทัด "FAIL: quota" (flash.md)
     if (QUOTA_RE.search(" ".join(errors) + errtxt[-2000:]) and (rc != 0 or errors)) or "FAIL: quota" in last:
         status = "QUOTA"
-    no_progress = status == "OK" and job.get("plan") and not job.get("readonly") and job.get("kind") not in ("verify", "investigate") \
+    elif auth_errs and status == "FAIL":  # key หมดอายุ/ผิด/ไม่มี subscription — ต่างจากโควตา: รอไม่หาย ต้องเปลี่ยน key (opencode v2 อาจใช้ key เก่าในที่เก็บของมันทับ opencode.json)
+        status = "AUTH"
+        last = f"key ของบัญชี {job.get('model') or configured_model() or '(ค่าเริ่มต้น)'} ใช้ไม่ได้: {auth_errs[0]}"
+    no_progress =status == "OK" and job.get("plan") and not job.get("readonly") and job.get("kind") not in ("verify", "investigate") \
         and not job_progressed(root, head0, texts + task_out, job)  # exit 0 แต่ไม่มี commit/DONE (เช่น worker หยุดถามผู้ใช้) = ยังไม่ได้ทำงาน
     return {"status": status, "rc": rc, "mins": (time.time() - t0) / 60, "tools": tools, "no_progress": no_progress,
             "head0": head0, "head1": _git(root, "rev-parse", "HEAD"), "session": session, "errors": errors, "stderr": errtxt.strip()[-600:], "last": last,
@@ -2868,6 +2892,14 @@ def cmd_run(a) -> int:
                 nostart_retry -= 1
                 print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
                 continue
+            if res["status"] == "AUTH":  # key ใช้ไม่ได้ = ยังไม่ได้ทำงาน → ลองบัญชีอื่นทีละบัญชี (ไม่กินโควตาสลับ · บัญชีละครั้ง · ไม่แก้ opencode.json)
+                print(f"AUTH: {res.get('last', '')}", flush=True)
+                new = auth_fallback_model(job["model"] or configured_model(), tried_models, accounts_order=worker_like and not a.model)
+                if new:
+                    print(f"AUTH → ลองบัญชี {new} แทน (เฉพาะงานนี้) · ตรวจ key ทุกบัญชี: {run_cmd()} keys", flush=True)
+                    job["model"] = new
+                    save_job(job)
+                    continue
             if res["status"] == "QUOTA" and not a.model and worker_like and switches < a.switch_on_quota:  # สลับบัญชีเฉพาะ flash-worker (เฉพาะงานนี้ · ไม่แก้ opencode.json)
                 new = next_account_model(job["model"] or configured_model())
                 if new and new != job["model"]:
@@ -2937,6 +2969,8 @@ def cmd_run(a) -> int:
         print(f"REASON: opencode ไม่เริ่มทำงาน (รอบแรกรอ {START_LIMIT_FIRST_SEC} วิ · รอบลองใหม่ {START_LIMIT_SEC} วิ) ทั้ง {len(job['nostart_diag'])} รอบ · รอบสุดท้าย: {job['nostart_diag'][-1]}")
     if res["status"] == "TIMEOUT":
         print(f"REASON: {job.get('timeout_reason', '')}")
+    if res["status"] == "AUTH":
+        print(f"REASON: {res.get('last', '')} — ลองทุกบัญชีที่มีแล้ว · ตรวจ key ทุกบัญชี + key เก่าในที่เก็บของ opencode v2 ที่ทับ opencode.json: {run_cmd()} keys")
         print("DIAG ก่อนถูกฆ่า (tool ล่าสุด): " + " | ".join(res.get("recent") or ["(ยังไม่เรียก tool เลย → โมเดล/ผู้ให้บริการอาจค้าง)"]))
         print("แนะนำ: เปิด log ดูท้ายไฟล์ · บรีฟกว้างเกิน/ไฟล์ใหญ่เกิน → แบ่งงานให้เล็กลง · ผู้ให้บริการช้า → --model ตัวอื่น แล้วสั่งใหม่")
     if job.get("perm_denied"):
@@ -4296,6 +4330,14 @@ def cmd_doc(a) -> int:
                 nostart_retry -= 1
                 print("NOSTART → ลองใหม่อัตโนมัติ 1 ครั้ง", flush=True)
                 continue
+            if res["status"] == "AUTH":
+                print(f"AUTH: {res.get('last', '')}", flush=True)
+                new = auth_fallback_model(job["model"] or configured_model(), tried, accounts_order=False)
+                if new:
+                    print(f"AUTH → ลองบัญชี {new} แทน (เฉพาะงานนี้) · ตรวจ key ทุกบัญชี: {run_cmd()} keys", flush=True)
+                    job["model"] = new
+                    save_job(job)
+                    continue
             if res["status"] == "QUOTA" and job["model"] and switches < a.switch_on_quota:
                 tried.add(job["model"])
                 alts = other_providers(job["model"], tried)
@@ -5116,6 +5158,23 @@ def next_account_model(current: str) -> str:
     return models[(models.index(current) + 1) % len(models)]
 
 
+def auth_fallback_model(current: str, tried: set, accounts_order: bool) -> str:
+    """บัญชีถัดไปที่ยังไม่ได้ลองหลัง key ของ current ใช้ไม่ได้ (AUTH) — เพิ่ม current เข้า tried · หมดตัวเลือก = ""
+    accounts_order (flash-worker ที่ผู้ใช้ไม่ได้ระบุ --model) = เดินตามลำดับ accounts.json · อื่น ๆ = provider อื่นของโมเดลเดิม"""
+    if not current:
+        return ""
+    tried.add(current)
+    if accounts_order:
+        models = [m for _, m in accounts()[1]]
+        start = models.index(current) + 1 if current in models else 0
+        for m in models[start:] + models[:start]:
+            if m not in tried:
+                return m
+        return ""
+    alts = other_providers(current, tried)
+    return alts[0] if alts else ""
+
+
 def switch_account(arg: str) -> str:
     """สลับบัญชี · คืนโมเดลใหม่ ("" = ล้มเหลว)"""
     agent, accs = accounts()
@@ -5181,7 +5240,120 @@ def cmd_switch(a) -> int:
     return 0
 
 
-MODEL_ROLES = [("worker", "flash-worker", "ผู้ทำ (แก้โค้ดตามแผน)"),
+def oc2_stored_keys() -> dict:
+    """provider → [(credential id, ค่าที่เก็บ)] จากที่เก็บ key ของ opencode v2 (ตาราง credential ใน opencode.db · อ่านอย่างเดียว)
+    v1/ไม่มีตาราง/เปิดไม่ได้ = {} · ค่าที่คืนใช้เทียบในหน่วยความจำเท่านั้น ห้ามพิมพ์/บันทึก"""
+    con = oc_open_db()
+    if con is None:
+        return {}
+    out: dict = {}
+    try:
+        for pid, cid, val in con.execute("SELECT integration_id, id, value FROM credential"):
+            out.setdefault(str(pid), []).append((str(cid), str(val or "")))
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return out
+
+
+def stale_stored_keys(cfg: dict | None = None, stored: dict | None = None) -> list[dict]:
+    """provider ที่มี apiKey ใน opencode.json แต่ที่เก็บของ opencode v2 มี key อื่นอยู่ → v2 ใช้ key ในที่เก็บทับ opencode.json
+    (เจอจริง 2026-11-18: key ที่ย้ายเข้าที่เก็บตั้งแต่ 23 ก.ย. หมดอายุ แต่ key ใหม่ใน opencode.json ไม่ถูกใช้ → 401 ทุกงาน)"""
+    provs = (cfg if cfg is not None else read_json(OC_CONFIG)).get("provider") or {}
+    stored = oc2_stored_keys() if stored is None else stored
+    out = []
+    for pv, creds in stored.items():
+        key = str(((provs.get(pv) or {}).get("options") or {}).get("apiKey") or "")
+        if not key or key.startswith("{"):  # ไม่มี key ใน config หรือเป็น {env:...}/{file:...} → เทียบไม่ได้ ไม่เตือน
+            continue
+        for cid, val in creds:
+            if key not in val:
+                out.append({"provider": pv, "credential": cid})
+    return out
+
+
+def probe_account(model: str, timeout: int = 150) -> tuple[str, str]:
+    """ส่งคำถามสั้นมาก 1 ข้อไปที่โมเดล (ใช้โควตาจริงเล็กน้อย) → (OK|AUTH|QUOTA|FAIL|TIMEOUT, รายละเอียด)"""
+    exe = opencode_cmd()
+    if not exe:
+        return "FAIL", "ไม่พบ opencode"
+    work = HOME / "probe"
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        cmd = oc_run_cmd(exe, work, "flashq-keys-probe", model=model, message="ตอบคำเดียวว่า OK ห้ามใช้ tool")
+        p = subprocess.run(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired:
+        return "TIMEOUT", f"ไม่ตอบใน {timeout} วิ"
+    except (OSError, RuntimeError) as e:
+        return "FAIL", str(e)[:160]
+    errors, text = [], ""
+    for line in p.stdout.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "error" or "error" in ev:
+            err = ev.get("error", ev)
+            auth = auth_error(err)
+            if auth:
+                return "AUTH", auth
+            errors.append(json.dumps(err, ensure_ascii=False)[:300])
+        elif ev.get("type") == "text":
+            text += str((ev.get("part") or {}).get("text") or "")
+    if errors:
+        return ("QUOTA" if QUOTA_RE.search(" ".join(errors)) else "FAIL"), errors[0][:200]
+    if text.strip():
+        return "OK", text.strip()[:40]
+    return "FAIL", f"ไม่มีคำตอบ (exit {p.returncode}) {one_line(p.stderr, 160)}"
+
+
+def cmd_keys(a) -> int:
+    """ตรวจ key ของทุกบัญชีใน accounts.json: key มาจากไหน · key เก่าในที่เก็บของ opencode v2 ที่ทับ opencode.json · --probe = ลองเรียกจริง"""
+    _, accs = accounts()
+    cfg = read_json(OC_CONFIG)
+    provs = cfg.get("provider") or {}
+    stored = oc2_stored_keys()
+    stale = stale_stored_keys(cfg, stored)
+    stale_pv = {s["provider"] for s in stale}
+    current = configured_model()
+    print(f"บัญชีใน accounts.json ({len(accs)}) · * = flash-worker ใช้อยู่")
+    for short, model in accs:
+        pv = model.split("/", 1)[0]
+        in_cfg = bool(((provs.get(pv) or {}).get("options") or {}).get("apiKey"))
+        src = ("opencode.json" if in_cfg else "") + (" + ที่เก็บของ opencode" if pv in stored else "")
+        src = src.strip(" +") or "ไม่พบ key (อาจมาจากตัวแปรสภาพแวดล้อม/auth.json)"
+        warn = "  ⚠ key ในที่เก็บไม่ตรงกับ opencode.json (opencode v2 ใช้ตัวในที่เก็บ)" if pv in stale_pv else ""
+        print(f"{'*' if model == current else ' '} {short:8} {model}  · key: {src}{warn}")
+    if stale:
+        exe = (opencode_cmd() or ["opencode"])[-1]
+        print("\nWARN: opencode v2 ใช้ key ในที่เก็บของมันก่อน apiKey ใน opencode.json — key ข้างล่างไม่ตรงกับ opencode.json "
+              "(มักเป็น key เก่าที่ย้ายมาตอนอัปเดต แต่ถ้าเพิ่งใส่ key ใหม่ผ่านแอป desktop ตัวในที่เก็บจะเป็นตัวใหม่ → แก้ opencode.json แทน) · "
+              f"ตรวจก่อนด้วย `{run_cmd()} keys --probe` — บัญชีนั้นขึ้น AUTH จึงลบ แล้ว opencode จะกลับไปใช้ key ใน opencode.json:")
+        for s in stale:
+            print(f'  "{exe}" auth logout {s["provider"]} {s["credential"]}')
+    if not a.probe:
+        print(f"\nลองเรียกทุกบัญชีจริง (ใช้โควตาเล็กน้อย): {run_cmd()} keys --probe")
+        return 1 if stale else 0
+    print("\nลองเรียกทุกบัญชี (คำถามสั้น 1 ข้อ · พร้อมกัน)…", flush=True)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max(1, min(8, len(accs)))) as ex:
+        results = list(ex.map(lambda sm: probe_account(sm[1], a.timeout), accs))
+    label = {"OK": "✅ ใช้ได้", "AUTH": "❌ key ใช้ไม่ได้", "QUOTA": "⏸ โควตา/เครดิตหมด", "TIMEOUT": "⏱ ไม่ตอบ", "FAIL": "❌ ล้มเหลว"}
+    for (short, model), (st, why) in zip(accs, results):
+        print(f"  {short:8} {label.get(st, st)}" + ("" if st == "OK" else f" — {why}"))
+    bad = [short for (short, model), (st, _) in zip(accs, results) if st != "OK"]
+    cur = next((short for short, model in accs if model == current), "")
+    if cur in bad:
+        good = [short for (short, _), (st, _) in zip(accs, results) if st == "OK"]
+        print(f"\nWARN: flash-worker ใช้ {cur} ซึ่งใช้ไม่ได้" + (f" → สลับ: {run_cmd()} switch {good[0]}" if good else " · ไม่มีบัญชีไหนใช้ได้เลย"))
+    return 1 if (bad or stale) else 0
+
+
+MODEL_ROLES =[("worker", "flash-worker", "ผู้ทำ (แก้โค้ดตามแผน)"),
                ("verifier", "flash-verifier", "ผู้ตรวจ (อ่านอย่างเดียว)"),
                ("investigator", "flash-investigator", "ผู้สืบ (ไล่หาต้นตอ)"),
                ("tester", "flash-tester", "นักทดสอบ (อธิบายเทสต์ที่ล้ม)"),
@@ -6067,6 +6239,8 @@ def job_reason(j: dict, state: str) -> str:
         return one_line("opencode ปฏิเสธสิทธิ์: " + " · ".join(f"{x.get('kind', '')}: {x.get('path', '')}" for x in (j.get("perm_denied") or [])[:5]), 500)
     if state == "quota":
         return last or "โควตาของโมเดลหมด"
+    if state == "auth":
+        return last or "key ของบัญชีใช้ไม่ได้ (หมดอายุ/ผิด/ไม่มี subscription) — ตรวจด้วย flashq keys"
     if state == "ok_unverified":
         return one_line("ผลยังไม่ยืนยัน: " + (" · ".join(j.get("unverified") or []) or "ไม่มีหลักฐานงาน"), 500)
     if state == "fail":
@@ -8742,6 +8916,10 @@ def main() -> int:
     sw = sp.add_parser("switch", help="สลับบัญชีโมเดล flash-worker")
     sw.add_argument("target", nargs="?")
     sw.set_defaults(fn=cmd_switch)
+    ky = sp.add_parser("keys", help="ตรวจ key ทุกบัญชี: key มาจากไหน · key เก่าในที่เก็บของ opencode v2 ที่ทับ opencode.json · --probe ลองเรียกจริง")
+    ky.add_argument("--probe", action="store_true", help="ส่งคำถามสั้น 1 ข้อไปทุกบัญชีพร้อมกัน (ใช้โควตาเล็กน้อย)")
+    ky.add_argument("--timeout", type=int, default=150, help="รอคำตอบแต่ละบัญชีกี่วินาที")
+    ky.set_defaults(fn=cmd_keys)
     ins = sp.add_parser("install", help="ติดตั้ง /flash + agent (opencode) และ /flash-* + flash-checker + hooks (Claude) แบบ global")
     ins.add_argument("--force", action="store_true", help="ทับไฟล์ของผู้ใช้ที่ชื่อซ้ำ (สำรอง .bak-flashq ก่อน)")
     ins.add_argument("--hooks", action="store_true", help="ลงทะเบียน image_guard (PreToolUse Read) · inbox_notify (UserPromptSubmit) · run_guard (PreToolUse Bash|PowerShell) ใน ~/.claude/settings.json")

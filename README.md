@@ -109,11 +109,12 @@ python flashq.py gui    # หน้าต่างแอป (WebView2 ผ่า�
 | `cancel <id>` · `runnow <id>` · `wait <id\|แผน>` | ยกเลิก · รันทันทีในช่องพิเศษ · บล็อกรอจนจบ |
 | `usage <แผน>` · `usage --flash` | token ของ Claude ต่อแผน · token ของ Flash และยอดประหยัด |
 | `switch [next\|...]` · `config` | สลับบัญชีโมเดล · ดู/ตั้งค่า (`max_parallel`, `schedule`) |
+| `keys [--probe]` | ตรวจ key ทุกบัญชี (key ใช้ไม่ได้ = `FLASH_RUN=AUTH`) · เตือน key เก่าในที่เก็บของ opencode v2 ที่ทับ `opencode.json` |
 | `models` | แสดงโมเดลทั้งหมดที่เครื่องนี้มี แล้วเลือกว่าบทบาทไหนใช้โมเดลอะไร (`--list` `--auto` `--set`) |
 | `ui` · `gui` | หน้าเว็บ dashboard ในเบราว์เซอร์ · หน้าต่างแอปแบบไม่ใช้เบราว์เซอร์ (`--port` · `gui` ต้องมี pywebview) |
 | `install` · `init` · `prune` · `shrink` | ติดตั้ง (ท้ายงานตรวจโมเดลให้) · ตั้งค่าโปรเจกต์ · ล้างประวัติเก่า · ย่อรูปก่อนให้ Claude อ่าน |
 
-ผลลัพธ์ของ `run` ลงท้ายด้วยบรรทัด `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` และ `job=<id>` (exit 0 = OK)
+ผลลัพธ์ของ `run` ลงท้ายด้วยบรรทัด `FLASH_RUN=OK|FAIL|QUOTA|AUTH|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` และ `job=<id>` (exit 0 = OK)
 
 ### บทบาทของ agent
 

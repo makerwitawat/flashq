@@ -2,7 +2,7 @@
 
 พฤติกรรมตามตัวแปรแวดล้อม:
   FAKE_SLEEP=<วินาที>   หน่วงก่อนจบ (ค่าเริ่มต้น 0)
-  FAKE_MODE=ok|quota|nostart|fail|denied|epipe (denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน · epipe = รายงานข้อความแล้วตายด้วย EPIPE exit 1)
+  FAKE_MODE=ok|quota|auth|nostart|fail|denied|epipe (auth = key หมดอายุ provider.auth 401 ·denied = opencode ปฏิเสธสิทธิ์เองแล้วจบ exit 0 · ใส่ FAKE_TEXT ที่มี DONE = สำเร็จบางส่วน · epipe = รายงานข้อความแล้วตายด้วย EPIPE exit 1)
   FAKE_ARGS_OUT=<path>  เขียน argv ลงไฟล์ (ต่อท้าย)
   FAKE_ENV_OUT=<path>   เขียนค่า OPENCODE_CONFIG_CONTENT ที่ได้รับลงไฟล์ (ว่าง = ไม่ได้รับ)
   FAKE_MODELS=a/b|c/d    รายชื่อที่ `opencode models` ตอบ (คั่นด้วย |)
@@ -60,6 +60,10 @@ if mode == "quota":
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f)
     print(json.dumps({"type": "error", "sessionID": sid, "error": {"message": "429 rate limit"}}), flush=True)
+    sys.exit(1)
+if mode == "auth":  # key ของบัญชีหมดอายุ (opencode v2 ส่ง provider.auth 401) — ไม่ใช่โควตา
+    print(json.dumps({"type": "error", "sessionID": sid, "error": {"type": "provider.auth", "status": 401,
+          "response": {"body": "{\"error\":{\"code\":\"api_key_expired\"}}"}, "message": "This API key has expired"}}), flush=True)
     sys.exit(1)
 if mode in ("failbalance", "failquota"):  # สรุปท้ายของ worker พูดถึง balance ในเนื้องาน (ไม่ใช่ error โควตา) / รายงาน FAIL: quota เอง
     txt = "ปรับสมดุล balance ของเกมแล้ว สถานะ: FAIL" if mode == "failbalance" else "FAIL: quota"

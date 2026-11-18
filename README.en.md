@@ -111,11 +111,12 @@ python flashq.py gui    # app window (WebView2 via pywebview · pip install pywe
 | `cancel <id>` · `runnow <id>` · `wait <id\|plan>` | Cancel · run now in a spare slot · block until done |
 | `usage <plan>` · `usage --flash` | Claude tokens per plan · Flash tokens and savings |
 | `switch [next\|...]` · `config` | Switch model account · view/set config (`max_parallel`, `schedule`) |
+| `keys [--probe]` | Check every account's key (unusable key = `FLASH_RUN=AUTH`) · warn when an old key in opencode v2's credential store overrides `opencode.json` |
 | `models` | List every model on this machine and pick which role uses which (`--list` `--auto` `--set`) |
 | `ui` · `gui` | Browser dashboard · browserless app window (`--port` · `gui` needs pywebview) |
 | `install` · `init` · `prune` · `shrink` | Install (checks models at the end) · set up a project · purge old history · shrink images before Claude reads them |
 
-`run` output ends with a `FLASH_RUN=OK|FAIL|QUOTA|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` line and `job=<id>` (exit 0 = OK).
+`run` output ends with a `FLASH_RUN=OK|FAIL|QUOTA|AUTH|TIMEOUT|NOSTART|DENIED|BUSY|QUEUE_TIMEOUT` line and `job=<id>` (exit 0 = OK).
 
 ### Agent roles
 

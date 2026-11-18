@@ -486,7 +486,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <input type="search" id="histSearch" placeholder="ค้นหา แผน/งาน/id" style="width:11rem">
         <select id="stateFilter" title="กรองสถานะ">
           <option value="">ทุกสถานะ</option><option value="ok">OK</option><option value="fail">FAIL</option>
-          <option value="denied">DENIED</option><option value="quota">QUOTA</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
+          <option value="denied">DENIED</option><option value="quota">QUOTA</option><option value="auth">AUTH</option><option value="timeout">TIMEOUT</option><option value="nostart">NOSTART</option>
           <option value="cancelled">ยกเลิก</option><option value="dead">ตาย</option><option value="busy">BUSY (คิวไม่ว่าง)</option><option value="queue_timeout">รอคิวนานเกิน</option>
         </select>
         <select id="projFilter" title="กรองโปรเจกต์"><option value="">ทุกโปรเจกต์</option></select>
@@ -587,7 +587,7 @@ body.of-paused .of-scene *, body.of-paused .of-bar i { animation-play-state: pau
         <li>🧑‍⚖️ <b>Claude กำลังตรวจ</b> = ป้ายจาก <span class="mono">/flash-check</span> (<span class="mono">flashq review</span>) · ผ่านชูมือ · ไม่ผ่านหน้าเสีย + แจ้งเตือน/เสียง · มือถือเลื่อนฉากแนวนอนได้</li>
         <li>🧍 <b>ยืนต่อแถวด้านซ้าย</b> = งานรอคิว (#1 = ถัดไป · ไอคอนข้างเลข 🔍🕵️🧪📝 = ชนิดงาน) · ถือป้าย ⏸ = ยังไม่เริ่มเพราะชนไฟล์/แผนสั่งให้รอ</li>
         <li>📊 <b>แถบใต้โต๊ะ</b> = ความคืบหน้าโดยประมาณ (เทียบกับเวลาที่เคยใช้ + งาน T-xx ที่ commit แล้ว) · แถบเลื่อน = ยังประมาณไม่ได้</li>
-        <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · 🚫 = DENIED (opencode ปฏิเสธสิทธิ์ งานไม่ได้ทำ — ดูทางแก้ในกล่อง log) · ☕ ถือกาแฟ = QUOTA (โควตาหมด) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
+        <li>🎉 ชูมือ = จบ OK · 😢 ก้มหน้า = FAIL/TIMEOUT/NOSTART · 🚫 = DENIED (opencode ปฏิเสธสิทธิ์ งานไม่ได้ทำ — ดูทางแก้ในกล่อง log) · ☕ ถือกาแฟ = QUOTA (โควตาหมด) · 🔑 = AUTH (key ใช้ไม่ได้ — ตรวจด้วย flashq keys) — แสดงที่โต๊ะเดิม ~20 วินาที แล้วเป็นโต๊ะว่าง</li>
         <li>😴 <b>นอนที่เก้าอี้มุมซ้ายล่าง</b> ("⚠ process ตาย") = งานที่ process ตาย (คลิกที่เก้าอี้เพื่อรับทราบ หรือดูแผงเตือนในแดชบอร์ด) · ไม่เกี่ยวกับโซฟาห้องพัก</li>
         <li>⏱ ทุก <b>เวลาที่ประมาณ</b> มาจากประวัติงานที่ผ่านมา (ค่ากลางต่อ T-xx) ไม่ใช่ค่ารับประกัน — คิวจริงอาจเร็ว/ช้ากว่านี้ได้</li>
       </ul></details>
@@ -723,10 +723,10 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem("flashq." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem("flashq." + k, JSON.stringify(v)); } catch (e) {} },
 };
-const STATUS = { ok: ["OK", "s-ok"], ok_unverified: ["ยังไม่ยืนยัน", "s-unv"], fail: ["FAIL", "s-fail"], denied: ["DENIED", "s-denied"], quota: ["QUOTA", "s-quota"], timeout: ["TIMEOUT", "s-timeout"],
+const STATUS = { ok: ["OK", "s-ok"], ok_unverified: ["ยังไม่ยืนยัน", "s-unv"], fail: ["FAIL", "s-fail"], denied: ["DENIED", "s-denied"], quota: ["QUOTA", "s-quota"], auth: ["AUTH", "s-fail"], timeout: ["TIMEOUT", "s-timeout"],
   nostart: ["NOSTART", "s-nostart"], cancelled: ["ยกเลิก", "s-other"], busy: ["BUSY", "s-other"], queue_timeout: ["รอคิวเกินเวลา", "s-other"],
   dead: ["ตาย", "s-other"], running: ["กำลังทำ", "s-running"], queued: ["รอคิว", "s-queued"] };
-const FINAL = ["ok", "ok_unverified", "fail", "denied", "quota", "timeout", "nostart"];
+const FINAL = ["ok", "ok_unverified", "fail", "denied", "quota", "auth", "timeout", "nostart"];
 const badge = (st, why) => { const [t, c] = STATUS[st] || [st || "?", "s-other"]; return `<span class="badge ${c}"${why ? ` title="${esc(why)}"` : ""}>${esc(t)}</span>`; };
 /* opencode ปฏิเสธสิทธิ์เอง (โหมดไม่โต้ตอบ) → บอก path ที่ถูกปฏิเสธบนแถวงาน · ทางแก้เต็มอยู่ในกล่อง log (denied_help) */
 const denyNote = (j) => (j.perm_denied || []).length ? `<div class="deny" title="opencode ปฏิเสธสิทธิ์ · ทางแก้: external_dirs ใน .flash.json หรือ permission.external_directory ใน opencode.json (ดูกล่อง log)">🚫 ปฏิเสธสิทธิ์: ${esc(j.perm_denied.join(" · "))}</div>` : "";
@@ -1765,6 +1765,7 @@ if (LANG === "en") {
 โหลดแล้ว|loaded
 ใครไม่มีงานจะมานั่งที่โซฟา|anyone without work comes to sit on the sofa
 ใช้|use
+ใช้ไม่ได้|not working
 ใช้ค่าตั้งต้นใน|use the defaults in
 ใช้ชื่อนี้|use this name
 ใช้ช่อง|uses a slot
@@ -3281,6 +3282,7 @@ const LOUNGE = [{ k: "insp", ico: "🔍", name: "ผู้ตรวจ", role: "
 const CELE = { ok: { pose: "cheer", mood: "happy", icon: "🎉", text: "เสร็จแล้ว!", cls: "of-st-ok" }, fail: { pose: "sit", mood: "sad", icon: "😢", text: "ไม่ผ่าน (FAIL)", cls: "of-st-bad" },
   quota: { pose: "coffee", mood: "flat", icon: "☕", text: "โควตาหมด พักก่อน", cls: "of-st-quota" }, timeout: { pose: "sit", mood: "sad", icon: "⏱", text: "หมดเวลา (TIMEOUT)", cls: "of-st-bad" },
   denied: { pose: "sit", mood: "sad", icon: "🚫", text: "ถูกปฏิเสธสิทธิ์ (DENIED)", cls: "of-st-bad" },
+  auth: { pose: "sit", mood: "sad", icon: "🔑", text: "key ใช้ไม่ได้ (AUTH)", cls: "of-st-bad" },
   ok_unverified: { pose: "cheer", mood: "flat", icon: "⚠", text: "เสร็จแต่ยังไม่ยืนยัน", cls: "of-st-quota" },
   nostart: { pose: "sit", mood: "sad", icon: "❓", text: "ไม่เริ่มทำงาน (NOSTART)", cls: "of-st-bad" } };
 
@@ -3864,7 +3866,7 @@ function officeUpdate() {
   setText("ofTE", doneAll ? approx(allEnd) : "—");
   setText("ofTEs", doneAll ? `ราว ${clockAt(allEnd)}${anyRough ? " · ประมาณคร่าว (ข้อมูลเก่ายังน้อย)" : ""}` : "ไม่มีงานค้าง");
   const today = String(s.now || "").slice(0, 10), td = todayDone(s.history, today);
-  const okN = td.filter((h) => h.state === "ok").length, unvN = td.filter((h) => h.state === "ok_unverified").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota"].includes(h.state)).length;
+  const okN = td.filter((h) => h.state === "ok").length, unvN = td.filter((h) => h.state === "ok_unverified").length, badN = td.filter((h) => ["fail", "denied", "timeout", "nostart", "quota", "auth"].includes(h.state)).length;
   setText("ofTD", `${td.length} งาน`);
   setText("ofTDs", td.length ? `✓ ${okN} ผ่าน${unvN ? ` · ⚠ ${unvN} ยังไม่ยืนยัน` : ""} · ✗ ${badN} ไม่ผ่าน` : "ยังไม่มีวันนี้");
   const rw = reviewWait(s.history, m.goals);

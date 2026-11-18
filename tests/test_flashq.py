@@ -904,6 +904,64 @@ class FlashqTest(unittest.TestCase):
         self.assertIn("FLASH_RUN=QUOTA", r.stdout)
         self.assertEqual(len(self.args_out.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_auth_error_tries_each_account_once(self):
+        """key หมดอายุ (provider.auth 401) → FLASH_RUN=AUTH ไม่ใช่ QUOTA · ลองบัญชีอื่นตามลำดับทีละบัญชีครั้งเดียวโดยไม่ใช้งบ --switch-on-quota · บอกให้ตรวจด้วย keys"""
+        r = self.run_q(*self.base(), env={"FAKE_MODE": "auth"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FLASH_RUN=AUTH", r.stdout)
+        self.assertNotIn("FLASH_RUN=QUOTA", r.stdout)
+        self.assertIn("api_key_expired", r.stdout)
+        self.assertIn("keys", r.stdout)
+        calls = [json.loads(x) for x in self.args_out.read_text(encoding="utf-8").splitlines()]
+        models = [c[c.index("--model") + 1] for c in calls]
+        self.assertGreater(len(models), 1)
+        self.assertEqual(len(models), len(set(models)))  # ไม่วนซ้ำบัญชีเดิม
+        self.assertEqual(models[0], "p1/m")
+
+    def test_auth_helpers(self):
+        mod = self.load_mod("flashq_auth")
+        err = {"type": "provider.auth", "status": 401, "response": {"body": "{\"error\":{\"code\":\"api_key_expired\"}}"}, "message": "expired"}
+        self.assertIn("api_key_expired", mod.auth_error(err))
+        self.assertIn("HTTP 403", mod.auth_error({"status": 403, "message": "OpenCode Go subscription required"}))
+        self.assertEqual(mod.auth_error({"type": "provider.rate-limit", "status": 429, "message": "x"}), "")
+        self.assertEqual(mod.auth_error({"status": 400, "message": "insufficient credits"}), "")  # เครดิตหมด = QUOTA ไม่ใช่ AUTH
+        self.assertEqual(mod.auth_error("x"), "")
+        self.assertTrue(mod.QUOTA_RE.search(json.dumps({"status": 400, "message": "insufficient credits"})))
+        # ลำดับบัญชี: ข้ามที่ลองแล้ว · ครบแล้ว = ""
+        with mock.patch.object(mod, "accounts", return_value=("", [("a", "x/1"), ("b", "y/1"), ("c", "z/1")])):
+            tried = set()
+            got = []
+            cur = "y/1"
+            while cur:
+                cur = mod.auth_fallback_model(cur, tried, accounts_order=True)
+                if cur:
+                    got.append(cur)
+            self.assertEqual(got, ["z/1", "x/1"])
+        # key ในที่เก็บของ opencode v2 ทับ opencode.json → เตือน · ตรงกัน/{env:}/ไม่มีใน config = ไม่เตือน
+        cfg = {"provider": {"p1": {"options": {"apiKey": "NEW"}}, "p2": {"options": {"apiKey": "SAME"}},
+                            "p3": {"options": {"apiKey": "{env:K}"}}}}
+        stored = {"p1": [("cred_1", "{\"key\":\"OLD\"}")], "p2": [("cred_2", "{\"key\":\"SAME\"}")],
+                  "p3": [("cred_3", "x")], "p4": [("cred_4", "y")]}
+        self.assertEqual(mod.stale_stored_keys(cfg, stored), [{"provider": "p1", "credential": "cred_1"}])
+
+    def test_keys_command_flags_stale_store_key(self):
+        """flashq keys: อ่าน credential ของ opencode v2 แบบอ่านอย่างเดียว · เจอ key เก่าทับ → แนะนำคำสั่ง logout · ไม่พิมพ์ค่า key"""
+        import sqlite3
+        db = self.tmp / "oc2keys.db"
+        con = sqlite3.connect(db)
+        con.execute("create table credential (id text, integration_id text, label text, value text)")
+        con.execute("insert into credential values ('cred_old','commandcode','x',?)", (json.dumps({"key": "OLDSECRET"}),))
+        con.commit()
+        con.close()
+        cfg = json.loads(self.oc_cfg.read_text(encoding="utf-8"))
+        cfg["provider"]["commandcode"]["options"] = {"apiKey": "NEWSECRET"}
+        self.oc_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        r = self.run_q("keys", env={"FLASHQ_OPENCODE_DB": str(db)})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("logout commandcode cred_old", r.stdout)
+        self.assertNotIn("OLDSECRET", r.stdout + r.stderr)
+        self.assertNotIn("NEWSECRET", r.stdout + r.stderr)
+
     def test_cancel_queued(self):
         p1 = self.run_q(*self.base(), env={"FAKE_SLEEP": "8"}, wait=False)
         time.sleep(2.5)
