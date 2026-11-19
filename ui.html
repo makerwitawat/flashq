@@ -803,7 +803,7 @@ async function post(path, body, ms = 0) {  // ms > 0 = เลิกรอเม�
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Flashq-Token": TOKEN }, body: JSON.stringify(body), signal: ac?.signal });
     let d = {}; try { d = await r.json(); } catch (e) {}
     if (r.status === 403 && d.code === "token") $("stale").hidden = false;  // token หมดอายุ → ขึ้นป้ายให้รีเฟรช
-    return { httpOk: r.ok, ...d };
+    return { httpOk: r.ok, ...d, message: d.message ?? d.error };  // server บางจุดตอบ error แทน message (เช่น token หมดอายุ) → ผู้เรียกเห็นเหตุผลเสมอ
   } catch (e) {
     if (ac?.signal.aborted) return { httpOk: false, ok: false, message: `server ไม่ตอบภายใน ${Math.round(ms / 1000)} วินาที — การบันทึกอาจสำเร็จหรือไม่ก็ได้ ปิดหน้าต่างแล้วดูรายการบัญชีอีกครั้ง` };
     return { httpOk: false, message: NOCONN };
@@ -1923,13 +1923,13 @@ if (LANG === "en") {
 
 /* ---------- วิซาร์ดตั้งค่าครั้งแรก ---------- ข้อความใช้ T(ไทย, อังกฤษ) ตรงนี้เลย (ไม่ผ่านพจนานุกรมแปล) */
 const T = (th, en) => (LANG === "en" ? en : th);
-const su = { step: 1, st: null, hooks: true, busy: false, out: "", initOut: "", project: "" };
+const su = { step: 1, max: 1, st: null, hooks: true, busy: false, out: "", initOut: "", project: "" };
 const suStore = { get() { try { return sessionStorage.getItem("flashq.suSkip"); } catch (e) { return null; } }, set(v) { try { sessionStorage.setItem("flashq.suSkip", v); } catch (e) {} } };
 async function suLoad() {
   try { su.st = await (await fetch("/api/setup")).json(); } catch (e) { su.st = null; }
 }
 function suOpen(step = 1) {
-  su.step = step; su.out = su.initOut = "";
+  su.step = su.max = step; su.out = su.initOut = "";
   const d = $("setupDlg"); if (!d.open) d.showModal();
   suRender();
   suLoad().then(suRender);
@@ -1941,7 +1941,7 @@ function suRender() {
   const st = su.st, n = su.step, names = [T("ยินดีต้อนรับ", "Welcome"), T("ตรวจเครื่อง", "Check"), T("ติดตั้ง", "Install"), T("โมเดล", "Models"), T("โปรเจกต์", "Project")];
   $("suTitle").textContent = T("ตั้งค่า flashq ครั้งแรก", "flashq first-run setup");
   $("suX").title = T("ปิด", "Close");
-  $("suSteps").innerHTML = names.map((nm, i) => `<button type="button" class="wz-st${i + 1 === n ? " on" : i + 1 < n ? " done" : ""}" data-sustep="${i + 1}"><i>${i + 1 < n ? "✓" : i + 1}</i>${nm}</button>`).join("");
+  $("suSteps").innerHTML = names.map((nm, i) => `<button type="button" class="wz-st${i + 1 === n ? " on" : i + 1 < n ? " done" : ""}" data-sustep="${i + 1}"${i + 1 > su.max ? " disabled" : ""}><i>${i + 1 < n ? "✓" : i + 1}</i>${nm}</button>`).join("");
   let h = "";
   if (n === 1) {
     h = `<p>${T("flashq คือคิวกลางที่ส่งงานให้ DeepSeek Flash (ผ่าน opencode) ทำตามแผน แล้วให้ Claude ตรวจผล — วิซาร์ดนี้พาตั้งค่าให้ใช้งานได้ภายในไม่กี่ขั้น", "flashq is a central queue that sends plan-driven work to DeepSeek Flash (through opencode) and lets Claude check the result. This wizard gets you set up in a few steps.")}</p>
@@ -1984,42 +1984,65 @@ function suRender() {
     + (n < 5 ? `<button type="button"${n === 3 && !su.st.install.ok ? "" : ' class="primary"'} data-suact="next"${su.busy ? " disabled" : ""}>${T("ถัดไป", "Next")}</button>`
       : `<button type="button" class="primary" data-suact="finish">${T("เสร็จสิ้น", "Finish")}</button>`);
 }
+function suMissing(st) {  // สิ่งที่ยังไม่พร้อม (ว่าง = พร้อมใช้)
+  if (!st) return [T("ตรวจสถานะเครื่องไม่ได้", "could not check this machine")];
+  const out = [];
+  if (!st.opencode.ok) out.push("opencode");
+  if (!st.install.ok) out.push(T("คำสั่ง/agent ยังไม่ได้ติดตั้ง", "commands/agents not installed"));
+  if (!st.models.ok) out.push(T("โมเดลของบทบาท", "role models") + (st.models.bad.length ? `: ${st.models.bad.join(", ")}` : ""));
+  return out;
+}
+function suSkip() { suStore.set("1"); post("/api/setup_done", { done: false, skipped: true }); $("setupDlg").close(); }  // ข้าม = ไม่เด้งเองอีก แต่ไม่นับว่าตั้งค่าเสร็จ (เปิดใหม่ได้ที่ปุ่ม 🧭)
 async function suAct(act) {
-  if (act === "skip") { suStore.set("1"); post("/api/setup_done", { done: true }); return $("setupDlg").close(); }
+  if (act === "skip") return suSkip();
   if (act === "back") { su.step = Math.max(1, su.step - 1); return suRender(); }
-  if (act === "next") { su.step = Math.min(5, su.step + 1); return suRender(); }
+  if (act === "next") { su.step = Math.min(5, su.step + 1); su.max = Math.max(su.max, su.step); return suRender(); }
   if (act === "recheck") { await suLoad(); return suRender(); }
   if (act === "accounts") return wzOpen();
   if (act === "install") {
     su.hooks = !!($("suHooks") || {}).checked; su.busy = true; su.out = T("กำลังติดตั้ง…", "Installing…"); suRender();
     const r = await post("/api/setup_install", { hooks: su.hooks });
-    su.busy = false; su.out = r.output || r.message || ""; if (r.status) su.st = r.status; suRender();
+    su.busy = false; su.out = r.output || r.message || T("ติดตั้งไม่สำเร็จ (server ไม่ตอบผล)", "Install failed (no result from server)"); if (r.status) su.st = r.status; suRender();
     if (r.ok) toast(T("ติดตั้งแล้ว", "Installed"));
+    else if (r.status && r.status.install.ok) toast(T("ติดตั้งแล้ว (ข้ามไฟล์ของคุณเองบางไฟล์)", "Installed (some of your own files were skipped)"));
     return;
   }
   if (act === "init") {
     su.project = $("suProj").value.trim(); su.busy = true; su.initOut = T("กำลังตั้งค่า…", "Setting up…"); suRender();
     const r = await post("/api/setup_init", { project: su.project });
-    su.busy = false; su.initOut = r.output || r.message || ""; suRender();
+    su.busy = false; su.initOut = r.output || r.message || T("ตั้งค่าไม่สำเร็จ (server ไม่ตอบผล)", "Setup failed (no result from server)"); suRender();
     return;
   }
-  if (act === "finish") { await post("/api/setup_done", { done: true }); $("setupDlg").close(); toast(T("ตั้งค่าเสร็จแล้ว — เริ่มส่งงานได้เลย", "Setup complete — you can start sending jobs")); }
+  if (act === "finish") {
+    await suLoad(); suRender();
+    const miss = suMissing(su.st);
+    if (miss.length) {  // ยังไม่พร้อม = บันทึกแค่ "ข้าม" ไม่ใช่ "เสร็จ" · ส่งงานตอนนี้จะล้ม
+      if (!confirm(T(`ยังตั้งค่าไม่ครบ: ${miss.join(" · ")}
+ส่งงานตอนนี้จะล้ม — ปิดไปก่อนแล้วมาตั้งต่อทีหลังไหม? (เปิดวิซาร์ดใหม่ได้ที่ปุ่ม 🧭)`,
+        `Setup is not complete: ${miss.join(" · ")}
+Jobs will fail until it is. Close for now and finish later? (reopen it with the 🧭 button)`))) return;
+      return suSkip();
+    }
+    const r = await post("/api/setup_done", { done: true });
+    if (!r.ok) return toast(r.message || T("บันทึกไม่สำเร็จ", "Could not save"));
+    $("setupDlg").close(); toast(T("ตั้งค่าเสร็จแล้ว — เริ่มส่งงานได้เลย", "Setup complete — you can start sending jobs"));
+  }
 }
 $("setupDlg").addEventListener("click", (ev) => {
   const b = ev.target.closest("button"); if (!b) return;
-  if (b.id === "suX") { suStore.set("1"); post("/api/setup_done", { done: true }); return $("setupDlg").close(); }
-  if (b.dataset.sustep) { su.step = +b.dataset.sustep; return suRender(); }
+  if (b.id === "suX") return suSkip();
+  if (b.dataset.sustep) { if (+b.dataset.sustep <= su.max) su.step = +b.dataset.sustep; return suRender(); }
   if (b.dataset.sulang) { if (b.dataset.sulang !== LANG) { store.set("lang", b.dataset.sulang); try { sessionStorage.setItem("flashq.suResume", "2"); } catch (e) {} location.reload(); } return; }
   if (b.dataset.suact) suAct(b.dataset.suact);
 });
-$("setupDlg").addEventListener("cancel", () => { suStore.set("1"); post("/api/setup_done", { done: true }); });  // กด Esc = ข้าม เหมือนปุ่ม X
+$("setupDlg").addEventListener("cancel", () => { suStore.set("1"); post("/api/setup_done", { done: false, skipped: true }); });  // กด Esc = ข้าม เหมือนปุ่ม X
 $("setupBtn").onclick = () => suOpen(1);
 (async () => {
   let resume = null; try { resume = sessionStorage.getItem("flashq.suResume"); sessionStorage.removeItem("flashq.suResume"); } catch (e) {}
   if (resume) return suOpen(+resume || 2);
   if (suStore.get()) return;
   await suLoad();
-  if (su.st && !su.st.done && su.st.needed) suOpen(1);
+  if (su.st && !su.st.done && !su.st.skipped && su.st.needed) suOpen(1);
 })();
 
 /* ---------- zoom + layout ---------- */

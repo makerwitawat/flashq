@@ -72,7 +72,7 @@ provider ต้องมีใน `~\.config\opencode\opencode.json` ของ�
 ```powershell
 .\flashq.exe install --check
 ```
-ต้องได้ `INSTALL=OK  ตรงต้นฉบับครบ 21 ไฟล์` → จากนั้น **เปิด session ใหม่ของ Claude Code / รีโหลด opencode** จึงจะเห็นคำสั่ง `/flash-*`
+ต้องได้ `INSTALL=OK  ตรงต้นฉบับครบ 30 ไฟล์` (ถ้าขึ้น `INSTALL=FAIL ไม่พบโฟลเดอร์ต้นฉบับ` = แตกไฟล์ไม่ครบ — ต้องมีโฟลเดอร์ `claude/ opencode/ hooks/ templates/` อยู่ข้าง exe) → จากนั้น **เปิด session ใหม่ของ Claude Code / รีโหลด opencode** จึงจะเห็นคำสั่ง `/flash-*`
 
 ## 4. ใช้งาน
 

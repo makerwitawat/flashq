@@ -429,6 +429,14 @@ def _git(root: Path, *args: str, timeout: float = 60) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+GIT_IDENTITY_HINT = 'ตั้งชื่อ/อีเมลผู้ commit: git config --global user.name "<ชื่อ>" และ git config --global user.email "<อีเมล>"'
+
+
+def git_identity_missing(root: Path) -> bool:
+    """git จะ commit ไม่ได้เพราะไม่รู้ชื่อ/อีเมลผู้เขียน (เครื่องใหม่) · ใช้กลไกเดียวกับ git commit (git var)"""
+    return run_timeout(["git", "-C", str(root), "var", "GIT_AUTHOR_IDENT"], 30).returncode != 0
+
+
 def detect_remote(root: Path) -> str:
     """origin ถ้ามี · ไม่มี origin แต่มี remote เดียว = remote นั้น · ไม่ใช่ git/ไม่มี remote = origin"""
     remotes = _git(root, "remote").split()
@@ -1016,6 +1024,10 @@ def starve_min() -> float:
         return 120.0
 
 
+CONFIG_KEYS = ("max_parallel", "schedule", "starve_min", "dead_clear_hours", "open_session", "notify", "notify_toast")
+CONFIG_KEYS_HELP = "max_parallel, schedule (auto|fifo), starve_min, dead_clear_hours, open_session (on|off|auto), notify (on|off), notify_toast (on|off)"
+
+
 def set_config(key: str, value) -> tuple[str, str]:
     """ตั้งค่า schedule / starve_min / max_parallel · คืน (ข้อผิดพลาด, ข้อความสำเร็จ)"""
     if key == "max_parallel":
@@ -1067,7 +1079,15 @@ def set_config(key: str, value) -> tuple[str, str]:
         cfg["open_session"] = v in ("on", "true", "1")
         write_json(CONFIG, cfg)
         return "", ("สั่ง opencode desktop เปิดหน้าต่าง session ตอนงานเริ่มแล้ว" if cfg["open_session"] else "ปิดการเปิดหน้าต่าง session อัตโนมัติแล้ว (งานยังรันตามปกติ ดูได้ที่ flashq ui)")
-    return f"ไม่รู้จัก '{key}' — ใช้ได้: max_parallel, schedule, starve_min, dead_clear_hours, open_session", ""
+    if key in ("notify", "notify_toast"):
+        v = str(value if value is not None else "").lower()
+        if v not in ("on", "off", "true", "false", "1", "0"):
+            return f"{key} ต้องเป็น on | off", ""
+        cfg[key] = v in ("on", "true", "1")
+        write_json(CONFIG, cfg)
+        what = "แจ้งเตือนเมื่องานจบ (inbox + toast)" if key == "notify" else "toast ของ Windows เมื่องานจบ"
+        return "", f"{'เปิด' if cfg[key] else 'ปิด'}{what}แล้ว"
+    return f"ไม่รู้จัก '{key}' — ใช้ได้: {CONFIG_KEYS_HELP}", ""
 
 
 def slot_path(n: int) -> Path:
@@ -4945,8 +4965,8 @@ def cmd_config(a) -> int:
         for k, v in read_config().items():
             print(f"{k} = {v}")
         return 0
-    if a.key not in ("max_parallel", "schedule", "starve_min", "dead_clear_hours", "open_session"):
-        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: max_parallel, schedule (auto|fifo), starve_min, dead_clear_hours, open_session")
+    if a.key not in CONFIG_KEYS:
+        print(f"ไม่รู้จัก '{a.key}' — ใช้ได้: {CONFIG_KEYS_HELP}")
         return 1
     if a.value is None:
         print(f"{a.key} = {read_config().get(a.key)}")
@@ -5185,7 +5205,7 @@ def switch_account(arg: str) -> str:
     current = cfg.get("agent", {}).get(agent, {}).get("model")
     models = [m for _, m in accs]
     if not models:
-        print(f"FAIL: ไม่มีรายการบัญชีใน {REPO / 'accounts.json'}")
+        print(f"FAIL: ไม่มีรายการบัญชี (ไม่พบ {HOME / 'accounts.json'} และ {APP_DIR / 'accounts.json'}) → {run_cmd()} models --auto สร้างรายการของเครื่องนี้")
         return ""
     if arg == "next":
         target = models[(models.index(current) + 1 if current in models else 0) % len(models)]
@@ -5676,6 +5696,23 @@ def to_opencode_command(text: str) -> str:
     return text[:at] + OC_COMMANDER_NOTE + text[at:]
 
 
+INSTALL_SOURCES = ("opencode/command", "opencode/agent", "claude/commands", "claude/agents", "hooks")
+
+
+def missing_install_sources() -> list[str]:
+    """โฟลเดอร์ต้นฉบับที่ install ต้องใช้แต่หาไม่เจอข้างโปรแกรม (เช่นคัดลอกมาแค่ exe) → ติดตั้งได้ไม่ครบ"""
+    return [d for d in INSTALL_SOURCES if not (REPO / d).is_dir()]
+
+
+def report_missing_sources() -> bool:
+    """พิมพ์ INSTALL=FAIL เมื่อโฟลเดอร์ต้นฉบับหาย · True = หาย (ผู้เรียกต้องคืน 1)"""
+    gone = missing_install_sources()
+    if gone:
+        print(f"INSTALL=FAIL  ไม่พบโฟลเดอร์ต้นฉบับข้างโปรแกรม: {', '.join(gone)} (ที่ {REPO})"
+              " → แตกไฟล์ชุดแจกให้ครบทั้งโฟลเดอร์ (ไม่ใช่คัดลอกแค่ exe) แล้วรัน install ใหม่")
+    return bool(gone)
+
+
 def install_items(claude_home: Path):
     """(ปลายทาง, เนื้อหาที่ต้องติดตั้ง) ของทุกไฟล์ที่ install คัดลอก — install กับ install --check ใช้ชุดเดียวกัน"""
     pairs = [(REPO / "opencode" / "command", OC_CONFIG.parent / "command", "*.md"),
@@ -5733,6 +5770,8 @@ def record_install(claude_home: Path) -> None:
 def check_installed(claude_home: Path) -> int:
     """install --check: เทียบไฟล์ที่ติดตั้งไว้กับต้นฉบับ (อ่านอย่างเดียว) · 0 = ตรงครบ · 1 = มีไฟล์ล้าหลัง/ยังไม่ได้ติดตั้ง
     · ไฟล์ของผู้ใช้เอง (ไม่มี flashq:managed) ไม่นับว่าล้าหลัง"""
+    if report_missing_sources():
+        return 1
     ok = 0
     stale: list[Path] = []
     missing: list[Path] = []
@@ -5758,7 +5797,7 @@ def check_installed(claude_home: Path) -> int:
     return 0
 
 
-SETUP_FILE = HOME / "setup.json"  # วิซาร์ดตั้งค่าครั้งแรกในหน้าเว็บ: {"done": true, "at": เวลา} — ไม่มีไฟล์ = ยังไม่เคยทำจนจบ
+SETUP_FILE = HOME / "setup.json"  # วิซาร์ดตั้งค่าครั้งแรกในหน้าเว็บ: {"done": เสร็จจริง, "skipped": กดข้าม, "at": เวลา} — ไม่มีไฟล์ = ยังไม่เคยทำจนจบ/ข้าม
 SETUP_HOOK_KEYS = ("image_guard.py", "inbox_notify.py", "run_guard.py", "delegate_guard.py", "whatsnew.py")
 
 
@@ -5784,8 +5823,9 @@ def setup_status() -> dict:
     bad = models_problems(models) if models else []
     py = bool(shutil.which("python") or shutil.which("python3")) or not FROZEN
     install = {"ok": missing == 0 and stale == 0, "same": ok, "stale": stale, "missing": missing, "foreign": foreign}
-    done = bool(read_json(SETUP_FILE).get("done"))
-    return {"done": done, "opencode": {"ok": bool(oc), "path": oc[-1] if oc else ""},
+    saved = read_json(SETUP_FILE)
+    done = bool(saved.get("done"))
+    return {"done": done, "skipped": bool(saved.get("skipped")), "opencode": {"ok": bool(oc), "path": oc[-1] if oc else ""},
             "claude_home": {"path": str(claude_home), "exists": claude_home.is_dir()},
             "install": install, "hooks": {k: k in st_text for k in SETUP_HOOK_KEYS}, "python": py,
             "models": {"ok": bool(models) and not bad, "bad": bad, "count": len(models), "note": note},
@@ -5810,6 +5850,8 @@ def cmd_install(a) -> int:
     claude_home = Path(os.environ.get("FLASHQ_CLAUDE_HOME") or Path.home() / ".claude")
     if getattr(a, "check", False):
         return check_installed(claude_home)
+    if report_missing_sources():
+        return 1
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     rc = 0
     for dst, text in install_items(claude_home):
@@ -5965,16 +6007,28 @@ def cmd_init(a) -> int:
         mine = [p for p in (".flash.json", ".gitignore", (root / new["plan_dir"] / "FLASH_PLAN_TEMPLATE.md").relative_to(root).as_posix())
                 if (root / p).exists()]
         dirty = _git(root, "status", "--porcelain", "--", *mine)
-        if dirty:
-            run_timeout(["git", "-C", str(root), "add", "--", *mine], 60)
-            r = run_timeout(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
-                             "--", *mine], 120)
-            print("commit     " + ("สำเร็จ" if r.returncode == 0 else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
-            todo = [t for t in todo if not t.startswith("commit")]
+        committed = True
+        if dirty and git_identity_missing(root):
+            committed = False
+            print("commit     ข้าม: git ยังไม่รู้จักชื่อ/อีเมลผู้ commit")
+            todo.append(GIT_IDENTITY_HINT + f" แล้วรัน {run_cmd()} init --commit อีกครั้ง")
+        elif dirty:
+            r = run_timeout(["git", "-C", str(root), "add", "--", *mine], 60)
+            if r.returncode == 0:
+                r = run_timeout(["git", "-C", str(root), "commit", "-q", "-m", "ตั้งค่า flashq สำหรับโปรเจกต์นี้ (.flash.json · .gitignore · แม่แบบแผน)",
+                                 "--", *mine], 120)
+            committed = r.returncode == 0
+            print("commit     " + ("สำเร็จ" if committed else f"ล้มเหลว: {(r.stderr or r.stdout).strip()}"))
+            if committed:
+                todo = [t for t in todo if not t.startswith("commit")]
+            else:
+                todo.append(f"commit ไม่สำเร็จ → แก้ตามข้อความข้างบน แล้วรัน {run_cmd()} init --commit อีกครั้ง")
         else:
             print("commit     ไม่มีอะไรต้อง commit")
         branch, remote = _git(root, "branch", "--show-current"), new.get("remote", "origin")
-        if _git(root, "remote") and branch == new["main_branch"]:
+        if not committed:
+            print("push       ข้าม (commit ไม่สำเร็จ)")
+        elif _git(root, "remote") and branch == new["main_branch"]:
             r = run_timeout(["git", "-C", str(root), "push", "-q", remote, f"HEAD:{new['main_branch']}"], PUSH_TIMEOUT_SEC,  # ห้ามถามรหัส + จำกัดเวลา: เครือข่ายค้าง/รอ credential จะไม่ทำให้ init ค้างตลอดไป
                             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
             print("push       " + (f"{remote}/{new['main_branch']} สำเร็จ" if r.returncode == 0
@@ -5989,7 +6043,7 @@ def cmd_init(a) -> int:
         print("ขั้นต่อไป:")
         for i, t in enumerate(todo, 1):
             print(f"  {i}. {t}")
-    return 0
+    return 0 if not (a.commit and is_git and not committed) else 1
 
 
 # ---------- หน้าเว็บ dashboard (ui) ----------
@@ -6843,15 +6897,18 @@ def make_ui_server(port: int = 4097):
                 ok, msg = edit_accounts(str(body.get("action") or ""), body)
                 return self._send(200 if ok else 400, {"ok": ok, "message": msg})
             if path == "/api/setup_install":  # วิซาร์ด: ติดตั้งคำสั่ง/agent/hook แบบ global (เหมือน flashq install · ไม่ทับไฟล์ของผู้ใช้เอง)
-                res = setup_capture(cmd_install, argparse.Namespace(force=False, hooks=bool(body.get("hooks")), check=False, models="skip"))
+                try:
+                    res = setup_capture(cmd_install, argparse.Namespace(force=False, hooks=bool(body.get("hooks")), check=False, models="skip"))
+                except Exception as e:  # noqa: BLE001 — หน้าเว็บต้องเห็นเหตุผล ไม่ใช่ server ตอบว่างเปล่า
+                    res = {"ok": False, "rc": 1, "output": f"ติดตั้งไม่สำเร็จ: {type(e).__name__}: {e}"}
                 return self._send(200, {**res, "status": setup_status()})
             if path == "/api/setup_init":  # วิซาร์ด: ตั้งค่าโปรเจกต์ (เหมือน flashq init · ไม่ commit/push ให้)
                 proj = str(body.get("project") or "").strip()
                 if not proj or not Path(proj).is_absolute() or not Path(proj).is_dir():
                     return self._send(400, {"ok": False, "output": "ต้องเป็น path เต็มของโฟลเดอร์ที่มีอยู่จริง"})
                 return self._send(200, setup_capture(cmd_init, argparse.Namespace(project=proj, force=False, install=False, commit=False)))
-            if path == "/api/setup_done":  # วิซาร์ด: จบแล้ว (ไม่เด้งเองอีก)
-                write_json(SETUP_FILE, {"done": bool(body.get("done", True)), "at": time.time()})
+            if path == "/api/setup_done":  # วิซาร์ด: เสร็จ (done) หรือข้าม (skipped) — ทั้งคู่ไม่เด้งเองอีก แต่ข้าม ≠ ตั้งค่าเสร็จ
+                write_json(SETUP_FILE, {"done": bool(body.get("done", True)), "skipped": bool(body.get("skipped")), "at": time.time()})
                 return self._send(200, {"ok": True})
             if path == "/api/role_model":  # ตั้งโมเดลของบทบาท (เหมือน flashq models --set)
                 role = next((ag for k, ag, _ in MODEL_ROLES if str(body.get("role") or "") in (k, ag)), "")
@@ -8943,7 +9000,7 @@ def main() -> int:
     pr.add_argument("--days", type=float, default=30)
     pr.add_argument("--dry", action="store_true", help="แค่นับ ไม่ลบ")
     pr.set_defaults(fn=cmd_prune)
-    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours · open_session on|off|auto)")
+    cf = sp.add_parser("config", help="ดู/ตั้งค่า (max_parallel · schedule auto|fifo · starve_min · dead_clear_hours · open_session on|off|auto · notify on|off · notify_toast on|off)")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(fn=cmd_config)

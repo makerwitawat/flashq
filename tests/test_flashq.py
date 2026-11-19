@@ -1088,6 +1088,17 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ไม่มีผลงานใหม่", r.stdout)
 
+    def test_config_notify_keys(self):
+        """notify / notify_toast ตั้งผ่าน CLI ได้ตามที่ README บอก"""
+        for key in ("notify", "notify_toast"):
+            r = self.run_q("config", key, "off")
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIs(json.loads((self.home / "config.json").read_text(encoding="utf-8"))[key], False)
+            r = self.run_q("config", key, "maybe")
+            self.assertEqual(r.returncode, 1, r.stdout)
+        r = self.run_q("config", "nope", "1")
+        self.assertIn("notify_toast", r.stdout)
+
     def test_config_open_session_auto_and_priority(self):
         """open_session: auto ล้างค่า · ลำดับ --no-open > .flash.json > config เครื่อง > ค่าเริ่มต้นตามผู้สั่ง (detach = ไม่เปิด)"""
         mod = self.load_mod("flashq_openses")
@@ -1273,6 +1284,22 @@ class FlashqTest(unittest.TestCase):
         for _ in range(5):
             self.assertEqual(tool("Read", file_path="src/a.py").returncode, 0)  # ปิดถาวรในคอนฟิก
 
+    def test_install_fails_when_source_folders_missing(self):
+        """โปรแกรมถูกคัดลอกมาเดี่ยว ๆ (ไม่มี claude/ opencode/ hooks/ ข้าง ๆ): ห้ามขึ้น INSTALL=OK 0 ไฟล์"""
+        lone = self.tmp / "lone"
+        lone.mkdir()
+        shutil.copy(FLASHQ, lone / "flashq.py")
+        claude = self.tmp / "claude_home"
+        e = {**self.env, "FLASHQ_CLAUDE_HOME": str(claude)}
+        for args in (["install", "--check"], ["install", "--models", "skip"]):
+            r = subprocess.run([sys.executable, str(lone / "flashq.py"), *args], cwd=self.proj, env=e, capture_output=True,
+                               text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("INSTALL=FAIL", r.stdout)
+            self.assertIn("claude/commands", r.stdout)
+            self.assertNotIn("INSTALL=OK", r.stdout)
+        self.assertFalse((claude / "commands").exists())
+
     def test_install_check(self):
         """install --check: ยังไม่ติดตั้ง/ล้าหลัง = INSTALL=STALE exit 1 และไม่เขียนอะไร · ตรงต้นฉบับ = INSTALL=OK · ไฟล์ของผู้ใช้เองไม่นับว่าล้าหลัง"""
         claude = self.tmp / "claude_home"
@@ -1335,6 +1362,9 @@ class FlashqTest(unittest.TestCase):
         self.assertEqual(code, 200, d)
         self.assertTrue((proj / ".flash.json").exists())
 
+        self.assertEqual(post("/api/setup_done", done=False, skipped=True)[0], 200)  # ข้าม ≠ เสร็จ
+        st = json.loads(self.http(base + "/api/setup")[1])
+        self.assertEqual((st["done"], st["skipped"]), (False, True))
         self.assertEqual(post("/api/setup_done", done=True)[0], 200)
         self.assertTrue(json.loads(self.http(base + "/api/setup")[1])["done"])
 
@@ -4883,6 +4913,8 @@ class NewProjectTest(unittest.TestCase):
         self.git(self.tmp, "init", "-q", "--bare", "-b", branch, str(origin))
         self.proj.mkdir()
         self.git(self.proj, "init", "-q", "-b", branch)
+        self.git(self.proj, "config", "user.name", "t")  # ไม่พึ่ง identity global ของเครื่องที่รันเทสต์
+        self.git(self.proj, "config", "user.email", "t@t")
         (self.proj / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         self.git(self.proj, "add", "PLAN.md")
         self.git(self.proj, "commit", "-q", "-m", "plan")
@@ -4967,6 +4999,20 @@ class NewProjectTest(unittest.TestCase):
         self.assertIn("?? other.txt", self.git(self.proj, "status", "--short"))
         r2 = self.run_q("init", "--commit")  # รันซ้ำ = ไม่มีอะไรต้อง commit
         self.assertIn("ไม่มีอะไรต้อง commit", r2.stdout)
+
+    def test_init_commit_without_git_identity_skips_push(self):
+        """เครื่องใหม่ที่ git ไม่รู้ชื่อ/อีเมล: ห้ามรายงาน push สำเร็จ · บอกวิธีตั้ง · rc=1"""
+        self.make_repo("main")
+        self.git(self.proj, "config", "--unset", "user.name")
+        self.git(self.proj, "config", "--unset", "user.email")
+        empty = self.tmp / "empty.gitconfig"
+        empty.write_text("", encoding="utf-8")
+        r = self.run_q("init", "--commit", env={"GIT_CONFIG_GLOBAL": str(empty), "GIT_CONFIG_NOSYSTEM": "1"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("commit     ข้าม", r.stdout)
+        self.assertIn("push       ข้าม", r.stdout)
+        self.assertNotIn("origin/main สำเร็จ", r.stdout)
+        self.assertIn("git config --global user.email", r.stdout)
 
     def test_init_commit_push_timeout_does_not_hang(self):
         """remote ที่ไม่ตอบ: init --commit ต้องเลิก push ตามเวลา (ฆ่า git) แล้วบอกให้ push เอง ไม่ค้างตลอดไป"""

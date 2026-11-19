@@ -161,6 +161,7 @@ python flashq.py gui    # หน้าต่างแอป (WebView2 ผ่า�
 ```bash
 python flashq.py config max_parallel 2     # รันพร้อมกัน 2 งาน (1-8)
 python flashq.py config schedule auto      # จัดคิวอัตโนมัติ
+python flashq.py config notify_toast off   # ปิด toast ของ Windows (notify off = ปิดแจ้งเตือนทั้งหมด)
 ```
 
 ข้อมูลตอนรัน (งาน · log · inbox · สถิติ) เก็บที่ `~/.flashq/` ไม่อยู่ใน git — ย้ายที่ได้ด้วยตัวแปร `FLASHQ_HOME`
